@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs: 
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      #get the code
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+      
+      - name: Install dependencies
+        run: npm ci
+
+      # remove -- --passWithNoTests when tests are added
+      - name: Run tests
+        run: npm test -- --passWithNoTests
+      
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
