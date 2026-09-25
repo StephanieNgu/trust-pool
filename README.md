@@ -33,6 +33,27 @@ Install the project dependencies:
 ```powershell
 npm install
 ```
+## Running the Application
+
+The frontend and backend run separately.
+
+Frontend
+
+Start the Vite development server:
+
+```powershell
+npm run dev
+```
+
+Backend
+
+The backend uses Express and TypeScript.
+
+Start the backend server with:
+
+```powershell
+npm run dev:backend
+```
 
 ## Running Tests
 
