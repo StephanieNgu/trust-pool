@@ -7,10 +7,10 @@
     "test": "tests"
   },
   "scripts": {
-  "test": "jest",
-  "lint": "eslint .",
-  "build": "vite build"
-},
+    "test": "jest",
+    "lint": "eslint .",
+    "build": "vite build"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/StephanieNgu/trust-pool.git"
@@ -27,12 +27,15 @@
     "express": "^5.2.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.6.2",
+    "eslint": "^10.11.0",
     "jest": "^30.5.2",
     "ts-jest": "^29.4.13",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
     "vite": "^8.3.1"
   }
 }
