@@ -35,7 +35,7 @@ npm install
 ```
 ## Running the Application
 
-The frontend and backend run separately.
+The frontend, the Express backend, and the smart contracts run separately.
 
 Frontend
 
@@ -52,8 +52,9 @@ The frontend includes a personal dashboard and a device coverage purchase form. 
 * Currency symbol: `ETH`
 
 Contract instances are created centrally in `frontend/src/contracts/contracts.ts`. The frontend
-loads local addresses from `deployments/localhost.json`; this file is created by the Hardhat local
-deployment script once the smart-contract work is available.
+loads local addresses from `deployments/localhost.json`, which `npm run deploy:local` writes (see
+[Smart Contracts](#smart-contracts)). The deploy script also gives every Hardhat dev account
+10,000 mUSDC; import one of the private keys printed by `npm run chain` into MetaMask to use it.
 
 ### Dashboard and device coverage
 
@@ -69,8 +70,8 @@ coverage transaction. The device identifier is hashed locally. After confirmatio
 refreshes and the purchase appears in the current session's activity list. Activity is not persisted
 across reloads. The avatar and member name are placeholders; there is no email/password login.
 
-To verify the purchase flow after the contract branch is available, start the local chain, deploy
-contracts, and connect a funded local development wallet. Verify both MetaMask confirmations,
+To verify the purchase flow, start the local chain (`npm run chain`), deploy the contracts
+(`npm run deploy:local`), start the frontend (`npm run dev`), and connect a funded local development wallet. Verify both MetaMask confirmations,
 the active policy on the dashboard, and the updated mUSDC and pool balances. Test a rejected
 wallet request and a wrong network as well. Use local test accounts and test tokens only.
 
@@ -84,25 +85,57 @@ Start the backend server with:
 npm run dev:backend
 ```
 
+## Smart Contracts
+
+The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `contracts/` and uses Hardhat.
+
+| Contract | Role | Holds funds? |
+|---|---|---|
+| `MockStablecoin` | Demo ERC-20 standing in for USDC (6 decimals) | n/a |
+| `PolicyRegistry` | Sells policies, one per wallet and per device; tracks Active/Lapsed; lists eligible jurors | No |
+| `Pool` | Holds all funds; takes premiums and contributions; pays approved claims up to `maxPayoutBps` of its balance | **Yes** |
+| `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Approved/Rejected → Paid | No |
+| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), records votes, tallies | No |
+| `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
+
+Prototype parameters (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 3-day voting window.
+
+Run the whole claim flow in one command (no node needed):
+
+```powershell
+npm run demo
+```
+
+Run a local chain and deploy to it (for the frontend):
+
+```powershell
+npm run chain         # terminal 1: local node on http://127.0.0.1:8545
+npm run deploy:local  # terminal 2: deploys, funds dev accounts, writes deployments/localhost.json
+```
+
+Compile only:
+
+```powershell
+npm run compile
+```
+
 ## Running Tests
 
-Run the test suite with:
+Run the contract test suite (unit tests in `test/unit`, the end-to-end happy path in `test/integration`):
 
 ```powershell
 npm test
 ```
 
-At the current stage of development, there may not be any tests yet. While tests are being added, use:
+For a coverage report:
 
 ```powershell
-npm test -- --passWithNoTests
+npm run coverage
 ```
-
-Once project tests have been added, use `npm test` normally.
 
 ## Linting
 
-Run ESLint to check the project code:
+Run ESLint (JavaScript/TypeScript) and Solhint (Solidity):
 
 ```powershell
 npm run lint
@@ -110,7 +143,7 @@ npm run lint
 
 ## Building
 
-Build the frontend and backend with:
+Build the contracts, frontend, and backend with:
 
 ```powershell
 npm run build
@@ -136,9 +169,10 @@ The CI pipeline runs automatically when:
 The pipeline:
 
 1. Installs dependencies
-2. Runs the test suite
-3. Runs ESLint
-4. Builds the frontend and backend
+2. Compiles the contracts
+3. Runs the contract test suite
+4. Runs ESLint and Solhint
+5. Builds the frontend and backend
 
 ## Development Workflow
 
@@ -165,13 +199,40 @@ trust-pool/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
+├── contracts/
+│   ├── MockStablecoin.sol
+│   ├── PolicyRegistry.sol
+│   ├── Pool.sol
+│   ├── ClaimManager.sol
+│   ├── JuryModule.sol
+│   ├── interfaces/
+│   └── mocks/
+│       └── MockRandomness.sol
+├── test/
+│   ├── helpers.js
+│   ├── unit/
+│   └── integration/
+│       └── happyPath.test.js
+├── scripts/
+│   ├── deploy.js
+│   ├── demo.js
+│   └── lib/
+│       └── deployContracts.js
+├── deployments/        # written by deploy.js
+├── docs/
+│   └── design-doc.md
 ├── frontend/
 │   ├── index.html
+│   ├── tsconfig.json
 │   └── src/
+│       ├── App.tsx
+│       ├── contracts/  # ABIs, addresses, contract calls
+│       └── wallet/     # MetaMask connection
 ├── backend/
 │   └── src/
 │       └── server.ts
-├── tests/
+├── hardhat.config.js
+├── .solhint.json
 ├── package.json
 ├── package-lock.json
 ├── tsconfig.json

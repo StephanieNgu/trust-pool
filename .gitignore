@@ -24,3 +24,13 @@ Thumbs.db
 # IDE/editor files
 .vscode/
 .idea/
+
+# Hardhat
+artifacts/
+cache/
+typechain-types/
+coverage/
+coverage.json
+# Local chains reset on restart, so their addresses aren't worth committing
+deployments/hardhat.json
+deployments/localhost.json
