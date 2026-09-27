@@ -4,7 +4,15 @@ import globals from "globals";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "artifacts/**", "cache/**", "coverage/**", "typechain-types/**"]
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      ".npm-cache/**",
+      "artifacts/**",
+      "cache/**",
+      "coverage/**",
+      "typechain-types/**"
+    ]
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
@@ -17,6 +25,16 @@ export default tseslint.config(
     },
     rules: {
       "@typescript-eslint/no-require-imports": "off"
+    }
+  },
+  {
+    files: ["frontend/src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        document: "readonly",
+        fetch: "readonly",
+        window: "readonly"
+      }
     }
   }
 );

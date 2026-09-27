@@ -18,7 +18,7 @@
     "lint": "npm run lint:js && npm run lint:sol",
     "lint:js": "eslint .",
     "lint:sol": "solhint \"contracts/**/*.sol\"",
-    "build": "hardhat compile && vite build && tsc"
+    "build": "hardhat compile && vite build && tsc && tsc -p frontend/tsconfig.json"
   },
   "repository": {
     "type": "git",
@@ -34,7 +34,10 @@
   "homepage": "https://github.com/StephanieNgu/trust-pool#readme",
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1",
-    "express": "^5.2.1"
+    "ethers": "^6.17.0",
+    "express": "^5.2.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -42,6 +45,8 @@
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "eslint": "^10.11.0",
     "globals": "^17.12.0",
     "hardhat": "^2.29.1",

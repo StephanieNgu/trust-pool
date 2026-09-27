@@ -1,8 +1,10 @@
 # Dependencies
 node_modules/
+.npm-cache/
 
 # Build output
 dist/
+deployments/localhost.json
 
 # Environment variables / secrets
 .env
@@ -22,6 +24,7 @@ Thumbs.db
 # IDE/editor files
 .vscode/
 .idea/
+
 # Hardhat
 artifacts/
 cache/
