@@ -45,6 +45,35 @@ Start the Vite development server:
 npm run dev
 ```
 
+The frontend includes a personal dashboard and a device coverage purchase form. It supports MetaMask and expects the Hardhat local network:
+
+* RPC URL: `http://127.0.0.1:8545`
+* Chain ID: `31337`
+* Currency symbol: `ETH`
+
+Contract instances are created centrally in `frontend/src/contracts/contracts.ts`. The frontend
+loads local addresses from `deployments/localhost.json`; this file is created by the Hardhat local
+deployment script once the smart-contract work is available.
+
+### Dashboard and device coverage
+
+Without a connected wallet, the dashboard displays a connection prompt and empty balance cards.
+With a wallet on the local network and deployed contracts, it reads the mUSDC balance, shared pool
+balance, current payout cap, and policy status. Missing contracts and network errors are shown with
+a retry action. Values are not simulated.
+
+Select **Get Device Coverage**, enter a device identifier and coverage amount, then select
+**Review premium**. The app reads the premium from PolicyRegistry. **Approve & confirm coverage**
+requests the necessary mUSDC approval for the Pool, waits for confirmation, then requests the
+coverage transaction. The device identifier is hashed locally. After confirmation, the dashboard
+refreshes and the purchase appears in the current session's activity list. Activity is not persisted
+across reloads. The avatar and member name are placeholders; there is no email/password login.
+
+To verify the purchase flow after the contract branch is available, start the local chain, deploy
+contracts, and connect a funded local development wallet. Verify both MetaMask confirmations,
+the active policy on the dashboard, and the updated mUSDC and pool balances. Test a rejected
+wallet request and a wrong network as well. Use local test accounts and test tokens only.
+
 Backend
 
 The backend uses Express and TypeScript.

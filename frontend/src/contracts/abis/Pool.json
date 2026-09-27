@@ -1,0 +1,8 @@
+[
+  "function balance() view returns (uint256)",
+  "function maxPayout() view returns (uint256)",
+  "function contribute(uint256 amount)",
+  "function contributionsOf(address contributor) view returns (uint256)",
+  "function totalContributed() view returns (uint256)",
+  "function totalPaidOut() view returns (uint256)"
+]

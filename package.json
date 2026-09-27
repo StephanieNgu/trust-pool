@@ -11,7 +11,7 @@
     "dev:backend": "tsx backend/src/server.ts",
     "test": "jest",
     "lint": "eslint .",
-    "build": "vite build && tsc"
+    "build": "vite build && tsc && tsc -p frontend/tsconfig.json"
   },
   "repository": {
     "type": "git",
@@ -26,13 +26,18 @@
   },
   "homepage": "https://github.com/StephanieNgu/trust-pool#readme",
   "dependencies": {
-    "express": "^5.2.1"
+    "ethers": "^6.17.0",
+    "express": "^5.2.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "eslint": "^10.11.0",
     "jest": "^30.5.2",
     "ts-jest": "^29.4.13",
