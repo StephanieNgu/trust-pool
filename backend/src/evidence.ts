@@ -1,10 +1,12 @@
 // Off-chain evidence storage. A claimant uploads their photos as one bundle; the store saves the
 // bundle's exact bytes under their keccak256 hash, and that hash is what goes on-chain as the
-// claim's `evidenceHash`. Anyone (a juror) can fetch the raw bytes and recompute the hash to check
-// the evidence has not changed since the claim was filed.
+// claim's `evidenceHash`. A juror fetches the raw bytes and recomputes the hash to check the evidence
+// has not changed since the claim was filed. The hash proves the file is unchanged, not that the
+// claim is true; judging that is the jury's job.
 //
-// The store is content-addressed like IPFS, so a pinning service can replace the local directory
-// behind the same interface. Encryption and juror-only access are future work (design doc #9).
+// The store is private: the HTTP layer only serves a bundle to its uploader and to the jurors of a
+// claim the uploader filed with it (see app.ts). It is deliberately not public IPFS. Files are not
+// encrypted at rest, so whoever operates the backend can read them.
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { keccak256 } from "ethers";
@@ -117,6 +119,13 @@ export function hashBundle(bytes: Uint8Array): string {
   return keccak256(bytes);
 }
 
+/** Write then rename, so a reader never sees a half-written file. */
+async function writeAtomic(path: string, bytes: Buffer): Promise<void> {
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, bytes);
+  await rename(tmp, path);
+}
+
 function summarize(evidenceHash: string, bytes: Buffer): EvidenceSummary {
   const bundle = JSON.parse(bytes.toString("utf8")) as StoredBundle;
   return {
@@ -135,18 +144,38 @@ export class LocalEvidenceStore {
     return join(this.dir, `${evidenceHash}.json`);
   }
 
-  /** Stores an upload and returns its hash. Uploading identical evidence twice is a no-op. */
-  async put(upload: unknown): Promise<EvidenceSummary> {
+  private uploadersPathFor(evidenceHash: string): string {
+    return join(this.dir, `${evidenceHash}.uploaders.json`);
+  }
+
+  /**
+   * Stores an upload, records `uploader` as allowed to file a claim with it, and returns its hash.
+   * Uploading identical evidence twice stores it once.
+   */
+  async put(upload: unknown, uploader: string): Promise<EvidenceSummary> {
     const bytes = encodeBundle(upload);
     const evidenceHash = hashBundle(bytes);
     await mkdir(this.dir, { recursive: true });
     if (!(await this.has(evidenceHash))) {
-      // Write then rename, so a reader never sees a half-written bundle.
-      const tmp = `${this.pathFor(evidenceHash)}.${process.pid}.${Date.now()}.tmp`;
-      await writeFile(tmp, bytes);
-      await rename(tmp, this.pathFor(evidenceHash));
+      await writeAtomic(this.pathFor(evidenceHash), bytes);
+    }
+    const uploaders = await this.getUploaders(evidenceHash);
+    if (!uploaders.includes(uploader.toLowerCase())) {
+      uploaders.push(uploader.toLowerCase());
+      await writeAtomic(this.uploadersPathFor(evidenceHash), Buffer.from(JSON.stringify(uploaders)));
     }
     return summarize(evidenceHash, bytes);
+  }
+
+  /** Lower-cased addresses of everyone who uploaded this exact bundle. */
+  async getUploaders(evidenceHash: string): Promise<string[]> {
+    if (!isEvidenceHash(evidenceHash)) return [];
+    try {
+      return JSON.parse(await readFile(this.uploadersPathFor(evidenceHash), "utf8")) as string[];
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw err;
+    }
   }
 
   async has(evidenceHash: string): Promise<boolean> {

@@ -15,13 +15,15 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         None,
         AwaitingRandomness,
         Voting,
-        Tallied
+        Tallied,
+        Cancelled
     }
 
     struct Jury {
         Phase phase;
         address claimant;
         uint64 votingDeadline;
+        uint64 requestedAt;
         uint8 approvals;
         uint8 rejections;
         Outcome outcome;
@@ -34,6 +36,8 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     /// @notice Minimum number of votes cast for a verdict to count; otherwise the claim is rejected.
     uint8 public immutable quorum;
     uint256 public immutable votingPeriod;
+    /// @notice How long randomness may stay unanswered before the claim can be cancelled.
+    uint256 public immutable randomnessTimeout;
 
     address public claimManager;
 
@@ -46,6 +50,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     event JurySelected(uint256 indexed claimId, address[] jurors, uint256 seed, uint64 votingDeadline);
     event VoteCast(uint256 indexed claimId, address indexed juror, bool approve);
     event Tallied(uint256 indexed claimId, Outcome outcome, uint8 approvals, uint8 rejections);
+    event JuryCancelled(uint256 indexed claimId);
 
     error ZeroAddress();
     error AlreadySet();
@@ -58,6 +63,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     error AlreadyVoted();
     error VotingClosed();
     error VotingStillOpen();
+    error RandomnessNotTimedOut();
 
     modifier onlyClaimManager() {
         if (msg.sender != claimManager) revert NotClaimManager();
@@ -69,15 +75,19 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         IRandomnessProvider randomness_,
         uint8 jurySize_,
         uint8 quorum_,
-        uint256 votingPeriod_
+        uint256 votingPeriod_,
+        uint256 randomnessTimeout_
     ) Ownable(msg.sender) {
         if (address(registry_) == address(0) || address(randomness_) == address(0)) revert ZeroAddress();
-        if (jurySize_ == 0 || quorum_ == 0 || quorum_ > jurySize_ || votingPeriod_ == 0) revert InvalidConfig();
+        if (jurySize_ == 0 || quorum_ == 0 || quorum_ > jurySize_ || votingPeriod_ == 0 || randomnessTimeout_ == 0) {
+            revert InvalidConfig();
+        }
         registry = registry_;
         randomness = randomness_;
         jurySize = jurySize_;
         quorum = quorum_;
         votingPeriod = votingPeriod_;
+        randomnessTimeout = randomnessTimeout_;
     }
 
     function setClaimManager(address claimManager_) external onlyOwner {
@@ -101,11 +111,21 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
 
         jury.phase = Phase.AwaitingRandomness;
         jury.claimant = claimant;
+        jury.requestedAt = uint64(block.timestamp);
         emit JuryRequested(claimId, claimant);
         randomness.requestRandomness(claimId);
     }
 
+    /// @notice Gives up on a randomness request that has gone unanswered for `randomnessTimeout`.
+    ///         A late callback afterwards reverts, so a cancelled claim can never get a jury.
+    function cancel(uint256 claimId) external onlyClaimManager {
+        if (!canCancel(claimId)) revert RandomnessNotTimedOut();
+        _juries[claimId].phase = Phase.Cancelled;
+        emit JuryCancelled(claimId);
+    }
+
     /// @notice Randomness callback. Picks jurors via a partial Fisher-Yates shuffle seeded by `seed`.
+    /// @dev Only the first callback selects a jury; any later one (or one after `cancel`) reverts.
     function fulfillRandomness(uint256 claimId, uint256 seed) external {
         if (msg.sender != address(randomness)) revert NotRandomnessProvider();
         Jury storage jury = _juries[claimId];
@@ -174,6 +194,19 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (jury.phase != Phase.Voting) return false;
         uint256 votes = uint256(jury.approvals) + jury.rejections;
         return block.timestamp > jury.votingDeadline || votes == jury.jurors.length;
+    }
+
+    /// @notice True once randomness has been pending for longer than `randomnessTimeout`.
+    function canCancel(uint256 claimId) public view returns (bool) {
+        Jury storage jury = _juries[claimId];
+        return jury.phase == Phase.AwaitingRandomness && block.timestamp > cancelAvailableAt(claimId);
+    }
+
+    /// @notice When a still-pending randomness request becomes cancellable, or 0 if none is pending.
+    function cancelAvailableAt(uint256 claimId) public view returns (uint256) {
+        Jury storage jury = _juries[claimId];
+        if (jury.phase != Phase.AwaitingRandomness) return 0;
+        return uint256(jury.requestedAt) + randomnessTimeout;
     }
 
     function getJurors(uint256 claimId) external view returns (address[] memory) {

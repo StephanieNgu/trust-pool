@@ -5,7 +5,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import hre from "hardhat";
+import type { Signer } from "ethers";
 import { createApp } from "../src/app";
+import { AUTH_HEADERS, authMessage } from "../src/auth";
 import { connectContracts, type Deployment, type DeploymentAddresses } from "../src/chain";
 import { LocalEvidenceStore } from "../src/evidence";
 import { Keeper, type KeeperOptions } from "../src/keeper";
@@ -78,15 +80,43 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return { status: res.status, headers: res.headers, body: body as any, text };
   };
-  const post = (path: string, json: unknown) =>
-    api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) });
+  /** Headers proving `signer` controls its wallet, as the frontend would send after personal_sign. */
+  const authHeaders = async (signer: Signer, issuedAt = Math.floor(Date.now() / 1000)) => {
+    const address = await signer.getAddress();
+    return {
+      [AUTH_HEADERS.address]: address,
+      [AUTH_HEADERS.issuedAt]: String(issuedAt),
+      [AUTH_HEADERS.signature]: await signer.signMessage(authMessage(address, deployment.chainId, issuedAt)),
+    };
+  };
+  const post = async (path: string, json: unknown, signer?: Signer) =>
+    api(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(signer ? await authHeaders(signer) : {}) },
+      body: JSON.stringify(json),
+    });
+  /** GET as `signer`. */
+  const getAs = async (path: string, signer: Signer) => api(path, { headers: await authHeaders(signer) });
 
   const close = async () => {
     await new Promise((r) => server.close(r));
     await rm(evidenceDir, { recursive: true, force: true });
   };
 
-  return { ...ctx, signers, holders, claimant: holders[0], contracts, keeper, evidence, api, post, close };
+  return {
+    ...ctx,
+    signers,
+    holders,
+    claimant: holders[0],
+    contracts,
+    keeper,
+    evidence,
+    api,
+    post,
+    getAs,
+    authHeaders,
+    close,
+  };
 }
 
 export function signerFor(signers: Awaited<ReturnType<typeof ethers.getSigners>>, address: string) {

@@ -8,14 +8,24 @@ export interface JurorView {
   hasVoted: boolean;
 }
 
+/**
+ * Why a tallied jury reached its outcome. Anything but "majorityApproved" rejects the claim:
+ * a tie is not a majority, and fewer than `quorum` votes counts as no decision.
+ */
+export type OutcomeReason = "majorityApproved" | "majorityRejected" | "tie" | "noQuorum";
+
 export interface JuryView {
   phase: (typeof JURY_PHASES)[number];
   votingDeadline: number | null;
   approvals: number;
   rejections: number;
+  quorum: number;
   outcome: (typeof OUTCOMES)[number];
+  outcomeReason: OutcomeReason | null;
   jurors: JurorView[];
   canTally: boolean;
+  /** While waiting for randomness: when the claim may be cancelled if it still has not arrived. */
+  cancelAvailableAt: number | null;
 }
 
 export interface ClaimView {
@@ -28,7 +38,10 @@ export interface ClaimView {
   state: ClaimState;
   submittedAt: number;
   paidAmount: string;
-  /** Amount paid once Paid; before that, what executePayout would pay right now (min of amount, coverage limit, pool cap). */
+  /**
+   * Fixed when the jury approves: min(amount, coverage limit, 20% pool cap at that moment). Before
+   * approval it is what approval would fix right now; "0" for Rejected and Cancelled claims.
+   */
   payoutAmount: string;
   jury: JuryView | null;
 }
@@ -37,6 +50,7 @@ export interface ClaimFilter {
   claimant?: string;
   juror?: string;
   state?: ClaimState;
+  evidenceHash?: string;
 }
 
 export async function claimCount(c: ProtocolContracts): Promise<number> {
@@ -59,7 +73,7 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
     state,
     submittedAt: Number(claim.submittedAt),
     paidAmount: claim.paidAmount.toString(),
-    payoutAmount: state === "Paid" || state === "Rejected" ? claim.paidAmount.toString() : payoutAmount.toString(),
+    payoutAmount: state === "Rejected" || state === "Cancelled" ? "0" : payoutAmount.toString(),
     jury,
   };
 }
@@ -69,19 +83,34 @@ async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryV
   if (JURY_PHASES[Number(phase)] === "None") return null;
 
   const addresses = [...(jurors as string[])];
-  const [voted, canTally] = await Promise.all([
+  const [voted, canTally, quorum, cancelAt] = await Promise.all([
     Promise.all(addresses.map((a) => c.jury.hasVoted(claimId, a) as Promise<boolean>)),
     c.jury.canTally(claimId) as Promise<boolean>,
+    c.jury.quorum(),
+    c.jury.cancelAvailableAt(claimId),
   ]);
+  const yes = Number(approvals);
+  const no = Number(rejections);
+  const tallied = JURY_PHASES[Number(phase)] === "Tallied";
   return {
     phase: JURY_PHASES[Number(phase)],
     votingDeadline: Number(votingDeadline) || null,
-    approvals: Number(approvals),
-    rejections: Number(rejections),
+    approvals: yes,
+    rejections: no,
+    quorum: Number(quorum),
     outcome: OUTCOMES[Number(outcome)],
+    outcomeReason: tallied ? outcomeReason(yes, no, Number(quorum)) : null,
     jurors: addresses.map((address, i) => ({ address, hasVoted: voted[i] })),
     canTally,
+    cancelAvailableAt: Number(cancelAt) || null,
   };
+}
+
+/** Mirrors JuryModule.tally: approved only with quorum and strictly more approvals than rejections. */
+export function outcomeReason(approvals: number, rejections: number, quorum: number): OutcomeReason {
+  if (approvals + rejections < quorum) return "noQuorum";
+  if (approvals === rejections) return "tie";
+  return approvals > rejections ? "majorityApproved" : "majorityRejected";
 }
 
 /** All claims matching `filter`, newest first. Scans every claim, which is fine for a demo pool. */
@@ -96,7 +125,8 @@ export async function listClaims(c: ProtocolContracts, filter: ClaimFilter = {})
       v !== null &&
       (!claimant || v.claimant.toLowerCase() === claimant) &&
       (!juror || (v.jury?.jurors.some((j) => j.address.toLowerCase() === juror) ?? false)) &&
-      (!filter.state || v.state === filter.state),
+      (!filter.state || v.state === filter.state) &&
+      (!filter.evidenceHash || v.evidenceHash.toLowerCase() === filter.evidenceHash.toLowerCase()),
   );
 }
 

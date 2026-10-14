@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { keccak256 } from "ethers";
 import { EvidenceError, LocalEvidenceStore, MAX_FILE_BYTES } from "../src/evidence";
 
+const ALICE = "0x00000000000000000000000000000000000000A1";
+const BOB = "0x00000000000000000000000000000000000000B0";
+
 const file = (data: string | Buffer, name = "a.jpg") => ({
   name,
   contentType: "image/jpeg",
@@ -18,7 +21,7 @@ describe("LocalEvidenceStore", async () => {
   after(() => rm(dir, { recursive: true, force: true }));
 
   it("addresses evidence by the keccak256 of its stored bytes", async () => {
-    const { evidenceHash, files } = await store.put({ description: "d", files: [file("one"), file("two", "b.jpg")] });
+    const { evidenceHash, files } = await store.put({ description: "d", files: [file("one"), file("two", "b.jpg")] }, ALICE);
     const raw = await store.getRaw(evidenceHash);
     assert.ok(raw);
     assert.equal(keccak256(raw), evidenceHash);
@@ -33,21 +36,28 @@ describe("LocalEvidenceStore", async () => {
     assert.equal(await store.getFile(evidenceHash, 2), null);
   });
 
+  it("records every uploader of the same bundle", async () => {
+    const { evidenceHash } = await store.put({ files: [file("shared")] }, ALICE);
+    await store.put({ files: [file("shared")] }, BOB);
+    await store.put({ files: [file("shared")] }, ALICE);
+    assert.deepEqual(await store.getUploaders(evidenceHash), [ALICE.toLowerCase(), BOB.toLowerCase()]);
+  });
+
   it("gives different evidence different hashes", async () => {
-    const a = await store.put({ files: [file("one")] });
-    const b = await store.put({ files: [file("one")], description: "with a note" });
-    const c = await store.put({ files: [file("one", "renamed.jpg")] });
+    const a = await store.put({ files: [file("one")] }, ALICE);
+    const b = await store.put({ files: [file("one")], description: "with a note" }, ALICE);
+    const c = await store.put({ files: [file("one", "renamed.jpg")] }, ALICE);
     assert.equal(new Set([a.evidenceHash, b.evidenceHash, c.evidenceHash]).size, 3);
   });
 
   it("refuses to serve evidence that was altered on disk", async () => {
-    const { evidenceHash } = await store.put({ files: [file("original")] });
+    const { evidenceHash } = await store.put({ files: [file("original")] }, ALICE);
     await writeFile(join(dir, `${evidenceHash}.json`), '{"version":1,"description":"","files":[]}');
     await assert.rejects(store.getRaw(evidenceHash), (err: unknown) => err instanceof EvidenceError);
   });
 
   it("rejects oversized files", async () => {
-    await assert.rejects(store.put({ files: [file(Buffer.alloc(MAX_FILE_BYTES + 1))] }), (err: unknown) => {
+    await assert.rejects(store.put({ files: [file(Buffer.alloc(MAX_FILE_BYTES + 1))] }, ALICE), (err: unknown) => {
       return err instanceof EvidenceError && err.status === 413;
     });
   });

@@ -18,6 +18,7 @@ export const poolAbi = [
 ] as const;
 
 export const registryAbi = [
+  "function isActive(address holder) view returns (bool)",
   "function getPolicy(address holder) view returns (tuple(uint256 id, address holder, bytes32 deviceIdHash, uint256 coverageLimit, uint256 startTime, uint8 status))",
   "function isPastWaitingPeriod(address holder) view returns (bool)",
   "function premiumFor(uint256 coverageLimit) view returns (uint256)",
@@ -30,11 +31,12 @@ export const registryAbi = [
 
 export const claimManagerAbi = [
   "function claimCount() view returns (uint256)",
-  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount))",
+  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount, uint256 approvedAmount))",
   "function payoutAmount(uint256 claimId) view returns (uint256)",
   "function openClaimOfPolicy(uint256 policyId) view returns (uint256)",
   "function finalize(uint256 claimId)",
   "function executePayout(uint256 claimId)",
+  "function cancelStalledClaim(uint256 claimId)",
   "error WrongState(uint8 expected, uint8 actual)",
   "error NothingToPay()",
 ] as const;
@@ -43,6 +45,9 @@ export const juryAbi = [
   "function getJury(uint256 claimId) view returns (uint8 phase, address claimant, uint64 votingDeadline, uint8 approvals, uint8 rejections, uint8 outcome, address[] jurors)",
   "function hasVoted(uint256 claimId, address juror) view returns (bool)",
   "function canTally(uint256 claimId) view returns (bool)",
+  "function canCancel(uint256 claimId) view returns (bool)",
+  "function cancelAvailableAt(uint256 claimId) view returns (uint256)",
+  "function randomnessTimeout() view returns (uint256)",
   "function jurySize() view returns (uint8)",
   "function quorum() view returns (uint8)",
   "function votingPeriod() view returns (uint256)",
@@ -57,8 +62,8 @@ export const randomnessAbi = [
 ] as const;
 
 /** Mirrors of the Solidity enums, indexed by their numeric value. */
-export const CLAIM_STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid"] as const;
-export const JURY_PHASES = ["None", "AwaitingRandomness", "Voting", "Tallied"] as const;
+export const CLAIM_STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled"] as const;
+export const JURY_PHASES = ["None", "AwaitingRandomness", "Voting", "Tallied", "Cancelled"] as const;
 export const OUTCOMES = ["None", "Approved", "Rejected"] as const;
 export const POLICY_STATUSES = ["None", "Active", "Lapsed"] as const;
 

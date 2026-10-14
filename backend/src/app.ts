@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { isAddress, type Provider } from "ethers";
 import { CLAIM_STATES, type ClaimState } from "./abis";
+import { AUTH_HEADERS, AUTH_MAX_AGE_SECONDS, AuthError, authMessage, authenticate } from "./auth";
 import type { Deployment, ProtocolContracts } from "./chain";
 import { EvidenceError, LocalEvidenceStore, MAX_FILE_BYTES, MAX_FILES } from "./evidence";
 import type { Keeper } from "./keeper";
@@ -54,7 +55,7 @@ export function createApp(deps: AppDeps) {
     app.use((req, res, next) => {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Allow-Headers", ["Content-Type", ...Object.values(AUTH_HEADERS)].join(", "));
       if (req.method === "OPTIONS") {
         res.sendStatus(204);
         return;
@@ -65,12 +66,40 @@ export function createApp(deps: AppDeps) {
 
   // Base64 inflates files by a third; leave headroom for the JSON around them.
   const evidenceLimit = Math.ceil(MAX_FILES * MAX_FILE_BYTES * 1.4);
-  app.use("/api/evidence", express.json({ limit: evidenceLimit }));
+  app.use("/api/evidence", express.json({ limit: evidenceLimit }), (_req, res, next) => {
+    // Evidence is per-wallet; never let a shared cache keep a copy.
+    res.setHeader("Cache-Control", "private, no-store");
+    next();
+  });
   app.use(express.json({ limit: "100kb" }));
 
   // ---------------------------------------------------------------------------
   // Service and protocol info
   // ---------------------------------------------------------------------------
+
+  /** The wallet whose signature authenticates this request, or a 401. */
+  const wallet = (req: Request) => authenticate((name) => req.get(name), deployment.chainId);
+
+  /**
+   * Evidence is private. It is served to whoever uploaded it, and to the jurors of any claim that one
+   * of its uploaders filed with it. A claim filed by someone else who copied the hash from the chain
+   * grants nothing, so the hash being public does not make the files public.
+   */
+  async function requireEvidenceAccess(req: Request, evidenceHash: string): Promise<void> {
+    const reader = wallet(req).toLowerCase();
+    if (!(await evidence.has(evidenceHash))) throw new HttpError(404, "Evidence not found.");
+    const uploaders = await evidence.getUploaders(evidenceHash);
+    if (uploaders.includes(reader)) return;
+    const claims = await listClaims(contracts, { evidenceHash });
+    const isJuror = claims.some(
+      (c) =>
+        uploaders.includes(c.claimant.toLowerCase()) &&
+        (c.jury?.jurors.some((j) => j.address.toLowerCase() === reader) ?? false),
+    );
+    if (!isJuror) {
+      throw new HttpError(403, "Only the claimant and the claim's selected jurors can view this evidence.");
+    }
+  }
 
   app.get("/api/health", async (_req, res) => {
     const [network, blockNumber] = await Promise.all([provider.getNetwork(), provider.getBlockNumber()]);
@@ -125,16 +154,34 @@ export function createApp(deps: AppDeps) {
   });
 
   // ---------------------------------------------------------------------------
-  // Evidence: upload returns the hash to pass to ClaimManager.submitClaim
+  // Evidence: wallet-authenticated. Upload returns the hash to pass to ClaimManager.submitClaim.
   // ---------------------------------------------------------------------------
 
+  /** The message a wallet signs to use the evidence routes, valid for AUTH_MAX_AGE_SECONDS. */
+  app.get("/api/auth/message", (req, res) => {
+    const address = parseAddress(req.query.address, "address");
+    const issuedAt = Math.floor(Date.now() / 1000);
+    res.json({
+      message: authMessage(address, deployment.chainId, issuedAt),
+      issuedAt,
+      expiresAt: issuedAt + AUTH_MAX_AGE_SECONDS,
+      headers: AUTH_HEADERS,
+    });
+  });
+
   app.post("/api/evidence", async (req, res) => {
-    const summary = await evidence.put(req.body);
+    const uploader = wallet(req);
+    if (!(await contracts.registry.isActive(uploader))) {
+      throw new HttpError(403, "Only wallets with an active policy can upload evidence.");
+    }
+    const summary = await evidence.put(req.body, uploader);
     res.status(201).json(summary);
   });
 
   app.get("/api/evidence/:hash", async (req, res) => {
-    const summary = await evidence.getSummary(parseHash(req.params.hash));
+    const hash = parseHash(req.params.hash);
+    await requireEvidenceAccess(req, hash);
+    const summary = await evidence.getSummary(hash);
     if (!summary) throw new HttpError(404, "Evidence not found.");
     res.json({
       ...summary,
@@ -145,7 +192,9 @@ export function createApp(deps: AppDeps) {
 
   /** Exact stored bytes. keccak256 of this body equals the claim's on-chain evidenceHash. */
   app.get("/api/evidence/:hash/raw", async (req, res) => {
-    const raw = await evidence.getRaw(parseHash(req.params.hash));
+    const hash = parseHash(req.params.hash);
+    await requireEvidenceAccess(req, hash);
+    const raw = await evidence.getRaw(hash);
     if (!raw) throw new HttpError(404, "Evidence not found.");
     res.type("application/json").send(raw);
   });
@@ -153,7 +202,9 @@ export function createApp(deps: AppDeps) {
   app.get("/api/evidence/:hash/files/:index", async (req, res) => {
     const index = Number(req.params.index);
     if (!Number.isSafeInteger(index) || index < 0) throw new HttpError(400, "File index must be a whole number.");
-    const file = await evidence.getFile(parseHash(req.params.hash), index);
+    const hash = parseHash(req.params.hash);
+    await requireEvidenceAccess(req, hash);
+    const file = await evidence.getFile(hash, index);
     if (!file) throw new HttpError(404, "Evidence file not found.");
     // User-supplied content: never let the browser sniff it into something executable.
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -170,7 +221,7 @@ export function createApp(deps: AppDeps) {
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     void _next;
-    if (err instanceof HttpError || err instanceof EvidenceError) {
+    if (err instanceof HttpError || err instanceof EvidenceError || err instanceof AuthError) {
       res.status(err.status).json({ error: err.message });
       return;
     }

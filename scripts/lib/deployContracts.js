@@ -12,6 +12,7 @@ const DEFAULT_PARAMS = {
   jurySize: 5,
   quorum: 3,
   votingPeriod: 3 * DAY,
+  randomnessTimeout: 1 * DAY, // a claim whose jury randomness is this late can be cancelled
 };
 
 /**
@@ -39,6 +40,7 @@ async function deployContracts(overrides = {}) {
     params.jurySize,
     params.quorum,
     params.votingPeriod,
+    params.randomnessTimeout,
   ]);
   const claimManager = await ethers.deployContract("ClaimManager", [
     await registry.getAddress(),

@@ -193,5 +193,87 @@ describe("ClaimManager", function () {
         .withArgs(claimId, holders[0].address, USDC(70));
       expect((await ctx.claimManager.getClaim(claimId)).paidAmount).to.equal(USDC(70));
     });
+
+    it("fixes the payout at approval, so later pool changes cannot alter it", async function () {
+      const ctx = await loadFixture(approvedClaimFixture);
+      const { claimManager, pool, token, deployer, claimant, claimId } = ctx;
+      expect((await claimManager.getClaim(claimId)).approvedAmount).to.equal(USDC(400));
+
+      // A large new contribution raises the cap; the approved amount stays as the jury decided.
+      await token.mint(deployer.address, USDC(50_000));
+      await token.approve(await pool.getAddress(), USDC(50_000));
+      await pool.contribute(USDC(50_000));
+      expect(await claimManager.payoutAmount(claimId)).to.equal(USDC(400));
+      await expect(claimManager.executePayout(claimId))
+        .to.emit(claimManager, "ClaimPaid")
+        .withArgs(claimId, claimant.address, USDC(400));
+    });
+
+    it("keeps an approved claim payable later when the pool is short", async function () {
+      // Two claims approved against a 400 USDC pool (8 premiums): each is capped at 80 when approved.
+      // The first payout leaves 320, so the live cap drops to 64, yet the second still pays its 80.
+      const ctx = await loadFixture(deployFixture);
+      const holders = ctx.signers.slice(1, 9);
+      for (const [i, h] of holders.entries()) {
+        await ctx.token.mint(h.address, USDC(100));
+        await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
+        await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE);
+      }
+      await time.increase(ctx.params.waitingPeriod);
+
+      const first = await submitClaim(ctx, holders[0], USDC(900));
+      await castAll(ctx, first, await selectJury(ctx, first), true);
+      const second = await submitClaim(ctx, holders[1], USDC(900));
+      await castAll(ctx, second, await selectJury(ctx, second, 7n), true);
+      await ctx.claimManager.finalize(first);
+      await ctx.claimManager.finalize(second);
+
+      await ctx.claimManager.executePayout(first);
+      const approved = (await ctx.claimManager.getClaim(second)).approvedAmount;
+      expect(await ctx.pool.maxPayout()).to.be.lessThan(approved);
+      await expect(ctx.claimManager.executePayout(second))
+        .to.emit(ctx.claimManager, "ClaimPaid")
+        .withArgs(second, holders[1].address, approved);
+    });
+  });
+
+  describe("cancelStalledClaim", function () {
+    async function pendingFixture() {
+      const ctx = await activePoolFixture();
+      const claimId = await submitClaim(ctx, ctx.claimant);
+      return { ...ctx, claimId };
+    }
+
+    it("cancels a claim whose randomness never arrived and frees the policy", async function () {
+      const ctx = await loadFixture(pendingFixture);
+      const { claimManager, jury, randomness, claimant, claimId, params } = ctx;
+      await expect(claimManager.cancelStalledClaim(claimId)).to.be.revertedWithCustomError(
+        jury,
+        "RandomnessNotTimedOut",
+      );
+
+      await time.increase(params.randomnessTimeout + 1);
+      await expect(claimManager.connect(ctx.holders[3]).cancelStalledClaim(claimId))
+        .to.emit(claimManager, "ClaimStateChanged")
+        .withArgs(claimId, ClaimState.JuryPending, ClaimState.Cancelled)
+        .and.to.emit(jury, "JuryCancelled");
+      expect(await claimManager.openClaimOfPolicy((await claimManager.getClaim(claimId)).policyId)).to.equal(0n);
+
+      // A late randomness callback cannot seat a jury for the cancelled claim.
+      await expect(randomness.fulfill(claimId, 1n)).to.be.revertedWithCustomError(jury, "WrongPhase");
+      await expect(claimManager.connect(claimant).submitClaim(USDC(1), EVIDENCE)).to.emit(
+        claimManager,
+        "ClaimSubmitted",
+      );
+    });
+
+    it("cannot cancel a claim that already has a jury", async function () {
+      const ctx = await loadFixture(pendingFixture);
+      await selectJury(ctx, ctx.claimId);
+      await time.increase(ctx.params.randomnessTimeout + 1);
+      await expect(ctx.claimManager.cancelStalledClaim(ctx.claimId))
+        .to.be.revertedWithCustomError(ctx.claimManager, "WrongState")
+        .withArgs(ClaimState.JuryPending, ClaimState.Voting);
+    });
   });
 });

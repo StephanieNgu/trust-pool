@@ -3,6 +3,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256 } from "ethers";
+import { Keeper } from "../src/keeper";
 import { PHOTO, USDC, increaseTime, setup, signerFor } from "./helpers";
 
 describe("claim flow through the backend", () => {
@@ -15,13 +16,13 @@ describe("claim flow through the backend", () => {
   });
 
   it("approves and pays a claim with jury selection and payout done by the keeper", async () => {
-    const { claimant, claimManager, token, api, post, keeper, signers, jury } = t;
+    const { claimant, claimManager, token, api, post, getAs, keeper, signers, jury } = t;
 
     // 1. Claimant uploads photos and gets the hash to put on-chain.
     const upload = await post("/api/evidence", {
       description: "Cracked screen after a drop",
       files: [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }],
-    });
+    }, claimant);
     assert.equal(upload.status, 201);
     const { evidenceHash } = upload.body;
 
@@ -53,8 +54,15 @@ describe("claim flow through the backend", () => {
         ["1"],
       );
     }
-    const raw = await api(`/api/evidence/${evidenceHash}/raw`);
-    assert.equal(keccak256(Buffer.from(raw.text)), (await claimManager.getClaim(1)).evidenceHash);
+    for (const addr of jurorAddrs) {
+      const raw = await getAs(`/api/evidence/${evidenceHash}/raw`, signerFor(signers, addr));
+      assert.equal(raw.status, 200);
+      assert.equal(keccak256(Buffer.from(raw.text)), (await claimManager.getClaim(1)).evidenceHash);
+    }
+    // A policyholder who is not on this jury cannot see it.
+    const outsider = t.holders.find((h) => h !== claimant && !jurorAddrs.includes(h.address));
+    assert.ok(outsider);
+    assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, outsider)).status, 403);
 
     // Votes: 4 approve, 1 reject. Voting is still open until everyone has voted.
     for (const [i, addr] of jurorAddrs.entries()) {
@@ -83,6 +91,7 @@ describe("claim flow through the backend", () => {
     claim = (await api("/api/claims/1")).body;
     assert.equal(claim.state, "Paid");
     assert.equal(claim.jury.outcome, "Approved");
+    assert.equal(claim.jury.outcomeReason, "majorityApproved");
     assert.equal(claim.paidAmount, USDC(300).toString());
     assert.deepEqual(await keeper.tick(), []);
 
@@ -99,7 +108,11 @@ describe("claim flow through the backend", () => {
     const { holders, claimManager, api, post, keeper, signers, jury, params } = t;
     const claimant = holders[1];
     const { evidenceHash } = (
-      await post("/api/evidence", { files: [{ name: "receipt.pdf", contentType: "application/pdf", data: PHOTO }] })
+      await post(
+        "/api/evidence",
+        { files: [{ name: "receipt.pdf", contentType: "application/pdf", data: PHOTO }] },
+        claimant,
+      )
     ).body;
     await (await claimManager.connect(claimant).submitClaim(USDC(200), evidenceHash)).wait();
     const id = Number(await claimManager.claimCount());
@@ -120,6 +133,7 @@ describe("claim flow through the backend", () => {
     );
     const claim = (await api(`/api/claims/${id}`)).body;
     assert.equal(claim.state, "Rejected");
+    assert.equal(claim.jury.outcomeReason, "noQuorum");
     assert.equal(claim.paidAmount, "0");
     assert.equal(claim.payoutAmount, "0");
 
@@ -130,5 +144,37 @@ describe("claim flow through the backend", () => {
     );
     const rejected = (await api("/api/claims?state=Rejected")).body.claims;
     assert.equal(rejected.length, 1);
+  });
+
+  it("cancels a claim whose randomness never arrives", async () => {
+    const { holders, claimManager, api, post, params } = t;
+    const claimant = holders[2];
+    // A keeper that does not own MockRandomness cannot fulfil, standing in for a VRF that never answers.
+    const stalledKeeper = await Keeper.create(t.contracts, t.signers[9], { fulfillRandomness: true, autoResolve: true });
+    const { evidenceHash } = (
+      await post("/api/evidence", { files: [{ name: "a.png", contentType: "image/png", data: PHOTO }] }, claimant)
+    ).body;
+    await (await claimManager.connect(claimant).submitClaim(USDC(100), evidenceHash)).wait();
+    const id = Number(await claimManager.claimCount());
+
+    assert.deepEqual(await stalledKeeper.tick(), []);
+    let claim = (await api(`/api/claims/${id}`)).body;
+    assert.equal(claim.state, "JuryPending");
+    assert.ok(claim.jury.cancelAvailableAt > claim.submittedAt);
+
+    await increaseTime(Number(params.randomnessTimeout) + 1);
+    const actions = await stalledKeeper.tick();
+    assert.deepEqual(
+      actions.map((a) => [a.claimId, a.action, a.error]),
+      [[id, "cancelStalledClaim", undefined]],
+    );
+    claim = (await api(`/api/claims/${id}`)).body;
+    assert.equal(claim.state, "Cancelled");
+    assert.equal(claim.jury.phase, "Cancelled");
+    assert.equal(claim.payoutAmount, "0");
+    assert.equal((await api(`/api/members/${claimant.address}`)).body.policy.openClaimId, null);
+
+    // The randomness-owning keeper leaves the cancelled claim alone.
+    assert.deepEqual(await t.keeper.tick(), []);
   });
 });

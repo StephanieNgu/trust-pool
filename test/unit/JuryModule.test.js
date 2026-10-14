@@ -21,16 +21,18 @@ describe("JuryModule", function () {
     it("rejects an invalid quorum or jury size", async function () {
       const { registry, randomness } = await loadFixture(activePoolFixture);
       const JM = await ethers.getContractFactory("JuryModule");
-      const args = (size, quorum, period) => [
+      const args = (size, quorum, period, timeout = 60) => [
         registry.getAddress(),
         randomness.getAddress(),
         size,
         quorum,
         period,
+        timeout,
       ];
       await expect(JM.deploy(...args(5, 6, 60))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(0, 0, 60))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(5, 3, 0))).to.be.revertedWithCustomError(JM, "InvalidConfig");
+      await expect(JM.deploy(...args(5, 3, 60, 0))).to.be.revertedWithCustomError(JM, "InvalidConfig");
     });
   });
 
@@ -94,6 +96,26 @@ describe("JuryModule", function () {
       expect(jurors).to.have.lengthOf(4);
       expect(jurors).to.not.include(ctx.holders[1]);
       expect(jurors).to.not.include(ctx.holders[2]);
+    });
+  });
+
+  describe("randomness timeout", function () {
+    it("is cancellable only after the timeout, and only by the claim manager", async function () {
+      const { jury, params, claimId } = await loadFixture(awaitingRandomnessFixture);
+      const requestedAt = BigInt(await time.latest());
+      expect(await jury.cancelAvailableAt(claimId)).to.equal(requestedAt + BigInt(params.randomnessTimeout));
+      expect(await jury.canCancel(claimId)).to.equal(false);
+      await time.increase(params.randomnessTimeout + 1);
+      expect(await jury.canCancel(claimId)).to.equal(true);
+      await expect(jury.cancel(claimId)).to.be.revertedWithCustomError(jury, "NotClaimManager");
+    });
+
+    it("is not cancellable once a jury is selected", async function () {
+      const ctx = await loadFixture(awaitingRandomnessFixture);
+      await selectJury(ctx, ctx.claimId);
+      await time.increase(ctx.params.randomnessTimeout + 1);
+      expect(await ctx.jury.canCancel(ctx.claimId)).to.equal(false);
+      expect(await ctx.jury.cancelAvailableAt(ctx.claimId)).to.equal(0n);
     });
   });
 

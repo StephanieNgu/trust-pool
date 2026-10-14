@@ -10,7 +10,8 @@ import {IPool} from "./interfaces/IPool.sol";
 
 /// @title ClaimManager
 /// @notice Owns the claim state machine:
-///         Submitted -> JuryPending -> Voting -> Approved -> Paid, or Voting -> Rejected.
+///         Submitted -> JuryPending -> Voting -> Approved -> Paid, or Voting -> Rejected,
+///         or JuryPending -> Cancelled when randomness never arrives.
 /// @dev Holds no funds. Payouts are executed by the Pool on this contract's instruction.
 contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     enum State {
@@ -20,7 +21,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         Voting,
         Approved,
         Rejected,
-        Paid
+        Paid,
+        Cancelled
     }
 
     struct Claim {
@@ -33,6 +35,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         State state;
         uint256 submittedAt;
         uint256 paidAmount;
+        /// @dev Payout fixed when the jury approves: min(amount, coverage limit, pool cap at that moment).
+        uint256 approvedAmount;
     }
 
     IPolicyRegistry public immutable registry;
@@ -41,7 +45,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
 
     uint256 public claimCount;
     mapping(uint256 => Claim) private _claims;
-    /// @notice The claim currently open (not Rejected or Paid) for each policy id, or 0.
+    /// @notice The claim currently open (not Rejected, Paid or Cancelled) for each policy id, or 0.
     mapping(uint256 => uint256) public openClaimOfPolicy;
 
     event ClaimSubmitted(
@@ -101,7 +105,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
             evidenceHash: evidenceHash,
             state: State.Submitted,
             submittedAt: block.timestamp,
-            paidAmount: 0
+            paidAmount: 0,
+            approvedAmount: 0
         });
         openClaimOfPolicy[policy.id] = claimId;
         emit ClaimSubmitted(claimId, msg.sender, policy.id, amount, evidenceHash);
@@ -126,10 +131,12 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------
 
     /// @notice Close voting and record the verdict. Rejected claims are closed immediately.
+    ///         An approved claim's payout is fixed here, so later pool movements cannot change it.
     function finalize(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.Voting);
         IJuryModule.Outcome outcome = jury.tally(claimId);
         if (outcome == IJuryModule.Outcome.Approved) {
+            _claims[claimId].approvedAmount = payoutAmount(claimId);
             _setState(claimId, State.Approved);
         } else {
             _setState(claimId, State.Rejected);
@@ -137,12 +144,13 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         }
     }
 
-    /// @notice Pay an approved claim: min(claim amount, coverage limit, pool per-claim cap).
+    /// @notice Pay an approved claim the amount fixed at approval. If the pool cannot cover it right
+    ///         now the Pool reverts and the claim stays Approved until it can (first come, first served).
     function executePayout(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.Approved);
         Claim storage claim = _claims[claimId];
 
-        uint256 amount = payoutAmount(claimId);
+        uint256 amount = claim.approvedAmount;
         if (amount == 0) revert NothingToPay();
 
         // Effects before the external call (checks-effects-interactions).
@@ -154,6 +162,15 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         pool.payout(claim.claimant, amount);
     }
 
+    /// @notice Close a claim whose randomness never arrived, freeing the policy for a new claim.
+    ///         Callable by anyone once the JuryModule's randomness timeout has passed.
+    function cancelStalledClaim(uint256 claimId) external nonReentrant {
+        _requireState(claimId, State.JuryPending);
+        jury.cancel(claimId);
+        _setState(claimId, State.Cancelled);
+        delete openClaimOfPolicy[_claims[claimId].policyId];
+    }
+
     // ---------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------
@@ -162,9 +179,11 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         return _claims[claimId];
     }
 
-    /// @notice What `executePayout` would pay right now.
+    /// @notice What the claim pays: the fixed amount once approved, otherwise what approval would fix
+    ///         right now (min of claim amount, coverage limit, pool per-claim cap).
     function payoutAmount(uint256 claimId) public view returns (uint256 amount) {
         Claim storage claim = _claims[claimId];
+        if (claim.state == State.Approved || claim.state == State.Paid) return claim.approvedAmount;
         amount = claim.amount;
         if (claim.coverageLimit < amount) amount = claim.coverageLimit;
         uint256 cap = pool.maxPayout();

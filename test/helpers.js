@@ -53,8 +53,8 @@ async function submitClaim(ctx, claimant, amount = USDC(400)) {
 }
 
 // Mirrors of the Solidity enums, for readable assertions.
-const ClaimState = { None: 0n, Submitted: 1n, JuryPending: 2n, Voting: 3n, Approved: 4n, Rejected: 5n, Paid: 6n };
-const JuryPhase = { None: 0n, AwaitingRandomness: 1n, Voting: 2n, Tallied: 3n };
+const ClaimState = { None: 0n, Submitted: 1n, JuryPending: 2n, Voting: 3n, Approved: 4n, Rejected: 5n, Paid: 6n, Cancelled: 7n };
+const JuryPhase = { None: 0n, AwaitingRandomness: 1n, Voting: 2n, Tallied: 3n, Cancelled: 4n };
 const Outcome = { None: 0n, Approved: 1n, Rejected: 2n };
 const PolicyStatus = { None: 0n, Active: 1n, Lapsed: 2n };
 

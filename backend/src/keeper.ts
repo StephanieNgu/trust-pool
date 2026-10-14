@@ -1,11 +1,12 @@
 // The keeper moves claims along without anyone having to push them by hand:
 //
 //   JuryPending  -> fulfils the pending randomness request, which selects the jury (needs the
-//                   MockRandomness owner key; production swaps this for Chainlink VRF)
+//                   MockRandomness owner key; production swaps this for Chainlink VRF). If the
+//                   randomness is still missing after the timeout, cancels the claim instead.
 //   Voting       -> calls finalize once the voting window has closed or every juror has voted
 //   Approved     -> calls executePayout, so approved claims are paid automatically
 //
-// finalize and executePayout are permissionless on-chain, so the keeper only saves users a
+// finalize, executePayout and cancelStalledClaim are permissionless on-chain, so the keeper only saves users a
 // transaction; it cannot change an outcome.
 import { randomBytes } from "node:crypto";
 import type { Signer } from "ethers";
@@ -29,7 +30,7 @@ export interface KeeperOptions {
 
 export interface KeeperAction {
   claimId: number;
-  action: "fulfillRandomness" | "finalize" | "executePayout";
+  action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "executePayout";
   txHash?: string;
   error?: string;
 }
@@ -44,7 +45,7 @@ export interface KeeperStatus {
 }
 
 const silent: Logger = { info: () => {}, warn: () => {} };
-const TERMINAL: string[] = ["Rejected", "Paid"];
+const TERMINAL: string[] = ["Rejected", "Paid", "Cancelled"];
 
 export class Keeper {
   private readonly logger: Logger;
@@ -134,10 +135,20 @@ export class Keeper {
       if (this.done.has(id)) continue;
       let state = CLAIM_STATES[Number((await claimManager.getClaim(id)).state)];
 
-      if (state === "JuryPending" && this.options.fulfillRandomness) {
-        const pending: string = await this.contracts.randomness.pendingRequester(id);
-        if (pending !== "0x0000000000000000000000000000000000000000") {
-          await this.attempt(actions, id, "fulfillRandomness", () => this.contracts.randomness.fulfill(id, this.seed()));
+      if (state === "JuryPending") {
+        let fulfilled = false;
+        if (this.options.fulfillRandomness) {
+          const pending: string = await this.contracts.randomness.pendingRequester(id);
+          if (pending !== "0x0000000000000000000000000000000000000000") {
+            fulfilled = await this.attempt(actions, id, "fulfillRandomness", () =>
+              this.contracts.randomness.fulfill(id, this.seed()),
+            );
+          }
+        }
+        if (!fulfilled && this.options.autoResolve && (await this.contracts.jury.canCancel(id))) {
+          if (await this.attempt(actions, id, "cancelStalledClaim", () => claimManager.cancelStalledClaim(id))) {
+            state = "Cancelled";
+          }
         }
       }
 

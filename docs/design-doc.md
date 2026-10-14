@@ -151,10 +151,12 @@ stateDiagram-v2
     Submitted --> JuryPending : requestJury
     JuryPending --> Voting : randomness fulfilled, jurors selected
     Voting --> Approved : majority approve
-    Voting --> Rejected : majority reject or quorum not met
+    JuryPending --> Cancelled : randomness missing after 1 day (cancelStalledClaim)
+    Voting --> Rejected : majority reject, tie, or quorum not met
     Approved --> Paid : executePayout
     Rejected --> [*]
     Paid --> [*]
+    Cancelled --> [*]
 ```
 
 **Transition rules**
@@ -163,10 +165,12 @@ stateDiagram-v2
 |---|---|
 | Submit | Policy is Active, waiting period elapsed, amount at most the coverage limit, no other open claim on this policy |
 | Submitted to JuryPending | Called by ClaimManager after submission |
-| JuryPending to Voting | Only the randomness provider can call the fulfill callback |
+| JuryPending to Voting | Only the randomness provider can call the fulfill callback, and only the first callback seats a jury |
+| JuryPending to Cancelled | Anyone, once randomness has been pending longer than `randomnessTimeout` (1 day). The policy is freed so the holder can file again, and a late callback reverts |
 | Vote | Caller is a selected juror, has not voted, voting window still open |
-| Finalize | Voting window ended or all jurors voted; simple majority of 5 wins; fewer than 3 votes cast counts as no quorum and is rejected |
-| Paid | Payout amount is the minimum of the claim amount, the coverage limit, and the per-claim pool cap (`maxPayoutBps`) |
+| Finalize | Voting window ended or all jurors voted. Approved only if at least 3 votes were cast and approvals strictly outnumber rejections. A tie (for example 2-2) and fewer than 3 votes both end in Rejected; nothing is retried |
+| Approved | The payout is fixed here: the minimum of the claim amount, the coverage limit, and the per-claim cap (`maxPayoutBps`, 20% of the pool balance at this moment). Later pool movements do not change it |
+| Paid | Pays the fixed amount. If the pool holds less than that, the call reverts and the claim stays Approved until funds arrive; approved claims are paid first come, first served (no pro-rata) |
 
 ## 6. Main Flow
 
@@ -201,6 +205,53 @@ sequenceDiagram
     CM->>CM: state = Paid, emit ClaimPaid
 ```
 
+## 6a. Access Control
+
+Which contract may call which privileged function. All wiring is one-time: each setter reverts with `AlreadySet` after its first call, so no address can be swapped after deployment. Replacing the JuryModule therefore means redeploying ClaimManager and Pool wiring too (a deliberate trade: no admin can redirect payouts later; upgradeability is future work #11).
+
+| Function | Only callable by | Set by |
+|---|---|---|
+| `Pool.collectPremium` | PolicyRegistry | `Pool.setRegistry` (owner, once) |
+| `Pool.payout` | ClaimManager | `Pool.setClaimManager` (owner, once) |
+| `JuryModule.requestJury`, `tally`, `cancel` | ClaimManager | `JuryModule.setClaimManager` (owner, once) |
+| `JuryModule.fulfillRandomness` | The randomness provider | Constructor (immutable) |
+| `ClaimManager.startVoting` | JuryModule | Constructor (immutable) |
+| `MockRandomness.fulfill` | MockRandomness owner (the deployer / backend keeper) | Constructor |
+| `PolicyRegistry.lapsePolicy` | PolicyRegistry owner | Constructor |
+| `ClaimManager.finalize`, `executePayout`, `cancelStalledClaim` | Anyone (guarded by claim state and timing) | n/a |
+
+## 6b. Off-chain Backend and Evidence Privacy
+
+The Express backend stores evidence, runs a keeper, and serves read-only views of on-chain state. It never holds user keys.
+
+**Evidence policy.** Evidence is private, not public IPFS.
+- Uploading requires a wallet signature from a holder with an Active policy.
+- A bundle is served only to (a) the wallets that uploaded it and (b) the selected jurors of a claim that one of those uploaders filed with it. Copying a hash from the chain and filing a claim with it grants nothing.
+- Requests are authenticated with a signed, timestamped message (EIP-191, valid 10 minutes); there are no passwords or sessions.
+- Files are not encrypted at rest; the backend operator can read them. Encrypting to the jurors' keys is future work #9.
+- Retention: files are kept on the backend's disk for the life of the deployment, so they stay available through the voting window. There is no automatic deletion yet.
+- The on-chain hash proves the evidence has not changed since the claim was filed. It does not prove the claim is true; that is what the jury decides.
+
+```mermaid
+sequenceDiagram
+    actor C as Claimant
+    participant BE as Backend
+    participant CM as ClaimManager
+    actor J as Juror
+    C->>BE: sign auth message, POST /api/evidence (photos)
+    BE->>BE: check Active policy, store bundle, hash = keccak256(bundle)
+    BE-->>C: evidenceHash
+    C->>CM: submitClaim(amount, evidenceHash)
+    J->>BE: sign auth message, GET /api/evidence/:hash/raw
+    BE->>CM: is J a juror on a claim this uploader filed with this hash?
+    BE-->>J: bundle bytes
+    J->>J: keccak256(bytes) == on-chain evidenceHash
+```
+
+**Keeper.** Polls open claims. It fulfils randomness (as the MockRandomness owner, with a CSPRNG seed), cancels claims whose randomness timed out, finalizes when voting has closed, and pays approved claims. Everything except fulfilment is permissionless, so the keeper saves users transactions but cannot change an outcome.
+
+**Randomness trust.** With MockRandomness the owner chooses the seed and could pick a favourable jury. The prototype makes no claim of unbiased selection. Migration: deploy a `VRFRandomness` adapter implementing `IRandomnessProvider` on Sepolia (Chainlink VRF v2.5), pass it to a new JuryModule, and drop the keeper's fulfilment step; the timeout and cancel path already cover a callback that never arrives.
+
 ## 7. Key Design Decisions
 
 | Decision | Choice | Rationale | Alternative considered |
@@ -209,10 +260,15 @@ sequenceDiagram
 | Fund custody | Pool only | Smallest attack surface | Escrow per claim: more gas and complexity |
 | Randomness | Interface with mock, VRF later | Deterministic tests now, real randomness later | Blockhash: manipulable by validators |
 | Jury selection | Fisher-Yates style sampling on the eligible list, seeded by the randomness output | Simple and auditable; fine for a small demo pool | Off-chain selection: cheaper but requires trusting the selector |
-| Voting | Plain on-chain vote | Fast to build and easy to demo | Commit-reveal: prevents herding, listed as future work |
+| Voting | Plain on-chain vote | Fast to build and easy to demo. Herding risk is accepted for the course project | Commit-reveal: prevents herding, listed as future work |
+| Payout cap timing | Fixed when the jury approves | The claimant's payout cannot move after the verdict | At payout time: simpler, but other claims or contributions could change the amount |
+| Stalled randomness | Cancel after 1 day, policy freed to refile | Claims never get stuck; a late callback cannot seat a second jury | Retry the request: keeps the claim alive but needs the provider to accept duplicates |
+| Evidence access | Uploader plus that claim's jurors, wallet-signed requests | Jurors can review without making personal media public | Public IPFS: simpler but exposes photos to everyone |
 | Evidence | Hash on-chain, file on IPFS | Cheap, tamper-evident, privacy-friendlier | Full on-chain storage: expensive and permanently public |
 | Token | Mock ERC-20 | Free and controllable for demos | Real USDC on testnet: extra setup with little benefit at this stage |
 | Access control | OpenZeppelin `Ownable` and role checks between contracts | Battle-tested primitives | Custom modifiers: more bug risk |
+
+**Why these parameters.** They are demo values chosen so the whole flow fits in a test run and a small class demo, not actuarial figures. 5% premium makes premiums visible against a 2,000 mUSDC coverage maximum. 7-day waiting period is short enough to fast-forward in tests while still blocking "buy then claim immediately". A jury of 5 with quorum 3 works with the 6 to 8 wallets a local Hardhat demo has; odd size avoids ties when everyone votes. 3-day voting window gives jurors time without stalling the demo. 20% per-claim cap means no single claim can take more than a fifth of the pool. 1-day randomness timeout is far longer than VRF normally takes.
 
 ## 8. Trust Assumptions and Threats (Prototype)
 
@@ -225,6 +281,10 @@ sequenceDiagram
 | Pool drained by a single large claim | Coverage limit and `maxPayoutBps` cap | Solvency modeling, reserve ratios, pro-rata payouts |
 | Reentrancy on payout | Checks-effects-interactions, OpenZeppelin `ReentrancyGuard` | External audit |
 | Non-voting jurors stall a claim | Voting deadline and quorum rule | Slash non-voters, replace with fresh jurors |
+| Randomness never arrives | Anyone can cancel after 1 day; the holder can refile | VRF subscription monitoring |
+| Evidence leaks to other members | Backend serves it only to the uploader and that claim's jurors | Encrypt to juror keys |
+| Device ID guessed from its hash | None: `keccak256(IMEI)` can be brute-forced for known IMEI ranges | Salt the device hash per policy |
+| Jurors collude or don't care | None: there is no juror reward or stake in the MVP, so the protocol makes no anti-collusion claim | Juror stake, coherence rewards |
 
 ## 9. Testing and CI
 

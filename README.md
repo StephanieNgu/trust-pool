@@ -80,13 +80,16 @@ Backend
 The backend (`backend/src`, Express + TypeScript) is the off-chain half of the design doc. It never
 holds user keys: members still sign their own transactions in MetaMask. It does three things:
 
-* **Evidence storage.** The claimant uploads photos, the backend stores them content-addressed and
-  returns the `evidenceHash` to pass to `ClaimManager.submitClaim`. Jurors download the exact stored
-  bytes and recompute `keccak256` to confirm the evidence matches the hash on-chain. Files live in
-  `data/evidence/` (a stand-in for IPFS; encryption and juror-only access are future work).
+* **Private evidence storage.** A policyholder uploads photos and gets back the `evidenceHash` to pass
+  to `ClaimManager.submitClaim`. Evidence is served only to its uploader and to the selected jurors
+  of a claim the uploader filed with it, never publicly. Jurors download the exact stored bytes and
+  recompute `keccak256` to confirm they match the hash on-chain (that proves the files are unchanged,
+  not that the claim is true). Files live in `data/evidence/` and are not encrypted at rest. See
+  [design doc §6b](docs/design-doc.md#6b-off-chain-backend-and-evidence-privacy) for the full policy.
 * **Keeper.** Polls open claims and moves them along: fulfils jury randomness (as the
-  `MockRandomness` owner, using a CSPRNG seed), finalizes once voting closes or every juror has
-  voted, and pays approved claims. `finalize` and `executePayout` stay callable by anyone.
+  `MockRandomness` owner, using a CSPRNG seed), cancels a claim whose randomness is more than a day
+  late, finalizes once voting closes or every juror has voted, and pays approved claims. Everything
+  except randomness is callable by anyone on-chain, so the keeper cannot change an outcome.
 * **Read API** for the dashboard: pool stats, a member's policy, claims filtered by claimant, juror or
   state, and each claim's jury and votes.
 
@@ -109,10 +112,19 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/members/:address` | Wallet balance, contributions, policy, claim-eligible date, open claim |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
 | `GET /api/claims/:id` | Claim, jury (jurors, who has voted, tally, deadline) and evidence link |
-| `POST /api/evidence` | Upload `{ description, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash` |
-| `GET /api/evidence/:hash` | Evidence description and file list |
-| `GET /api/evidence/:hash/raw` | Exact stored bytes; `keccak256` of these equals the on-chain hash |
-| `GET /api/evidence/:hash/files/:index` | One file, for display |
+| `GET /api/auth/message?address=` | The message to sign with the wallet for the evidence routes |
+| `POST /api/evidence` 🔒 | Upload `{ description, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. Active policyholders only |
+| `GET /api/evidence/:hash` 🔒 | Evidence description and file list |
+| `GET /api/evidence/:hash/raw` 🔒 | Exact stored bytes; `keccak256` of these equals the on-chain hash |
+| `GET /api/evidence/:hash/files/:index` 🔒 | One file, for display (fetch it, then show it from a blob URL) |
+
+🔒 routes need three headers: `x-trustpool-address`, `x-trustpool-issued-at` (unix seconds) and
+`x-trustpool-signature`, the wallet's `personal_sign` of the message from `/api/auth/message`. A
+signature is valid for 10 minutes, so the frontend signs once, not per request.
+
+Claims can end `Paid`, `Rejected` (majority against, a tie, or fewer than 3 votes; the API's
+`jury.outcomeReason` says which) or `Cancelled` (randomness never arrived). An approved claim's payout
+is fixed when the jury approves.
 
 Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 
