@@ -77,13 +77,57 @@ wallet request and a wrong network as well. Use local test accounts and test tok
 
 Backend
 
-The backend uses Express and TypeScript.
+The backend (`backend/src`, Express + TypeScript) is the off-chain half of the design doc. It never
+holds user keys: members still sign their own transactions in MetaMask. It does three things:
 
-Start the backend server with:
+* **Evidence storage.** The claimant uploads photos, the backend stores them content-addressed and
+  returns the `evidenceHash` to pass to `ClaimManager.submitClaim`. Jurors download the exact stored
+  bytes and recompute `keccak256` to confirm the evidence matches the hash on-chain. Files live in
+  `data/evidence/` (a stand-in for IPFS; encryption and juror-only access are future work).
+* **Keeper.** Polls open claims and moves them along: fulfils jury randomness (as the
+  `MockRandomness` owner, using a CSPRNG seed), finalizes once voting closes or every juror has
+  voted, and pays approved claims. `finalize` and `executePayout` stay callable by anyone.
+* **Read API** for the dashboard: pool stats, a member's policy, claims filtered by claimant, juror or
+  state, and each claim's jury and votes.
+
+Start a chain and deploy first, then start the backend in a third terminal:
 
 ```powershell
-npm run dev:backend
+npm run chain          # terminal 1
+npm run deploy:local   # terminal 2
+npm run dev:backend    # terminal 3: http://localhost:3000/api/health
 ```
+
+On the local chain the keeper signs with the deployer's unlocked Hardhat account, so no key is
+needed. The Vite dev server proxies `/api` to the backend, so the frontend can call `/api/...` directly.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/health` | Chain id, block number, keeper status |
+| `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
+| `GET /api/pool` | Balance, per-claim cap, totals, policy and claim counts |
+| `GET /api/members/:address` | Wallet balance, contributions, policy, claim-eligible date, open claim |
+| `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
+| `GET /api/claims/:id` | Claim, jury (jurors, who has voted, tally, deadline) and evidence link |
+| `POST /api/evidence` | Upload `{ description, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash` |
+| `GET /api/evidence/:hash` | Evidence description and file list |
+| `GET /api/evidence/:hash/raw` | Exact stored bytes; `keccak256` of these equals the on-chain hash |
+| `GET /api/evidence/:hash/files/:index` | One file, for display |
+
+Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
+
+| Variable | Default | |
+|---|---|---|
+| `PORT` | `3000` | |
+| `RPC_URL` | `http://127.0.0.1:8545` | |
+| `DEPLOYMENT_FILE` | `deployments/localhost.json` | Written by `npm run deploy:local` |
+| `EVIDENCE_DIR` | `data/evidence` | |
+| `CORS_ORIGIN` | `*` | |
+| `KEEPER_ENABLED` | `true` | |
+| `KEEPER_PRIVATE_KEY` | unset | Required off the local chain; must own `MockRandomness` to select juries |
+| `KEEPER_INTERVAL_MS` | `5000` | |
+| `KEEPER_FULFILL_RANDOMNESS` | `true` | |
+| `KEEPER_AUTO_RESOLVE` | `true` | Finalize and pay automatically |
 
 ## Smart Contracts
 
@@ -121,10 +165,14 @@ npm run compile
 
 ## Running Tests
 
-Run the contract test suite (unit tests in `test/unit`, the end-to-end happy path in `test/integration`):
+Run every test: the contract suite (unit tests in `test/unit`, the end-to-end happy path in
+`test/integration`) and the backend suite (`backend/test`, which runs the API and keeper against an
+in-process Hardhat chain):
 
 ```powershell
 npm test
+npm run test:contracts   # contracts only
+npm run test:backend     # backend only
 ```
 
 For a coverage report:
@@ -170,7 +218,7 @@ The pipeline:
 
 1. Installs dependencies
 2. Compiles the contracts
-3. Runs the contract test suite
+3. Runs the contract and backend test suites
 4. Runs ESLint and Solhint
 5. Builds the frontend and backend
 
@@ -229,8 +277,13 @@ trust-pool/
 │       ├── contracts/  # ABIs, addresses, contract calls
 │       └── wallet/     # MetaMask connection
 ├── backend/
-│   └── src/
-│       └── server.ts
+│   ├── src/
+│   │   ├── server.ts   # entry point
+│   │   ├── app.ts      # HTTP routes
+│   │   ├── evidence.ts # content-addressed evidence store
+│   │   ├── keeper.ts   # jury randomness, finalize, payout
+│   │   └── protocol.ts # on-chain reads for the API
+│   └── test/
 ├── hardhat.config.js
 ├── .solhint.json
 ├── package.json

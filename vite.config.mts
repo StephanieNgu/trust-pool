@@ -52,6 +52,10 @@ function localDeploymentPlugin(): Plugin {
 export default defineConfig({
   root: "frontend",
   plugins: [localDeploymentPlugin()],
+  server: {
+    // The backend (npm run dev:backend) serves evidence and claim status under /api.
+    proxy: { "/api": process.env.BACKEND_URL ?? "http://localhost:3000" }
+  },
   build: {
     outDir: "../dist/frontend",
     emptyOutDir: true
