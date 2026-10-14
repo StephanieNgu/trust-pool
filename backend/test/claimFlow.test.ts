@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256 } from "ethers";
 import { Keeper } from "../src/keeper";
-import { PHOTO, USDC, increaseTime, setup, signerFor } from "./helpers";
+import { PHOTO, USDC, commit, increaseTime, reveal, setup, signerFor } from "./helpers";
 
 describe("claim flow through the backend", () => {
   let t: Awaited<ReturnType<typeof setup>>;
@@ -43,7 +43,7 @@ describe("claim flow through the backend", () => {
     assert.equal(claim.state, "Voting");
     assert.equal(claim.jury.jurors.length, 5);
     assert.ok(!claim.jury.jurors.some((j: { address: string }) => j.address === claimant.address));
-    assert.ok(claim.jury.votingDeadline > claim.submittedAt);
+    assert.ok(claim.jury.revealDeadline > claim.jury.commitDeadline && claim.jury.commitDeadline > claim.submittedAt);
 
     // 4. Each juror finds the claim in their queue and checks the evidence against the chain.
     const jurorAddrs: string[] = claim.jury.jurors.map((j: { address: string }) => j.address);
@@ -64,15 +64,24 @@ describe("claim flow through the backend", () => {
     assert.ok(outsider);
     assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, outsider)).status, 403);
 
-    // Votes: 4 approve, 1 reject. Voting is still open until everyone has voted.
+    // Commit-reveal: 4 approve, 1 reject. While sealed, the API shows who committed but no tally.
     for (const [i, addr] of jurorAddrs.entries()) {
-      await (await jury.connect(signerFor(signers, addr)).castVote(1, i !== 0)).wait();
+      await commit(jury, signerFor(signers, addr), 1, i !== 0);
+    }
+    claim = (await api("/api/claims/1")).body;
+    assert.equal(claim.jury.commits, 5);
+    assert.equal(claim.jury.approvals + claim.jury.rejections, 0);
+    assert.equal(claim.jury.revealOpen, true, "everyone committed, so reveals open early");
+    assert.ok(claim.jury.jurors.every((j: { committed: boolean; revealed: boolean }) => j.committed && !j.revealed));
+
+    for (const [i, addr] of jurorAddrs.entries()) {
+      await reveal(jury, signerFor(signers, addr), 1, i !== 0);
       if (i < jurorAddrs.length - 1) assert.deepEqual(await keeper.tick(), []);
     }
     claim = (await api("/api/claims/1")).body;
     assert.equal(claim.jury.approvals, 4);
     assert.equal(claim.jury.rejections, 1);
-    assert.ok(claim.jury.jurors.every((j: { hasVoted: boolean }) => j.hasVoted));
+    assert.ok(claim.jury.jurors.every((j: { revealed: boolean }) => j.revealed));
     assert.equal(claim.jury.canTally, true);
     assert.equal(claim.payoutAmount, USDC(300).toString());
 
@@ -94,6 +103,10 @@ describe("claim flow through the backend", () => {
     assert.equal(claim.jury.outcomeReason, "majorityApproved");
     assert.equal(claim.paidAmount, USDC(300).toString());
     assert.deepEqual(await keeper.tick(), []);
+
+    // Jurors only see evidence while voting is open.
+    assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, signerFor(signers, jurorAddrs[0]))).status, 403);
+    assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, claimant)).status, 200);
 
     const member = (await api(`/api/members/${claimant.address}`)).body;
     assert.equal(member.policy.status, "Active");
@@ -118,14 +131,14 @@ describe("claim flow through the backend", () => {
     const id = Number(await claimManager.claimCount());
     await keeper.tick();
 
-    // Two approvals is below the quorum of three.
+    // Three approvals are committed but only two revealed: below the quorum of three.
     const jurors: string[] = (await api(`/api/claims/${id}`)).body.jury.jurors.map((j: { address: string }) => j.address);
-    for (const addr of jurors.slice(0, 2)) {
-      await (await jury.connect(signerFor(signers, addr)).castVote(id, true)).wait();
-    }
-    assert.deepEqual(await keeper.tick(), [], "voting window still open");
+    for (const addr of jurors.slice(0, 3)) await commit(jury, signerFor(signers, addr), id, true);
+    await increaseTime(Number(params.commitPeriod) + 1);
+    for (const addr of jurors.slice(0, 2)) await reveal(jury, signerFor(signers, addr), id, true);
+    assert.deepEqual(await keeper.tick(), [], "reveal window still open");
 
-    await increaseTime(Number(params.votingPeriod) + 1);
+    await increaseTime(Number(params.revealPeriod) + 1);
     const actions = await keeper.tick();
     assert.deepEqual(
       actions.map((a) => a.action),

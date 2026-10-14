@@ -5,11 +5,14 @@
 // claim is true; judging that is the jury's job.
 //
 // The store is private: the HTTP layer only serves a bundle to its uploader and to the jurors of a
-// claim the uploader filed with it (see app.ts). It is deliberately not public IPFS. Files are not
-// encrypted at rest, so whoever operates the backend can read them.
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { keccak256 } from "ethers";
+// claim the uploader filed with it, while that claim is being voted on (see app.ts). It is
+// deliberately not public IPFS. Every bundle is encrypted at rest with AES-256-GCM under the
+// backend's evidence key, so the files on disk (and any backup or copy of them) are unreadable
+// without that key. The hash is taken over the plaintext, so jurors can still verify it.
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { getBytes, keccak256 } from "ethers";
 
 export const BUNDLE_VERSION = 1;
 export const MAX_FILES = 10;
@@ -136,12 +139,77 @@ function summarize(evidenceHash: string, bytes: Buffer): EvidenceSummary {
   };
 }
 
-/** Content-addressed evidence store on the local filesystem. */
+// On-disk format: MAGIC | 12-byte IV | 16-byte GCM tag | ciphertext. The evidence hash is bound in
+// as additional authenticated data, so a ciphertext cannot be swapped onto another hash's file.
+const MAGIC = Buffer.from("TPE1");
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
+export const KEY_BYTES = 32;
+
+function encrypt(key: Buffer, evidenceHash: string, plaintext: Buffer): Buffer {
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(getBytes(evidenceHash));
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Buffer.concat([MAGIC, iv, cipher.getAuthTag(), ciphertext]);
+}
+
+function decrypt(key: Buffer, evidenceHash: string, stored: Buffer): Buffer {
+  const headerBytes = MAGIC.length + IV_BYTES + TAG_BYTES;
+  if (stored.length < headerBytes || !stored.subarray(0, MAGIC.length).equals(MAGIC)) {
+    throw new EvidenceError("Stored evidence is not in the encrypted format.", 500);
+  }
+  const iv = stored.subarray(MAGIC.length, MAGIC.length + IV_BYTES);
+  const tag = stored.subarray(MAGIC.length + IV_BYTES, headerBytes);
+  try {
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAAD(getBytes(evidenceHash));
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(stored.subarray(headerBytes)), decipher.final()]);
+  } catch {
+    throw new EvidenceError("Stored evidence could not be decrypted (wrong key or altered file).", 500);
+  }
+}
+
+/** Parses a 32-byte key given as 64 hex characters (optionally 0x-prefixed) or base64. */
+export function parseEvidenceKey(value: string): Buffer {
+  const hex = value.replace(/^0x/, "");
+  const key = /^[0-9a-fA-F]{64}$/.test(hex) ? Buffer.from(hex, "hex") : Buffer.from(value, "base64");
+  if (key.length !== KEY_BYTES) throw new Error("The evidence key must be 32 bytes, as 64 hex characters or base64.");
+  return key;
+}
+
+/**
+ * Reads the evidence key from `file`, creating a random one (readable by this user only) if it does
+ * not exist yet. For local development; deployments should pass EVIDENCE_ENCRYPTION_KEY instead.
+ */
+export async function loadOrCreateKeyFile(file: string): Promise<{ key: Buffer; created: boolean }> {
+  try {
+    return { key: parseEvidenceKey((await readFile(file, "utf8")).trim()), created: false };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const key = randomBytes(KEY_BYTES);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, key.toString("hex") + "\n", { mode: 0o600, flag: "wx" });
+  await chmod(file, 0o600);
+  return { key, created: true };
+}
+
+/** Content-addressed, encrypted evidence store on the local filesystem. */
 export class LocalEvidenceStore {
-  constructor(readonly dir: string) {}
+  private readonly key: Buffer;
+
+  constructor(
+    readonly dir: string,
+    key: Buffer,
+  ) {
+    if (key.length !== KEY_BYTES) throw new Error(`Evidence key must be ${KEY_BYTES} bytes.`);
+    this.key = key;
+  }
 
   private pathFor(evidenceHash: string): string {
-    return join(this.dir, `${evidenceHash}.json`);
+    return join(this.dir, `${evidenceHash}.enc`);
   }
 
   private uploadersPathFor(evidenceHash: string): string {
@@ -157,7 +225,7 @@ export class LocalEvidenceStore {
     const evidenceHash = hashBundle(bytes);
     await mkdir(this.dir, { recursive: true });
     if (!(await this.has(evidenceHash))) {
-      await writeAtomic(this.pathFor(evidenceHash), bytes);
+      await writeAtomic(this.pathFor(evidenceHash), encrypt(this.key, evidenceHash, bytes));
     }
     const uploaders = await this.getUploaders(evidenceHash);
     if (!uploaders.includes(uploader.toLowerCase())) {
@@ -189,12 +257,14 @@ export class LocalEvidenceStore {
   }
 
   /**
-   * Returns the stored bytes, or null if none are stored under this hash. Throws if the stored
-   * bytes no longer match their hash, so tampered evidence is never served as genuine.
+   * Returns the decrypted bundle bytes, or null if none are stored under this hash. Throws if the
+   * file cannot be decrypted or no longer matches its hash, so tampered evidence is never served.
    */
   async getRaw(evidenceHash: string): Promise<Buffer | null> {
-    const bytes = await this.read(evidenceHash);
-    if (bytes && hashBundle(bytes) !== evidenceHash) {
+    const stored = await this.read(evidenceHash);
+    if (!stored) return null;
+    const bytes = decrypt(this.key, evidenceHash, stored);
+    if (hashBundle(bytes) !== evidenceHash) {
       throw new EvidenceError("Stored evidence does not match its hash.", 500);
     }
     return bytes;

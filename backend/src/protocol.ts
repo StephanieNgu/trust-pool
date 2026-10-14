@@ -3,9 +3,14 @@
 import { CLAIM_STATES, JURY_PHASES, OUTCOMES, POLICY_STATUSES, type ClaimState } from "./abis";
 import type { ProtocolContracts } from "./chain";
 
+const ZERO_HASH = `0x${"0".repeat(64)}`;
+
 export interface JurorView {
   address: string;
-  hasVoted: boolean;
+  /** Has submitted a sealed vote. */
+  committed: boolean;
+  /** Has opened it; only revealed votes count. */
+  revealed: boolean;
 }
 
 /**
@@ -16,7 +21,14 @@ export type OutcomeReason = "majorityApproved" | "majorityRejected" | "tie" | "n
 
 export interface JuryView {
   phase: (typeof JURY_PHASES)[number];
-  votingDeadline: number | null;
+  /** Sealed votes are accepted until this time. */
+  commitDeadline: number | null;
+  /** Votes are revealed until this time; voting is over after it. */
+  revealDeadline: number | null;
+  /** Reveals are accepted now: the commit window ended or every juror committed. */
+  revealOpen: boolean;
+  commits: number;
+  /** Revealed votes only, so both stay 0 while votes are sealed. */
   approvals: number;
   rejections: number;
   quorum: number;
@@ -79,13 +91,16 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
 }
 
 async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryView | null> {
-  const [phase, , votingDeadline, approvals, rejections, outcome, jurors] = await c.jury.getJury(claimId);
+  const [phase, , commitDeadline, revealDeadline, commits, approvals, rejections, outcome, jurors] =
+    await c.jury.getJury(claimId);
   if (JURY_PHASES[Number(phase)] === "None") return null;
 
   const addresses = [...(jurors as string[])];
-  const [voted, canTally, quorum, cancelAt] = await Promise.all([
-    Promise.all(addresses.map((a) => c.jury.hasVoted(claimId, a) as Promise<boolean>)),
+  const [committed, revealed, canTally, revealOpen, quorum, cancelAt] = await Promise.all([
+    Promise.all(addresses.map(async (a) => (await c.jury.commitmentOf(claimId, a)) !== ZERO_HASH)),
+    Promise.all(addresses.map((a) => c.jury.hasRevealed(claimId, a) as Promise<boolean>)),
     c.jury.canTally(claimId) as Promise<boolean>,
+    c.jury.revealOpen(claimId) as Promise<boolean>,
     c.jury.quorum(),
     c.jury.cancelAvailableAt(claimId),
   ]);
@@ -94,13 +109,16 @@ async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryV
   const tallied = JURY_PHASES[Number(phase)] === "Tallied";
   return {
     phase: JURY_PHASES[Number(phase)],
-    votingDeadline: Number(votingDeadline) || null,
+    commitDeadline: Number(commitDeadline) || null,
+    revealDeadline: Number(revealDeadline) || null,
+    revealOpen,
+    commits: Number(commits),
     approvals: yes,
     rejections: no,
     quorum: Number(quorum),
     outcome: OUTCOMES[Number(outcome)],
     outcomeReason: tallied ? outcomeReason(yes, no, Number(quorum)) : null,
-    jurors: addresses.map((address, i) => ({ address, hasVoted: voted[i] })),
+    jurors: addresses.map((address, i) => ({ address, committed: committed[i], revealed: revealed[i] })),
     canTally,
     cancelAvailableAt: Number(cancelAt) || null,
   };

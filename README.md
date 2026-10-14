@@ -84,7 +84,8 @@ holds user keys: members still sign their own transactions in MetaMask. It does 
   to `ClaimManager.submitClaim`. Evidence is served only to its uploader and to the selected jurors
   of a claim the uploader filed with it, never publicly. Jurors download the exact stored bytes and
   recompute `keccak256` to confirm they match the hash on-chain (that proves the files are unchanged,
-  not that the claim is true). Files live in `data/evidence/` and are not encrypted at rest. See
+  not that the claim is true). Jurors lose access once voting ends. Files live in `data/evidence/`,
+  encrypted with AES-256-GCM. See
   [design doc §6b](docs/design-doc.md#6b-off-chain-backend-and-evidence-privacy) for the full policy.
 * **Keeper.** Polls open claims and moves them along: fulfils jury randomness (as the
   `MockRandomness` owner, using a CSPRNG seed), cancels a claim whose randomness is more than a day
@@ -111,7 +112,7 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/pool` | Balance, per-claim cap, totals, policy and claim counts |
 | `GET /api/members/:address` | Wallet balance, contributions, policy, claim-eligible date, open claim |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
-| `GET /api/claims/:id` | Claim, jury (jurors, who has voted, tally, deadline) and evidence link |
+| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, revealed tally, deadlines) and evidence link |
 | `GET /api/auth/message?address=` | The message to sign with the wallet for the evidence routes |
 | `POST /api/evidence` 🔒 | Upload `{ description, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. Active policyholders only |
 | `GET /api/evidence/:hash` 🔒 | Evidence description and file list |
@@ -134,6 +135,8 @@ Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 | `RPC_URL` | `http://127.0.0.1:8545` | |
 | `DEPLOYMENT_FILE` | `deployments/localhost.json` | Written by `npm run deploy:local` |
 | `EVIDENCE_DIR` | `data/evidence` | |
+| `EVIDENCE_ENCRYPTION_KEY` | unset | 32 bytes as hex or base64. Required off the local chain |
+| `EVIDENCE_KEY_FILE` | `data/evidence.key` | Local chain only: generated on first start when no key is set |
 | `CORS_ORIGIN` | `*` | |
 | `KEEPER_ENABLED` | `true` | |
 | `KEEPER_PRIVATE_KEY` | unset | Required off the local chain; must own `MockRandomness` to select juries |
@@ -151,10 +154,17 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `PolicyRegistry` | Sells policies, one per wallet and per device; tracks Active/Lapsed; lists eligible jurors | No |
 | `Pool` | Holds all funds; takes premiums and contributions; pays approved claims up to `maxPayoutBps` of its balance | **Yes** |
 | `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Approved/Rejected → Paid | No |
-| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), records votes, tallies | No |
+| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal voting, tallies | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype parameters (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 3-day voting window.
+Prototype parameters (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout.
+
+**Voting is commit-reveal.** A juror first calls `commitVote(claimId, commitment)` with
+`commitment = JuryModule.computeCommitment(claimId, juror, approve, salt)` for a secret 32-byte
+`salt`, then, once every juror has committed or the commit window ends, calls
+`revealVote(claimId, approve, salt)`. Only revealed votes count. The juror must keep the salt until
+revealing; a frontend can derive it from a wallet signature over the claim id so it can always be
+recomputed.
 
 Run the whole claim flow in one command (no node needed):
 

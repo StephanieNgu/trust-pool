@@ -46,6 +46,31 @@ async function selectJury(ctx, claimId, seed = 42n) {
   return addresses.map((a) => ctx.signers.find((s) => s.address === a));
 }
 
+/** Deterministic per-juror salt so tests can reveal without bookkeeping. */
+const saltFor = (claimId, juror) => ethers.keccak256(ethers.toUtf8Bytes(`salt:${claimId}:${juror.address}`));
+
+async function commitVote(ctx, claimId, juror, approve) {
+  const commitment = await ctx.jury.computeCommitment(claimId, juror.address, approve, saltFor(claimId, juror));
+  return ctx.jury.connect(juror).commitVote(claimId, commitment);
+}
+
+async function revealVote(ctx, claimId, juror, approve) {
+  return ctx.jury.connect(juror).revealVote(claimId, approve, saltFor(claimId, juror));
+}
+
+/**
+ * Commit-reveal votes for `jurors` (votes[i] is jurors[i]'s choice). If not every juror commits, waits
+ * out the commit window so the reveal window opens.
+ */
+async function castVotes(ctx, claimId, jurors, votes) {
+  for (const [i, j] of jurors.entries()) await commitVote(ctx, claimId, j, votes[i]);
+  if (!(await ctx.jury.revealOpen(claimId))) await time.increase(ctx.params.commitPeriod + 1);
+  for (const [i, j] of jurors.entries()) await revealVote(ctx, claimId, j, votes[i]);
+}
+
+/** Commit plus reveal window: after this long, voting is closed. */
+const votingPeriod = (params) => params.commitPeriod + params.revealPeriod;
+
 /** Submits a claim from `claimant` and returns its id. */
 async function submitClaim(ctx, claimant, amount = USDC(400)) {
   await ctx.claimManager.connect(claimant).submitClaim(amount, EVIDENCE);
@@ -70,6 +95,11 @@ module.exports = {
   activePoolFixture,
   selectJury,
   submitClaim,
+  saltFor,
+  commitVote,
+  revealVote,
+  castVotes,
+  votingPeriod,
   ClaimState,
   JuryPhase,
   Outcome,

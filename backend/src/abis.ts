@@ -42,15 +42,19 @@ export const claimManagerAbi = [
 ] as const;
 
 export const juryAbi = [
-  "function getJury(uint256 claimId) view returns (uint8 phase, address claimant, uint64 votingDeadline, uint8 approvals, uint8 rejections, uint8 outcome, address[] jurors)",
-  "function hasVoted(uint256 claimId, address juror) view returns (bool)",
+  "function getJury(uint256 claimId) view returns (uint8 phase, address claimant, uint64 commitDeadline, uint64 revealDeadline, uint8 commits, uint8 approvals, uint8 rejections, uint8 outcome, address[] jurors)",
+  "function commitmentOf(uint256 claimId, address juror) view returns (bytes32)",
+  "function hasRevealed(uint256 claimId, address juror) view returns (bool)",
+  "function revealOpen(uint256 claimId) view returns (bool)",
+  "function computeCommitment(uint256 claimId, address juror, bool approve, bytes32 salt) pure returns (bytes32)",
   "function canTally(uint256 claimId) view returns (bool)",
   "function canCancel(uint256 claimId) view returns (bool)",
   "function cancelAvailableAt(uint256 claimId) view returns (uint256)",
   "function randomnessTimeout() view returns (uint256)",
   "function jurySize() view returns (uint8)",
   "function quorum() view returns (uint8)",
-  "function votingPeriod() view returns (uint256)",
+  "function commitPeriod() view returns (uint256)",
+  "function revealPeriod() view returns (uint256)",
   "error VotingStillOpen()",
 ] as const;
 

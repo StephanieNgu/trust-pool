@@ -11,10 +11,12 @@ const {
   COVERAGE,
   EVIDENCE,
   ClaimState,
+  castVotes,
+  votingPeriod,
 } = require("../helpers");
 
 async function castAll(ctx, claimId, jurors, approve) {
-  for (const j of jurors) await ctx.jury.connect(j).castVote(claimId, approve);
+  await castVotes(ctx, claimId, jurors, jurors.map(() => approve));
 }
 
 async function approvedClaimFixture() {
@@ -151,7 +153,7 @@ describe("ClaimManager", function () {
       const claimId = await submitClaim(ctx, ctx.claimant);
       const jurors = await selectJury(ctx, claimId);
       await castAll(ctx, claimId, jurors.slice(0, 2), true);
-      await time.increase(ctx.params.votingPeriod + 1);
+      await time.increase(votingPeriod(ctx.params) + 1);
       await ctx.claimManager.finalize(claimId);
       expect((await ctx.claimManager.getClaim(claimId)).state).to.equal(ClaimState.Rejected);
     });

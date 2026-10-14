@@ -7,7 +7,7 @@ import { JsonRpcProvider, Wallet, type Signer } from "ethers";
 import { createApp } from "./app";
 import { connectContracts, loadDeployment } from "./chain";
 import { loadConfig } from "./config";
-import { LocalEvidenceStore } from "./evidence";
+import { LocalEvidenceStore, loadOrCreateKeyFile, parseEvidenceKey } from "./evidence";
 import { Keeper } from "./keeper";
 
 const LOCAL_CHAIN_ID = 31337n;
@@ -49,12 +49,22 @@ async function main() {
     }
   }
 
-  const evidence = new LocalEvidenceStore(config.evidenceDir);
+  let evidenceKey: Buffer;
+  if (config.evidenceKey) {
+    evidenceKey = parseEvidenceKey(config.evidenceKey);
+  } else if (chainId === LOCAL_CHAIN_ID) {
+    const { key, created } = await loadOrCreateKeyFile(config.evidenceKeyFile);
+    if (created) console.warn(`Created a local evidence encryption key at ${config.evidenceKeyFile}.`);
+    evidenceKey = key;
+  } else {
+    throw new Error("Set EVIDENCE_ENCRYPTION_KEY (32 bytes, hex or base64) to store evidence on a non-local chain.");
+  }
+  const evidence = new LocalEvidenceStore(config.evidenceDir, evidenceKey);
   const app = createApp({ deployment, provider, contracts, evidence, keeper, corsOrigin: config.corsOrigin });
 
   const server = app.listen(config.port, () => {
     console.log(`TrustPool backend on http://localhost:${config.port} (chain ${chainId}, ${config.rpcUrl})`);
-    console.log(`Evidence stored in ${config.evidenceDir}`);
+    console.log(`Evidence stored encrypted in ${config.evidenceDir}`);
     if (keeper) {
       const s = keeper.status();
       console.log(

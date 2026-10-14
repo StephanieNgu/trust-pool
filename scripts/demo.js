@@ -54,15 +54,28 @@ async function main() {
   console.log(`    Jurors: ${jurorAddrs.map(short).join(", ")}`);
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
 
-  log("Jurors review the evidence and vote");
-  for (const [i, addr] of jurorAddrs.entries()) {
-    const juror = signers.find((s) => s.address === addr);
-    const approve = i !== jurorAddrs.length - 1; // last juror dissents, to show it's a real tally
-    await (await jury.connect(juror).castVote(claimId, approve)).wait();
-    console.log(`    ${short(addr)} votes ${approve ? "APPROVE" : "REJECT"}`);
+  // Last juror dissents, to show it's a real tally.
+  const jurors = jurorAddrs.map((addr, i) => ({
+    signer: signers.find((s) => s.address === addr),
+    approve: i !== jurorAddrs.length - 1,
+    salt: ethers.hexlify(ethers.randomBytes(32)), // each juror keeps this secret until revealing
+  }));
+
+  log("Jurors review the evidence and commit sealed votes");
+  for (const j of jurors) {
+    const commitment = await jury.computeCommitment(claimId, j.signer.address, j.approve, j.salt);
+    await (await jury.connect(j.signer).commitVote(claimId, commitment)).wait();
+    console.log(`    ${short(j.signer.address)} commits ${commitment.slice(0, 14)}…`);
+  }
+  console.log(`    Visible tally so far: ${(await jury.getJury(claimId)).approvals} approve (votes are sealed)`);
+
+  log("Everyone has committed, so jurors reveal");
+  for (const j of jurors) {
+    await (await jury.connect(j.signer).revealVote(claimId, j.approve, j.salt)).wait();
+    console.log(`    ${short(j.signer.address)} reveals ${j.approve ? "APPROVE" : "REJECT"}`);
   }
 
-  log("Finalizing (all jurors voted, so no need to wait for the deadline)");
+  log("Finalizing (all jurors revealed, so no need to wait for the deadline)");
   await (await claimManager.finalize(claimId)).wait();
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
 

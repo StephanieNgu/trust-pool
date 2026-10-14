@@ -5,6 +5,9 @@ export interface Config {
   rpcUrl: string;
   deploymentFile: string;
   evidenceDir: string;
+  /** 32-byte evidence encryption key, or null to use (and create if needed) `evidenceKeyFile`. */
+  evidenceKey: string | null;
+  evidenceKeyFile: string;
   corsOrigin: string;
   keeper: {
     enabled: boolean;
@@ -35,6 +38,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     rpcUrl: env.RPC_URL || "http://127.0.0.1:8545",
     deploymentFile: resolve(env.DEPLOYMENT_FILE || "deployments/localhost.json"),
     evidenceDir: resolve(env.EVIDENCE_DIR || "data/evidence"),
+    evidenceKey: env.EVIDENCE_ENCRYPTION_KEY || null,
+    evidenceKeyFile: resolve(env.EVIDENCE_KEY_FILE || "data/evidence.key"),
     corsOrigin: env.CORS_ORIGIN || "*",
     keeper: {
       enabled: flag(env.KEEPER_ENABLED, true),

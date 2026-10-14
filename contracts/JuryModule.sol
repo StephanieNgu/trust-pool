@@ -8,8 +8,12 @@ import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 import {IRandomnessProvider, IRandomnessConsumer} from "./interfaces/IRandomnessProvider.sol";
 
 /// @title JuryModule
-/// @notice Requests randomness, selects a jury from eligible policyholders, records votes and tallies them.
-/// @dev Holds no funds. Voting is plain on-chain (no commit-reveal) for the prototype.
+/// @notice Requests randomness, selects a jury from eligible policyholders, runs commit-reveal voting
+///         and tallies the revealed votes.
+/// @dev Holds no funds. Voting has two windows so no juror can see another's vote before choosing:
+///      1. Commit: each juror submits keccak256(abi.encode(claimId, juror, approve, salt)).
+///      2. Reveal: opens when the commit window ends or every juror has committed; each juror reveals
+///         (approve, salt) and only revealed votes count. A commit never revealed counts as no vote.
 contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     enum Phase {
         None,
@@ -22,8 +26,10 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     struct Jury {
         Phase phase;
         address claimant;
-        uint64 votingDeadline;
         uint64 requestedAt;
+        uint64 commitDeadline;
+        uint64 revealDeadline;
+        uint8 commits;
         uint8 approvals;
         uint8 rejections;
         Outcome outcome;
@@ -33,9 +39,12 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     IPolicyRegistry public immutable registry;
     IRandomnessProvider public immutable randomness;
     uint8 public immutable jurySize;
-    /// @notice Minimum number of votes cast for a verdict to count; otherwise the claim is rejected.
+    /// @notice Minimum number of revealed votes for a verdict to count; otherwise the claim is rejected.
     uint8 public immutable quorum;
-    uint256 public immutable votingPeriod;
+    /// @notice Length of the commit window, starting when the jury is selected.
+    uint256 public immutable commitPeriod;
+    /// @notice Length of the reveal window, starting when the commit window ends.
+    uint256 public immutable revealPeriod;
     /// @notice How long randomness may stay unanswered before the claim can be cancelled.
     uint256 public immutable randomnessTimeout;
 
@@ -43,12 +52,21 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
 
     mapping(uint256 => Jury) private _juries;
     mapping(uint256 => mapping(address => bool)) public isJuror;
-    mapping(uint256 => mapping(address => bool)) public hasVoted;
+    /// @notice Each juror's sealed vote, or zero if they have not committed.
+    mapping(uint256 => mapping(address => bytes32)) public commitmentOf;
+    mapping(uint256 => mapping(address => bool)) public hasRevealed;
 
     event ClaimManagerSet(address indexed claimManager);
     event JuryRequested(uint256 indexed claimId, address indexed claimant);
-    event JurySelected(uint256 indexed claimId, address[] jurors, uint256 seed, uint64 votingDeadline);
-    event VoteCast(uint256 indexed claimId, address indexed juror, bool approve);
+    event JurySelected(
+        uint256 indexed claimId,
+        address[] jurors,
+        uint256 seed,
+        uint64 commitDeadline,
+        uint64 revealDeadline
+    );
+    event VoteCommitted(uint256 indexed claimId, address indexed juror);
+    event VoteRevealed(uint256 indexed claimId, address indexed juror, bool approve);
     event Tallied(uint256 indexed claimId, Outcome outcome, uint8 approvals, uint8 rejections);
     event JuryCancelled(uint256 indexed claimId);
 
@@ -60,8 +78,14 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     error WrongPhase(Phase expected, Phase actual);
     error NotEnoughEligibleJurors(uint256 available, uint256 required);
     error NotAJuror();
-    error AlreadyVoted();
-    error VotingClosed();
+    error EmptyCommitment();
+    error AlreadyCommitted();
+    error CommitClosed();
+    error NotCommitted();
+    error AlreadyRevealed();
+    error RevealNotOpen();
+    error RevealClosed();
+    error CommitmentMismatch();
     error VotingStillOpen();
     error RandomnessNotTimedOut();
 
@@ -75,18 +99,27 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         IRandomnessProvider randomness_,
         uint8 jurySize_,
         uint8 quorum_,
-        uint256 votingPeriod_,
+        uint256 commitPeriod_,
+        uint256 revealPeriod_,
         uint256 randomnessTimeout_
     ) Ownable(msg.sender) {
         if (address(registry_) == address(0) || address(randomness_) == address(0)) revert ZeroAddress();
-        if (jurySize_ == 0 || quorum_ == 0 || quorum_ > jurySize_ || votingPeriod_ == 0 || randomnessTimeout_ == 0) {
+        if (
+            jurySize_ == 0 ||
+            quorum_ == 0 ||
+            quorum_ > jurySize_ ||
+            commitPeriod_ == 0 ||
+            revealPeriod_ == 0 ||
+            randomnessTimeout_ == 0
+        ) {
             revert InvalidConfig();
         }
         registry = registry_;
         randomness = randomness_;
         jurySize = jurySize_;
         quorum = quorum_;
-        votingPeriod = votingPeriod_;
+        commitPeriod = commitPeriod_;
+        revealPeriod = revealPeriod_;
         randomnessTimeout = randomnessTimeout_;
     }
 
@@ -144,8 +177,9 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         }
 
         jury.phase = Phase.Voting;
-        jury.votingDeadline = uint64(block.timestamp + votingPeriod);
-        emit JurySelected(claimId, jury.jurors, seed, jury.votingDeadline);
+        jury.commitDeadline = uint64(block.timestamp + commitPeriod);
+        jury.revealDeadline = uint64(block.timestamp + commitPeriod + revealPeriod);
+        emit JurySelected(claimId, jury.jurors, seed, jury.commitDeadline, jury.revealDeadline);
 
         IClaimManager(claimManager).startVoting(claimId);
     }
@@ -154,24 +188,53 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     // Voting
     // ---------------------------------------------------------------------
 
-    function castVote(uint256 claimId, bool approve) external {
+    /// @notice The sealed vote a juror commits. Binding the claim and juror stops a commitment from
+    ///         being copied to another claim or by another juror. Keep `salt` secret until revealing.
+    function computeCommitment(uint256 claimId, address juror, bool approve, bytes32 salt)
+        public
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(claimId, juror, approve, salt));
+    }
+
+    /// @notice Submit a sealed vote during the commit window. Each juror commits once.
+    function commitVote(uint256 claimId, bytes32 commitment) external {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.Voting) revert WrongPhase(Phase.Voting, jury.phase);
-        if (block.timestamp > jury.votingDeadline) revert VotingClosed();
         if (!isJuror[claimId][msg.sender]) revert NotAJuror();
-        if (hasVoted[claimId][msg.sender]) revert AlreadyVoted();
+        if (commitment == bytes32(0)) revert EmptyCommitment();
+        if (commitmentOf[claimId][msg.sender] != bytes32(0)) revert AlreadyCommitted();
+        if (block.timestamp > jury.commitDeadline) revert CommitClosed();
 
-        hasVoted[claimId][msg.sender] = true;
+        commitmentOf[claimId][msg.sender] = commitment;
+        jury.commits++;
+        emit VoteCommitted(claimId, msg.sender);
+    }
+
+    /// @notice Open a sealed vote during the reveal window. Only revealed votes are counted.
+    function revealVote(uint256 claimId, bool approve, bytes32 salt) external {
+        Jury storage jury = _juries[claimId];
+        if (jury.phase != Phase.Voting) revert WrongPhase(Phase.Voting, jury.phase);
+        bytes32 commitment = commitmentOf[claimId][msg.sender];
+        if (commitment == bytes32(0)) revert NotCommitted();
+        if (hasRevealed[claimId][msg.sender]) revert AlreadyRevealed();
+        if (!revealOpen(claimId)) revert RevealNotOpen();
+        if (block.timestamp > jury.revealDeadline) revert RevealClosed();
+        if (computeCommitment(claimId, msg.sender, approve, salt) != commitment) revert CommitmentMismatch();
+
+        hasRevealed[claimId][msg.sender] = true;
         if (approve) {
             jury.approvals++;
         } else {
             jury.rejections++;
         }
-        emit VoteCast(claimId, msg.sender, approve);
+        emit VoteRevealed(claimId, msg.sender, approve);
     }
 
-    /// @notice Closes voting and returns the verdict. Allowed once the deadline has passed or every juror voted.
-    /// @dev Approved iff at least `quorum` votes were cast and approvals strictly outnumber rejections.
+    /// @notice Closes voting and returns the verdict. Allowed once the reveal window has ended, or once
+    ///         every juror has committed and revealed.
+    /// @dev Approved iff at least `quorum` votes were revealed and approvals strictly outnumber rejections.
     function tally(uint256 claimId) external onlyClaimManager returns (Outcome outcome) {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.Voting) revert WrongPhase(Phase.Voting, jury.phase);
@@ -189,11 +252,18 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     // Views
     // ---------------------------------------------------------------------
 
+    /// @notice True once reveals are accepted: the commit window has ended or every juror has committed.
+    function revealOpen(uint256 claimId) public view returns (bool) {
+        Jury storage jury = _juries[claimId];
+        if (jury.phase != Phase.Voting) return false;
+        return block.timestamp > jury.commitDeadline || jury.commits == jury.jurors.length;
+    }
+
     function canTally(uint256 claimId) public view returns (bool) {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.Voting) return false;
-        uint256 votes = uint256(jury.approvals) + jury.rejections;
-        return block.timestamp > jury.votingDeadline || votes == jury.jurors.length;
+        uint256 revealed = uint256(jury.approvals) + jury.rejections;
+        return block.timestamp > jury.revealDeadline || revealed == jury.jurors.length;
     }
 
     /// @notice True once randomness has been pending for longer than `randomnessTimeout`.
@@ -213,13 +283,16 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         return _juries[claimId].jurors;
     }
 
+    /// @notice `approvals` and `rejections` count revealed votes only, so they stay 0 while commits are sealed.
     function getJury(uint256 claimId)
         external
         view
         returns (
             Phase phase,
             address claimant,
-            uint64 votingDeadline,
+            uint64 commitDeadline,
+            uint64 revealDeadline,
+            uint8 commits,
             uint8 approvals,
             uint8 rejections,
             Outcome outcome,
@@ -230,7 +303,9 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         return (
             jury.phase,
             jury.claimant,
-            jury.votingDeadline,
+            jury.commitDeadline,
+            jury.revealDeadline,
+            jury.commits,
             jury.approvals,
             jury.rejections,
             jury.outcome,

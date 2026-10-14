@@ -1,10 +1,17 @@
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keccak256 } from "ethers";
-import { EvidenceError, LocalEvidenceStore, MAX_FILE_BYTES } from "../src/evidence";
+import {
+  EvidenceError,
+  LocalEvidenceStore,
+  MAX_FILE_BYTES,
+  loadOrCreateKeyFile,
+  parseEvidenceKey,
+} from "../src/evidence";
 
 const ALICE = "0x00000000000000000000000000000000000000A1";
 const BOB = "0x00000000000000000000000000000000000000B0";
@@ -17,7 +24,8 @@ const file = (data: string | Buffer, name = "a.jpg") => ({
 
 describe("LocalEvidenceStore", async () => {
   const dir = await mkdtemp(join(tmpdir(), "trustpool-evidence-"));
-  const store = new LocalEvidenceStore(dir);
+  const key = randomBytes(32);
+  const store = new LocalEvidenceStore(dir, key);
   after(() => rm(dir, { recursive: true, force: true }));
 
   it("addresses evidence by the keccak256 of its stored bytes", async () => {
@@ -50,10 +58,55 @@ describe("LocalEvidenceStore", async () => {
     assert.equal(new Set([a.evidenceHash, b.evidenceHash, c.evidenceHash]).size, 3);
   });
 
+  it("encrypts files at rest", async () => {
+    const secret = "SECRET-PHOTO-CONTENTS";
+    const { evidenceHash } = await store.put({ description: "kitchen floor", files: [file(secret)] }, ALICE);
+    const onDisk = await readFile(join(dir, `${evidenceHash}.enc`));
+    for (const plain of [secret, Buffer.from(secret).toString("base64"), "kitchen floor", "a.jpg"]) {
+      assert.ok(!onDisk.includes(plain), `${plain} visible on disk`);
+    }
+    assert.equal((await store.getFile(evidenceHash, 0))?.data.toString(), secret);
+    // Only the encrypted file and the uploader list are written.
+    const names = (await readdir(dir)).filter((n) => n.startsWith(evidenceHash));
+    assert.deepEqual(names.sort(), [`${evidenceHash}.enc`, `${evidenceHash}.uploaders.json`]);
+  });
+
+  it("cannot be read with a different key", async () => {
+    const { evidenceHash } = await store.put({ files: [file("keyed")] }, ALICE);
+    const other = new LocalEvidenceStore(dir, randomBytes(32));
+    await assert.rejects(other.getRaw(evidenceHash), (err: unknown) => err instanceof EvidenceError);
+  });
+
   it("refuses to serve evidence that was altered on disk", async () => {
     const { evidenceHash } = await store.put({ files: [file("original")] }, ALICE);
-    await writeFile(join(dir, `${evidenceHash}.json`), '{"version":1,"description":"","files":[]}');
+    const path = join(dir, `${evidenceHash}.enc`);
+    const bytes = await readFile(path);
+    bytes[bytes.length - 1] ^= 1;
+    await writeFile(path, bytes);
     await assert.rejects(store.getRaw(evidenceHash), (err: unknown) => err instanceof EvidenceError);
+  });
+
+  it("refuses a ciphertext copied onto another hash", async () => {
+    const a = await store.put({ files: [file("first")] }, ALICE);
+    const b = await store.put({ files: [file("second")] }, ALICE);
+    await writeFile(join(dir, `${b.evidenceHash}.enc`), await readFile(join(dir, `${a.evidenceHash}.enc`)));
+    await assert.rejects(store.getRaw(b.evidenceHash), (err: unknown) => err instanceof EvidenceError);
+  });
+
+  it("parses keys and creates a private key file once", async () => {
+    const hex = randomBytes(32).toString("hex");
+    assert.equal(parseEvidenceKey(hex).toString("hex"), hex);
+    assert.equal(parseEvidenceKey(`0x${hex}`).toString("hex"), hex);
+    assert.equal(parseEvidenceKey(Buffer.from(hex, "hex").toString("base64")).toString("hex"), hex);
+    assert.throws(() => parseEvidenceKey("too-short"));
+
+    const keyFile = join(dir, "keys", "evidence.key");
+    const first = await loadOrCreateKeyFile(keyFile);
+    const second = await loadOrCreateKeyFile(keyFile);
+    assert.equal(first.created, true);
+    assert.equal(second.created, false);
+    assert.ok(first.key.equals(second.key));
+    assert.equal((await stat(keyFile)).mode & 0o777, 0o600);
   });
 
   it("rejects oversized files", async () => {

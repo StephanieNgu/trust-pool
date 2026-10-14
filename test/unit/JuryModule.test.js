@@ -1,7 +1,19 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time } = require("@nomicfoundation/hardhat-network-helpers");
-const { activePoolFixture, selectJury, submitClaim, JuryPhase, Outcome, ClaimState } = require("../helpers");
+const {
+  activePoolFixture,
+  selectJury,
+  submitClaim,
+  saltFor,
+  commitVote,
+  revealVote,
+  castVotes,
+  votingPeriod,
+  JuryPhase,
+  Outcome,
+  ClaimState,
+} = require("../helpers");
 
 async function awaitingRandomnessFixture() {
   const ctx = await activePoolFixture();
@@ -27,12 +39,15 @@ describe("JuryModule", function () {
         size,
         quorum,
         period,
+        60,
         timeout,
       ];
       await expect(JM.deploy(...args(5, 6, 60))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(0, 0, 60))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(5, 3, 0))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(5, 3, 60, 0))).to.be.revertedWithCustomError(JM, "InvalidConfig");
+      const noReveal = [registry.getAddress(), randomness.getAddress(), 5, 3, 60, 0, 60];
+      await expect(JM.deploy(...noReveal)).to.be.revertedWithCustomError(JM, "InvalidConfig");
     });
   });
 
@@ -119,69 +134,129 @@ describe("JuryModule", function () {
     });
   });
 
-  describe("voting", function () {
-    it("records a vote and emits VoteCast", async function () {
-      const { jury, jurors, claimId } = await loadFixture(votingFixture);
-      await expect(jury.connect(jurors[0]).castVote(claimId, true))
-        .to.emit(jury, "VoteCast")
+  describe("commit-reveal voting", function () {
+    it("seals a vote until it is revealed", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      await expect(commitVote(ctx, claimId, jurors[0], true))
+        .to.emit(jury, "VoteCommitted")
+        .withArgs(claimId, jurors[0].address);
+      const j = await jury.getJury(claimId);
+      expect(j.commits).to.equal(1n);
+      expect(j.approvals + j.rejections).to.equal(0n, "nothing readable before reveal");
+    });
+
+    it("opens reveals only after the commit window, or once everyone has committed", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      for (const j of jurors.slice(0, 4)) await commitVote(ctx, claimId, j, true);
+      expect(await jury.revealOpen(claimId)).to.equal(false);
+      await expect(revealVote(ctx, claimId, jurors[0], true)).to.be.revertedWithCustomError(jury, "RevealNotOpen");
+
+      await commitVote(ctx, claimId, jurors[4], false);
+      expect(await jury.revealOpen(claimId)).to.equal(true);
+      await expect(revealVote(ctx, claimId, jurors[0], true))
+        .to.emit(jury, "VoteRevealed")
         .withArgs(claimId, jurors[0].address, true);
-      expect(await jury.hasVoted(claimId, jurors[0].address)).to.equal(true);
+      expect(await jury.hasRevealed(claimId, jurors[0].address)).to.equal(true);
       expect((await jury.getJury(claimId)).approvals).to.equal(1n);
     });
 
-    it("rejects a double vote", async function () {
-      const { jury, jurors, claimId } = await loadFixture(votingFixture);
-      await jury.connect(jurors[0]).castVote(claimId, true);
-      await expect(jury.connect(jurors[0]).castVote(claimId, false)).to.be.revertedWithCustomError(
+    it("rejects a reveal that does not match the commitment", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      await commitVote(ctx, claimId, jurors[0], true);
+      await time.increase(ctx.params.commitPeriod + 1);
+      // Flipping the vote, or using another salt, does not match.
+      await expect(revealVote(ctx, claimId, jurors[0], false)).to.be.revertedWithCustomError(
         jury,
-        "AlreadyVoted",
+        "CommitmentMismatch",
       );
+      await expect(jury.connect(jurors[0]).revealVote(claimId, true, ethers.ZeroHash)).to.be.revertedWithCustomError(
+        jury,
+        "CommitmentMismatch",
+      );
+    });
+
+    it("binds a commitment to its juror, so copying another juror's commitment fails on reveal", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      await commitVote(ctx, claimId, jurors[0], true);
+      const copied = await jury.commitmentOf(claimId, jurors[0].address);
+      await jury.connect(jurors[1]).commitVote(claimId, copied);
+      await time.increase(ctx.params.commitPeriod + 1);
+      await expect(
+        jury.connect(jurors[1]).revealVote(claimId, true, saltFor(claimId, jurors[0])),
+      ).to.be.revertedWithCustomError(jury, "CommitmentMismatch");
+    });
+
+    it("rejects double commits and double reveals", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      await commitVote(ctx, claimId, jurors[0], true);
+      await expect(commitVote(ctx, claimId, jurors[0], false)).to.be.revertedWithCustomError(jury, "AlreadyCommitted");
+      await time.increase(ctx.params.commitPeriod + 1);
+      await revealVote(ctx, claimId, jurors[0], true);
+      await expect(revealVote(ctx, claimId, jurors[0], true)).to.be.revertedWithCustomError(jury, "AlreadyRevealed");
     });
 
     it("rejects votes from non-jurors, including the claimant", async function () {
-      const { jury, nonJuror, claimant, claimId } = await loadFixture(votingFixture);
-      await expect(jury.connect(nonJuror).castVote(claimId, true)).to.be.revertedWithCustomError(jury, "NotAJuror");
-      await expect(jury.connect(claimant).castVote(claimId, true)).to.be.revertedWithCustomError(jury, "NotAJuror");
+      const ctx = await loadFixture(votingFixture);
+      const { jury, nonJuror, claimant, claimId } = ctx;
+      await expect(commitVote(ctx, claimId, nonJuror, true)).to.be.revertedWithCustomError(jury, "NotAJuror");
+      await expect(commitVote(ctx, claimId, claimant, true)).to.be.revertedWithCustomError(jury, "NotAJuror");
+      await expect(revealVote(ctx, claimId, nonJuror, true)).to.be.revertedWithCustomError(jury, "NotCommitted");
     });
 
-    it("rejects votes after the deadline", async function () {
-      const { jury, jurors, claimId, params } = await loadFixture(votingFixture);
-      await time.increase(params.votingPeriod + 1);
-      await expect(jury.connect(jurors[0]).castVote(claimId, true)).to.be.revertedWithCustomError(
+    it("rejects an empty commitment", async function () {
+      const { jury, jurors, claimId } = await loadFixture(votingFixture);
+      await expect(jury.connect(jurors[0]).commitVote(claimId, ethers.ZeroHash)).to.be.revertedWithCustomError(
         jury,
-        "VotingClosed",
+        "EmptyCommitment",
       );
     });
 
+    it("rejects commits after the commit window and reveals after the reveal window", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId, params } = ctx;
+      await commitVote(ctx, claimId, jurors[0], true);
+      await time.increase(params.commitPeriod + 1);
+      await expect(commitVote(ctx, claimId, jurors[1], true)).to.be.revertedWithCustomError(jury, "CommitClosed");
+      await time.increase(params.revealPeriod);
+      await expect(revealVote(ctx, claimId, jurors[0], true)).to.be.revertedWithCustomError(jury, "RevealClosed");
+    });
+
     it("rejects votes before jurors are selected", async function () {
-      const { jury, holders, claimId } = await loadFixture(awaitingRandomnessFixture);
-      await expect(jury.connect(holders[1]).castVote(claimId, true)).to.be.revertedWithCustomError(jury, "WrongPhase");
+      const ctx = await loadFixture(awaitingRandomnessFixture);
+      await expect(commitVote(ctx, ctx.claimId, ctx.holders[1], true)).to.be.revertedWithCustomError(
+        ctx.jury,
+        "WrongPhase",
+      );
     });
   });
 
   describe("tally", function () {
-    const vote = async (ctx, pattern) => {
-      for (const [i, v] of pattern.entries()) await ctx.jury.connect(ctx.jurors[i]).castVote(ctx.claimId, v);
-    };
+    const vote = (ctx, pattern) => castVotes(ctx, ctx.claimId, ctx.jurors.slice(0, pattern.length), pattern);
 
     it("only the claim manager can tally", async function () {
       const { jury, claimId } = await loadFixture(votingFixture);
       await expect(jury.tally(claimId)).to.be.revertedWithCustomError(jury, "NotClaimManager");
     });
 
-    it("cannot close voting early unless everyone has voted", async function () {
+    it("cannot close voting early unless everyone has revealed", async function () {
       const ctx = await loadFixture(votingFixture);
-      await vote(ctx, [true, true, true, true]);
+      for (const [i, j] of ctx.jurors.entries()) await commitVote(ctx, ctx.claimId, j, i !== 4);
+      for (const j of ctx.jurors.slice(0, 4)) await revealVote(ctx, ctx.claimId, j, true);
       expect(await ctx.jury.canTally(ctx.claimId)).to.equal(false);
       await expect(ctx.claimManager.finalize(ctx.claimId)).to.be.revertedWithCustomError(ctx.jury, "VotingStillOpen");
-      await ctx.jury.connect(ctx.jurors[4]).castVote(ctx.claimId, false);
+      await revealVote(ctx, ctx.claimId, ctx.jurors[4], false);
       expect(await ctx.jury.canTally(ctx.claimId)).to.equal(true);
     });
 
-    it("approves on a majority once the deadline passes", async function () {
+    it("approves on a majority once the reveal window ends", async function () {
       const ctx = await loadFixture(votingFixture);
       await vote(ctx, [true, true, false]);
-      await time.increase(ctx.params.votingPeriod + 1);
+      await time.increase(votingPeriod(ctx.params) + 1);
       await expect(ctx.claimManager.finalize(ctx.claimId))
         .to.emit(ctx.jury, "Tallied")
         .withArgs(ctx.claimId, Outcome.Approved, 2n, 1n);
@@ -198,7 +273,7 @@ describe("JuryModule", function () {
     it("rejects a tie", async function () {
       const ctx = await loadFixture(votingFixture);
       await vote(ctx, [true, true, false, false]);
-      await time.increase(ctx.params.votingPeriod + 1);
+      await time.increase(votingPeriod(ctx.params) + 1);
       await ctx.claimManager.finalize(ctx.claimId);
       expect((await ctx.jury.getJury(ctx.claimId)).outcome).to.equal(Outcome.Rejected);
     });
@@ -206,7 +281,19 @@ describe("JuryModule", function () {
     it("rejects when quorum is not met, even if every vote approves", async function () {
       const ctx = await loadFixture(votingFixture);
       await vote(ctx, [true, true]);
-      await time.increase(ctx.params.votingPeriod + 1);
+      await time.increase(votingPeriod(ctx.params) + 1);
+      await expect(ctx.claimManager.finalize(ctx.claimId))
+        .to.emit(ctx.jury, "Tallied")
+        .withArgs(ctx.claimId, Outcome.Rejected, 2n, 0n);
+    });
+
+    it("ignores commits that are never revealed", async function () {
+      // Four approvals are committed but only two revealed: below quorum, so the claim is rejected.
+      const ctx = await loadFixture(votingFixture);
+      for (const j of ctx.jurors.slice(0, 4)) await commitVote(ctx, ctx.claimId, j, true);
+      await time.increase(ctx.params.commitPeriod + 1);
+      for (const j of ctx.jurors.slice(0, 2)) await revealVote(ctx, ctx.claimId, j, true);
+      await time.increase(ctx.params.revealPeriod);
       await expect(ctx.claimManager.finalize(ctx.claimId))
         .to.emit(ctx.jury, "Tallied")
         .withArgs(ctx.claimId, Outcome.Rejected, 2n, 0n);

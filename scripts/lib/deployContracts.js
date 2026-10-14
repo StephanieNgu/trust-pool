@@ -11,7 +11,8 @@ const DEFAULT_PARAMS = {
   maxPayoutBps: 2_000, // a single claim may take at most 20% of the pool
   jurySize: 5,
   quorum: 3,
-  votingPeriod: 3 * DAY,
+  commitPeriod: 2 * DAY, // jurors submit sealed votes
+  revealPeriod: 1 * DAY, // then open them; 3 days of voting in total
   randomnessTimeout: 1 * DAY, // a claim whose jury randomness is this late can be cancelled
 };
 
@@ -39,7 +40,8 @@ async function deployContracts(overrides = {}) {
     await randomness.getAddress(),
     params.jurySize,
     params.quorum,
-    params.votingPeriod,
+    params.commitPeriod,
+    params.revealPeriod,
     params.randomnessTimeout,
   ]);
   const claimManager = await ethers.deployContract("ClaimManager", [

@@ -81,9 +81,10 @@ export function createApp(deps: AppDeps) {
   const wallet = (req: Request) => authenticate((name) => req.get(name), deployment.chainId);
 
   /**
-   * Evidence is private. It is served to whoever uploaded it, and to the jurors of any claim that one
-   * of its uploaders filed with it. A claim filed by someone else who copied the hash from the chain
-   * grants nothing, so the hash being public does not make the files public.
+   * Evidence is private. It is served to whoever uploaded it, and to the jurors of a claim that one of
+   * its uploaders filed with it, only while that claim is being voted on. A claim filed by someone else
+   * who copied the hash from the chain grants nothing, so the hash being public does not make the
+   * files public. Other members, past jurors and anonymous callers get a 403.
    */
   async function requireEvidenceAccess(req: Request, evidenceHash: string): Promise<void> {
     const reader = wallet(req).toLowerCase();
@@ -93,11 +94,15 @@ export function createApp(deps: AppDeps) {
     const claims = await listClaims(contracts, { evidenceHash });
     const isJuror = claims.some(
       (c) =>
+        c.state === "Voting" &&
         uploaders.includes(c.claimant.toLowerCase()) &&
         (c.jury?.jurors.some((j) => j.address.toLowerCase() === reader) ?? false),
     );
     if (!isJuror) {
-      throw new HttpError(403, "Only the claimant and the claim's selected jurors can view this evidence.");
+      throw new HttpError(
+        403,
+        "Only the claimant, and the claim's selected jurors while voting is open, can view this evidence.",
+      );
     }
   }
 

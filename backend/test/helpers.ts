@@ -1,11 +1,12 @@
 // Shared setup for backend tests: an in-process Hardhat chain with the real contracts deployed,
 // plus the Express app listening on a random port.
 import type { AddressInfo } from "node:net";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import hre from "hardhat";
-import type { Signer } from "ethers";
+import { type Contract, type Signer, id } from "ethers";
 import { createApp } from "../src/app";
 import { AUTH_HEADERS, authMessage } from "../src/auth";
 import { connectContracts, type Deployment, type DeploymentAddresses } from "../src/chain";
@@ -17,6 +18,23 @@ export { USDC };
 export const { ethers } = hre;
 
 export const PHOTO = Buffer.from("not really a jpeg, but the bytes are what matter").toString("base64");
+
+const saltFor = (claimId: number, juror: string) => id(`salt:${claimId}:${juror}`);
+
+/** Commits a sealed vote, as a juror's wallet would. */
+export async function commit(jury: Contract, juror: Signer, claimId: number, approve: boolean) {
+  const address = await juror.getAddress();
+  const commitment = await jury.computeCommitment(claimId, address, approve, saltFor(claimId, address));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (await (jury.connect(juror) as any).commitVote(claimId, commitment)).wait();
+}
+
+/** Reveals a vote committed with `commit`. */
+export async function reveal(jury: Contract, juror: Signer, claimId: number, approve: boolean) {
+  const address = await juror.getAddress();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (await (jury.connect(juror) as any).revealVote(claimId, approve, saltFor(claimId, address))).wait();
+}
 
 export async function increaseTime(seconds: number | bigint) {
   await hre.network.provider.send("evm_increaseTime", [Number(seconds)]);
@@ -62,7 +80,7 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
     ...keeperOptions,
   });
   const evidenceDir = await mkdtemp(join(tmpdir(), "trustpool-evidence-"));
-  const evidence = new LocalEvidenceStore(evidenceDir);
+  const evidence = new LocalEvidenceStore(evidenceDir, randomBytes(32));
   const app = createApp({ deployment, provider, contracts, evidence, keeper, corsOrigin: "*" });
   const server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
