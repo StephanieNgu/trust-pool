@@ -10,4 +10,5 @@ interface IJuryModule {
 
     function requestJury(uint256 claimId, address claimant) external;
     function tally(uint256 claimId) external returns (Outcome);
+    function cancel(uint256 claimId) external;
 }

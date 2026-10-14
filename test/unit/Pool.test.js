@@ -86,12 +86,13 @@ describe("Pool", function () {
       expect(await pool.totalPaidOut()).to.equal(USDC(200));
     });
 
-    it("reverts a payout above the cap", async function () {
+    it("reverts a payout above the pool balance", async function () {
+      // The per-claim cap is fixed by the ClaimManager at approval; the Pool only refuses to overdraw.
       const { pool, claimManager, alice, bob } = await loadFixture(poolFixture);
       await pool.connect(alice).contribute(USDC(1_000));
-      await expect(pool.connect(claimManager).payout(bob.address, USDC(200) + 1n))
-        .to.be.revertedWithCustomError(pool, "ExceedsPayoutCap")
-        .withArgs(USDC(200) + 1n, USDC(200));
+      await expect(pool.connect(claimManager).payout(bob.address, USDC(1_000) + 1n))
+        .to.be.revertedWithCustomError(pool, "InsufficientPoolBalance")
+        .withArgs(USDC(1_000) + 1n, USDC(1_000));
     });
 
     it("rejects payouts from anyone but the claim manager", async function () {

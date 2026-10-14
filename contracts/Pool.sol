@@ -37,7 +37,7 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     error NotRegistry();
     error NotClaimManager();
     error InvalidBps();
-    error ExceedsPayoutCap(uint256 amount, uint256 cap);
+    error InsufficientPoolBalance(uint256 amount, uint256 balance);
 
     modifier onlyRegistry() {
         if (msg.sender != registry) revert NotRegistry();
@@ -101,12 +101,13 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     // Money out
     // ---------------------------------------------------------------------
 
-    /// @notice Pays an approved claim. Reverts if `amount` exceeds the per-claim cap.
+    /// @notice Pays an approved claim. The ClaimManager applies the per-claim cap (`maxPayout`) when the
+    ///         jury approves; here the only limit is what the pool actually holds.
     function payout(address to, uint256 amount) external onlyClaimManager nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
-        uint256 cap = maxPayout();
-        if (amount > cap) revert ExceedsPayoutCap(amount, cap);
+        uint256 available = balance();
+        if (amount > available) revert InsufficientPoolBalance(amount, available);
         totalPaidOut += amount;
         emit PaidOut(to, amount);
         token.safeTransfer(to, amount);

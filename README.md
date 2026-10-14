@@ -77,13 +77,72 @@ wallet request and a wrong network as well. Use local test accounts and test tok
 
 Backend
 
-The backend uses Express and TypeScript.
+The backend (`backend/src`, Express + TypeScript) is the off-chain half of the design doc. It never
+holds user keys: members still sign their own transactions in MetaMask. It does three things:
 
-Start the backend server with:
+* **Private evidence storage.** A policyholder uploads photos and gets back the `evidenceHash` to pass
+  to `ClaimManager.submitClaim`. Evidence is served only to its uploader and to the selected jurors
+  of a claim the uploader filed with it, never publicly. Jurors download the exact stored bytes and
+  recompute `keccak256` to confirm they match the hash on-chain (that proves the files are unchanged,
+  not that the claim is true). Jurors lose access once voting ends. Files live in `data/evidence/`,
+  encrypted with AES-256-GCM. See
+  [design doc §6b](docs/design-doc.md#6b-off-chain-backend-and-evidence-privacy) for the full policy.
+* **Keeper.** Polls open claims and moves them along: fulfils jury randomness (as the
+  `MockRandomness` owner, using a CSPRNG seed), cancels a claim whose randomness is more than a day
+  late, finalizes once voting closes or every juror has voted, and pays approved claims. Everything
+  except randomness is callable by anyone on-chain, so the keeper cannot change an outcome.
+* **Read API** for the dashboard: pool stats, a member's policy, claims filtered by claimant, juror or
+  state, and each claim's jury and votes.
+
+Start a chain and deploy first, then start the backend in a third terminal:
 
 ```powershell
-npm run dev:backend
+npm run chain          # terminal 1
+npm run deploy:local   # terminal 2
+npm run dev:backend    # terminal 3: http://localhost:3000/api/health
 ```
+
+On the local chain the keeper signs with the deployer's unlocked Hardhat account, so no key is
+needed. The Vite dev server proxies `/api` to the backend, so the frontend can call `/api/...` directly.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/health` | Chain id, block number, keeper status |
+| `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
+| `GET /api/pool` | Balance, per-claim cap, totals, policy and claim counts |
+| `GET /api/members/:address` | Wallet balance, contributions, policy, claim-eligible date, open claim |
+| `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
+| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, revealed tally, deadlines) and evidence link |
+| `GET /api/auth/message?address=` | The message to sign with the wallet for the evidence routes |
+| `POST /api/evidence` 🔒 | Upload `{ description, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. Active policyholders only |
+| `GET /api/evidence/:hash` 🔒 | Evidence description and file list |
+| `GET /api/evidence/:hash/raw` 🔒 | Exact stored bytes; `keccak256` of these equals the on-chain hash |
+| `GET /api/evidence/:hash/files/:index` 🔒 | One file, for display (fetch it, then show it from a blob URL) |
+
+🔒 routes need three headers: `x-trustpool-address`, `x-trustpool-issued-at` (unix seconds) and
+`x-trustpool-signature`, the wallet's `personal_sign` of the message from `/api/auth/message`. A
+signature is valid for 10 minutes, so the frontend signs once, not per request.
+
+Claims can end `Paid`, `Rejected` (majority against, a tie, or fewer than 3 votes; the API's
+`jury.outcomeReason` says which) or `Cancelled` (randomness never arrived). An approved claim's payout
+is fixed when the jury approves.
+
+Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
+
+| Variable | Default | |
+|---|---|---|
+| `PORT` | `3000` | |
+| `RPC_URL` | `http://127.0.0.1:8545` | |
+| `DEPLOYMENT_FILE` | `deployments/localhost.json` | Written by `npm run deploy:local` |
+| `EVIDENCE_DIR` | `data/evidence` | |
+| `EVIDENCE_ENCRYPTION_KEY` | unset | 32 bytes as hex or base64. Required off the local chain |
+| `EVIDENCE_KEY_FILE` | `data/evidence.key` | Local chain only: generated on first start when no key is set |
+| `CORS_ORIGIN` | `*` | |
+| `KEEPER_ENABLED` | `true` | |
+| `KEEPER_PRIVATE_KEY` | unset | Required off the local chain; must own `MockRandomness` to select juries |
+| `KEEPER_INTERVAL_MS` | `5000` | |
+| `KEEPER_FULFILL_RANDOMNESS` | `true` | |
+| `KEEPER_AUTO_RESOLVE` | `true` | Finalize and pay automatically |
 
 ## Smart Contracts
 
@@ -95,10 +154,17 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `PolicyRegistry` | Sells policies, one per wallet and per device; tracks Active/Lapsed; lists eligible jurors | No |
 | `Pool` | Holds all funds; takes premiums and contributions; pays approved claims up to `maxPayoutBps` of its balance | **Yes** |
 | `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Approved/Rejected → Paid | No |
-| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), records votes, tallies | No |
+| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal voting, tallies | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype parameters (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 3-day voting window.
+Prototype parameters (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout.
+
+**Voting is commit-reveal.** A juror first calls `commitVote(claimId, commitment)` with
+`commitment = JuryModule.computeCommitment(claimId, juror, approve, salt)` for a secret 32-byte
+`salt`, then, once every juror has committed or the commit window ends, calls
+`revealVote(claimId, approve, salt)`. Only revealed votes count. The juror must keep the salt until
+revealing; a frontend can derive it from a wallet signature over the claim id so it can always be
+recomputed.
 
 Run the whole claim flow in one command (no node needed):
 
@@ -121,10 +187,14 @@ npm run compile
 
 ## Running Tests
 
-Run the contract test suite (unit tests in `test/unit`, the end-to-end happy path in `test/integration`):
+Run every test: the contract suite (unit tests in `test/unit`, the end-to-end happy path in
+`test/integration`) and the backend suite (`backend/test`, which runs the API and keeper against an
+in-process Hardhat chain):
 
 ```powershell
 npm test
+npm run test:contracts   # contracts only
+npm run test:backend     # backend only
 ```
 
 For a coverage report:
@@ -170,7 +240,7 @@ The pipeline:
 
 1. Installs dependencies
 2. Compiles the contracts
-3. Runs the contract test suite
+3. Runs the contract and backend test suites
 4. Runs ESLint and Solhint
 5. Builds the frontend and backend
 
@@ -229,8 +299,13 @@ trust-pool/
 │       ├── contracts/  # ABIs, addresses, contract calls
 │       └── wallet/     # MetaMask connection
 ├── backend/
-│   └── src/
-│       └── server.ts
+│   ├── src/
+│   │   ├── server.ts   # entry point
+│   │   ├── app.ts      # HTTP routes
+│   │   ├── evidence.ts # content-addressed evidence store
+│   │   ├── keeper.ts   # jury randomness, finalize, payout
+│   │   └── protocol.ts # on-chain reads for the API
+│   └── test/
 ├── hardhat.config.js
 ├── .solhint.json
 ├── package.json

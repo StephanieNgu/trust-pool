@@ -2,7 +2,16 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deployFixture, deviceHash, USDC, COVERAGE, EVIDENCE, ClaimState } = require("../helpers");
+const {
+  deployFixture,
+  deviceHash,
+  commitVote,
+  revealVote,
+  USDC,
+  COVERAGE,
+  EVIDENCE,
+  ClaimState,
+} = require("../helpers");
 
 describe("Integration: happy path", function () {
   it("join -> contribute -> submit -> jury -> vote -> finalize -> payout", async function () {
@@ -45,15 +54,20 @@ describe("Integration: happy path", function () {
     expect(jurorAddrs).to.not.include(claimant.address);
     expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Voting);
 
-    // 5. Vote: 4 approve, 1 rejects.
+    // 5. Vote with commit-reveal: 4 approve, 1 rejects. Commits reveal nothing about the votes.
     const jurors = jurorAddrs.map((a) => signers.find((s) => s.address === a));
     for (const [i, j] of jurors.entries()) {
-      await expect(jury.connect(j).castVote(claimId, i !== 0))
-        .to.emit(jury, "VoteCast")
+      await expect(commitVote(ctx, claimId, j, i !== 0)).to.emit(jury, "VoteCommitted").withArgs(claimId, j.address);
+    }
+    expect((await jury.getJury(claimId)).approvals).to.equal(0n);
+    // Everyone committed, so reveals open without waiting for the commit deadline.
+    for (const [i, j] of jurors.entries()) {
+      await expect(revealVote(ctx, claimId, j, i !== 0))
+        .to.emit(jury, "VoteRevealed")
         .withArgs(claimId, j.address, i !== 0);
     }
 
-    // 6. Finalize: all jurors voted, so no need to wait for the deadline.
+    // 6. Finalize: all jurors revealed, so no need to wait for the deadline.
     await expect(claimManager.finalize(claimId)).to.emit(jury, "Tallied");
     expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Approved);
 
