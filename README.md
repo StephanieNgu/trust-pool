@@ -59,9 +59,15 @@ loads local addresses from `deployments/localhost.json`, which `npm run deploy:l
 ### Dashboard and device coverage
 
 Without a connected wallet, the dashboard displays a connection prompt and empty balance cards.
-With a wallet on the local network and deployed contracts, it reads the mUSDC balance, shared pool
-balance, current payout cap, and policy status. Missing contracts and network errors are shown with
-a retry action. Values are not simulated.
+With a wallet on the local network, it reads the mUSDC balance, shared pool balance, current payout
+cap, policy status, backend block and keeper status through the backend API. Missing backend,
+contract and network errors are shown with a retry action. Values are not simulated. Start the
+backend before the frontend dashboard (`npm run dev:backend`); Vite proxies `/api` to port 3000.
+
+The frontend API client lives in `frontend/src/api`. Select **Sign in** to fetch the backend's
+timestamped authentication message, sign it in MetaMask, and cache the resulting evidence-access
+headers in the browser session until shortly before the 10-minute signature expiry. Read-only
+dashboard routes do not require this signature.
 
 Select **Get Device Coverage**, enter a device identifier and coverage amount, then select
 **Review premium**. The app reads the premium from PolicyRegistry. **Approve & confirm coverage**
