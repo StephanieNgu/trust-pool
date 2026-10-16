@@ -49,3 +49,62 @@ export interface MemberView {
   contributed: string;
   policy: MemberPolicy | null;
 }
+
+export type ClaimState =
+  | "Submitted"
+  | "JuryPending"
+  | "Voting"
+  | "Approved"
+  | "Rejected"
+  | "Paid"
+  | "Cancelled";
+
+export interface ClaimJuror {
+  address: string;
+  committed: boolean;
+  revealed: boolean;
+}
+
+export interface ClaimJury {
+  phase: "AwaitingRandomness" | "Voting" | "Tallied" | "Cancelled";
+  commitDeadline: number | null;
+  revealDeadline: number | null;
+  revealOpen: boolean;
+  commits: number;
+  approvals: number;
+  rejections: number;
+  quorum: number;
+  outcome: "None" | "Approved" | "Rejected";
+  outcomeReason: "majorityApproved" | "majorityRejected" | "tie" | "noQuorum" | null;
+  jurors: ClaimJuror[];
+  canTally: boolean;
+  cancelAvailableAt: number | null;
+}
+
+export interface ClaimView {
+  id: string;
+  claimant: string;
+  policyId: string;
+  amount: string;
+  coverageLimit: string;
+  evidenceHash: string;
+  state: ClaimState;
+  submittedAt: number;
+  paidAmount: string;
+  payoutAmount: string;
+  jury: ClaimJury | null;
+}
+
+export interface EvidenceFileInfo {
+  index: number;
+  name: string;
+  contentType: string;
+  size: number;
+}
+
+export interface EvidenceSummary {
+  evidenceHash: string;
+  description: string;
+  size: number;
+  files: EvidenceFileInfo[];
+}

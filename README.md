@@ -69,6 +69,18 @@ timestamped authentication message, sign it in MetaMask, and cache the resulting
 headers in the browser session until shortly before the 10-minute signature expiry. Read-only
 dashboard routes do not require this signature.
 
+### Claims and evidence
+
+The **Claims** workspace lets an eligible policyholder request a payout, describe the incident and
+attach up to 10 supported images or PDFs (5 MB each). The frontend validates the amount and files,
+signs in to the protected evidence API when needed, uploads the encrypted evidence bundle, then asks
+MetaMask to submit its returned hash to `ClaimManager`. The same page loads the connected wallet's
+claims from the backend and shows their current state, evidence hash, jury progress and payout.
+
+An active policy past its waiting period is required, and a policy may have only one open claim.
+Evidence may remain stored if the user rejects or the chain rejects the transaction after upload;
+retrying the same bundle is safe because evidence is content-addressed and produces the same hash.
+
 Select **Get Device Coverage**, enter a device identifier and coverage amount, then select
 **Review premium**. The app reads the premium from PolicyRegistry. **Approve & confirm coverage**
 requests the necessary mUSDC approval for the Pool, waits for confirmation, then requests the

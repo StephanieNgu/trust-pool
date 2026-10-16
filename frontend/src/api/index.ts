@@ -14,4 +14,23 @@ export {
   readCachedWalletAuth,
   type WalletAuth,
 } from "./auth";
-export type { ApiConfig, ApiHealth, MemberPolicy, MemberView, PoolView } from "./types";
+export {
+  ALLOWED_EVIDENCE_TYPES,
+  MAX_EVIDENCE_FILE_BYTES,
+  MAX_EVIDENCE_FILES,
+  getClaimsForMember,
+  uploadEvidence,
+  validateEvidenceFiles,
+} from "./claims";
+export type {
+  ApiConfig,
+  ApiHealth,
+  ClaimJury,
+  ClaimState,
+  ClaimView,
+  EvidenceFileInfo,
+  EvidenceSummary,
+  MemberPolicy,
+  MemberView,
+  PoolView,
+} from "./types";

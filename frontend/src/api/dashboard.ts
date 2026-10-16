@@ -13,6 +13,10 @@ export interface DashboardOverview {
   waitingPeriod: number;
   maxCoverage: string;
   tokenSymbol: string;
+  tokenDecimals: number;
+  claimEligibleAt: number | null;
+  pastWaitingPeriod: boolean;
+  openClaimId: string | null;
   backendBlock: number;
   keeperRunning: boolean;
 }
@@ -59,6 +63,10 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     waitingPeriod: policy ? Math.max(0, policy.claimEligibleAt - policy.startTime) : 0,
     maxCoverage: formatUnits(maxCoverage, decimals),
     tokenSymbol: config.token.symbol,
+    tokenDecimals: decimals,
+    claimEligibleAt: policy?.claimEligibleAt ?? null,
+    pastWaitingPeriod: policy?.pastWaitingPeriod ?? false,
+    openClaimId: policy?.openClaimId ?? null,
     backendBlock: health.blockNumber,
     keeperRunning: health.keeper?.running ?? false,
   };
