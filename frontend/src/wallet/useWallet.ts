@@ -44,6 +44,10 @@ export function useWallet() {
     }
   }, [applySnapshot]);
 
+  const selectDemoAccount = useCallback((address: string) => {
+    ethereum?.selectDemoAccount?.(address);
+  }, [ethereum]);
+
   useEffect(() => {
     if (!ethereum) {
       return;
@@ -72,6 +76,9 @@ export function useWallet() {
   return {
     ...state,
     connect,
-    isMetaMaskAvailable: ethereum !== null
+    isMetaMaskAvailable: ethereum !== null,
+    isDemoWallet: ethereum?.isTrustPoolDemo === true,
+    demoAccounts: ethereum?.demoAccounts ?? [],
+    selectDemoAccount,
   };
 }

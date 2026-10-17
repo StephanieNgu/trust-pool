@@ -56,12 +56,51 @@ loads local addresses from `deployments/localhost.json`, which `npm run deploy:l
 [Smart Contracts](#smart-contracts)). The deploy script also gives every Hardhat dev account
 10,000 mUSDC; import one of the private keys printed by `npm run chain` into MetaMask to use it.
 
-### Dashboard and device coverage
+### Dashboard, community pool and device coverage
 
 Without a connected wallet, the dashboard displays a connection prompt and empty balance cards.
-With a wallet on the local network and deployed contracts, it reads the mUSDC balance, shared pool
-balance, current payout cap, and policy status. Missing contracts and network errors are shown with
-a retry action. Values are not simulated.
+With a wallet on the local network, it reads the mUSDC balance, shared pool balance, current payout
+cap, policy status, backend block and keeper status through the backend API. Missing backend,
+contract and network errors are shown with a retry action. Values are not simulated. Start the
+backend before the frontend dashboard (`npm run dev:backend`); Vite proxies `/api` to port 3000.
+
+The frontend API client lives in `frontend/src/api`. Select **Sign in** to fetch the backend's
+timestamped authentication message, sign it in MetaMask, and cache the resulting evidence-access
+headers in the browser session until shortly before the 10-minute signature expiry. Read-only
+dashboard routes do not require this signature.
+
+For a MetaMask-free local walkthrough, open `http://127.0.0.1:5173/?demo=1`. In development only,
+the frontend offers Hardhat's first well-known test account and forwards its transactions to the
+local RPC node. Use the **Demo role** selector to switch between the claimant and five juror accounts;
+wallet-specific dashboard, authentication, claims and jury assignments refresh automatically. Never
+send real funds to these test accounts or use their public development mnemonic outside the local
+prototype.
+
+### Claims and evidence
+
+The **Claims** workspace lets an eligible policyholder request a payout, describe the incident and
+attach up to 10 supported images or PDFs (5 MB each). The frontend validates the amount and files,
+signs in to the protected evidence API when needed, uploads the encrypted evidence bundle, then asks
+MetaMask to submit its returned hash to `ClaimManager`. The same page loads the connected wallet's
+claims from the backend and shows their current state, evidence hash, jury progress and payout.
+Use the status selector to ask the backend for only Submitted, Voting, Paid or another claim state.
+Select **View details** for policy, evidence, payout, deadlines, outcome and every juror's
+commit/reveal status.
+
+The **Jury Queue** workspace queries assignments for the connected wallet, separates required commit
+or reveal actions from completed reviews, and opens the same claim detail view. A selected juror can
+open the private evidence, verify its exact raw bundle against the on-chain hash, and only then commit
+a sealed approve/reject vote. Evidence previews are created from those verified bytes rather than a
+second unverified file response. The vote salt is derived from a private, claim-specific wallet
+signature and is never displayed or sent to the backend. An exact recovery copy is encrypted with a
+non-exportable browser key so a wallet that produces a different signature later does not strand the
+vote; if that copy is unavailable, the wallet can still try to reproduce the salt. Recovery data is
+deleted after reveal. The frontend checks both possible commitments against the blockchain before
+submitting the matching reveal. Claim, jury, dashboard and pool state refresh automatically.
+
+An active policy past its waiting period is required, and a policy may have only one open claim.
+Evidence may remain stored if the user rejects or the chain rejects the transaction after upload;
+retrying the same bundle is safe because evidence is content-addressed and produces the same hash.
 
 Select **Get Device Coverage**, enter a device identifier and coverage amount, then select
 **Review premium**. The app reads the premium from PolicyRegistry. **Approve & confirm coverage**
@@ -69,6 +108,14 @@ requests the necessary mUSDC approval for the Pool, waits for confirmation, then
 coverage transaction. The device identifier is hashed locally. After confirmation, the dashboard
 refreshes and the purchase appears in the current session's activity list. Activity is not persisted
 across reloads. The avatar and member name are placeholders; there is no email/password login.
+
+The **Community Pool** workspace shows the live reserve, the connected wallet's contributions,
+protocol contribution and payout totals, and the current payout cap. A member can approve mUSDC and
+call `Pool.contribute`; voluntary contributions become shared, non-refundable pool funds. An active
+policy can also be cancelled from its dashboard card through an explicit confirmation step. The UI
+and PolicyRegistry both block cancellation while that policy has an open claim, then refresh policy
+and pool data after a confirmed transaction. Claim details expose permissionless keeper fallbacks to
+finalize a closed vote, execute an approved payout or cancel a timed-out randomness request.
 
 To verify the purchase flow, start the local chain (`npm run chain`), deploy the contracts
 (`npm run deploy:local`), start the frontend (`npm run dev`), and connect a funded local development wallet. Verify both MetaMask confirmations,
@@ -157,7 +204,7 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal voting, tallies | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype parameters (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
 
 **Voting is commit-reveal.** A juror first calls `commitVote(claimId, commitment)` with
 `commitment = JuryModule.computeCommitment(claimId, juror, approve, salt)` for a secret 32-byte

@@ -12,7 +12,8 @@ const LOCAL_NETWORKS = ["hardhat", "localhost"];
 const FAUCET_AMOUNT = USDC(10_000);
 
 async function main() {
-  const ctx = await deployContracts();
+  // Keep the production/default rule at seven days, but remove the wait from local UI testing.
+  const ctx = await deployContracts(LOCAL_NETWORKS.includes(network.name) ? { waitingPeriod: 0 } : {});
   const { chainId } = await ethers.provider.getNetwork();
 
   const addresses = {};

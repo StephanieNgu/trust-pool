@@ -2,11 +2,6 @@ import { formatUnits, keccak256, parseUnits, toUtf8Bytes } from "ethers";
 import { getBrowserProvider } from "../wallet";
 import { loadContracts } from "./contracts";
 
-export interface Overview {
-  balance: string; pool: string; cap: string; coverage: string; active: boolean;
-  policyId: string; startTime: number; waitingPeriod: number; maxCoverage: string;
-}
-
 async function session(account: string, write = false) {
   const provider = getBrowserProvider();
   if ((await provider.getNetwork()).chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
@@ -16,14 +11,6 @@ async function session(account: string, write = false) {
     if (await provider.getCode(address) === "0x") throw new Error("Local contracts are unavailable. Deploy the contracts and refresh.");
   }
   return contracts;
-}
-
-export async function readOverview(account: string): Promise<Overview> {
-  const { token, pool, registry } = await session(account);
-  const [balance, pooled, cap, policy, waiting, max] = await Promise.all([
-    token.balanceOf(account), pool.balance(), pool.maxPayout(), registry.getPolicy(account), registry.waitingPeriod(), registry.maxCoverageLimit()
-  ]);
-  return { balance: formatUnits(balance, 6), pool: formatUnits(pooled, 6), cap: formatUnits(cap, 6), coverage: formatUnits(policy.coverageLimit, 6), active: Number(policy.status) === 1, policyId: String(policy.id), startTime: Number(policy.startTime), waitingPeriod: Number(waiting), maxCoverage: formatUnits(max, 6) };
 }
 
 export async function quoteCoverage(account: string, amount: string) {

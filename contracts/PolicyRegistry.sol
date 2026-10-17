@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 import {IPool} from "./interfaces/IPool.sol";
+import {IClaimManager} from "./interfaces/IClaimManager.sol";
 
 /// @title PolicyRegistry
 /// @notice Membership: creates policies, tracks their status, enforces one policy per wallet and
@@ -45,6 +46,7 @@ contract PolicyRegistry is IPolicyRegistry, Ownable {
     error AlreadyHasActivePolicy();
     error DeviceAlreadyCovered();
     error NoActivePolicy();
+    error OpenClaimExists(uint256 claimId);
 
     constructor(
         IPool pool_,
@@ -115,6 +117,11 @@ contract PolicyRegistry is IPolicyRegistry, Ownable {
     function _lapse(address holder) private {
         Policy storage p = _policyOf[holder];
         if (p.status != Status.Active) revert NoActivePolicy();
+        address manager = pool.claimManager();
+        if (manager != address(0)) {
+            uint256 openClaimId = IClaimManager(manager).openClaimOfPolicy(p.id);
+            if (openClaimId != 0) revert OpenClaimExists(openClaimId);
+        }
         p.status = Status.Lapsed;
         deviceCovered[p.deviceIdHash] = false;
         emit PolicyLapsed(p.id, holder);
