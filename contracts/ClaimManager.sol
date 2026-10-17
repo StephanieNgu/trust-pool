@@ -46,7 +46,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     uint256 public claimCount;
     mapping(uint256 => Claim) private _claims;
     /// @notice The claim currently open (not Rejected, Paid or Cancelled) for each policy id, or 0.
-    mapping(uint256 => uint256) public openClaimOfPolicy;
+    mapping(uint256 => uint256) public override openClaimOfPolicy;
 
     event ClaimSubmitted(
         uint256 indexed claimId,

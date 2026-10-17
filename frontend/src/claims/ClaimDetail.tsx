@@ -2,6 +2,7 @@ import { formatUnits } from "ethers";
 import { useEffect, useState } from "react";
 import { getClaim, type ClaimDetailView, type ClaimJury } from "../api";
 import { readChainTimestamp } from "../contracts/jury";
+import { cancelStalledClaim, executeClaimPayout, finalizeClaim } from "../contracts/claims";
 import { JuryVotePanel } from "./JuryVotePanel";
 import { EvidenceViewer } from "./EvidenceViewer";
 import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
@@ -37,6 +38,9 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
   const [chainTimestamp, setChainTimestamp] = useState<number | null>(null);
   const [chainTimeError, setChainTimeError] = useState("");
   const [evidenceVerified, setEvidenceVerified] = useState(false);
+  const [resolutionBusy, setResolutionBusy] = useState(false);
+  const [resolutionFeedback, setResolutionFeedback] = useState("");
+  const [resolutionError, setResolutionError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -68,6 +72,28 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
 
   const jury = claim.jury;
   const currentJuror = jury?.jurors.find((juror) => juror.address.toLowerCase() === account.toLowerCase());
+  const canFinalize = claim.state === "Voting" && Boolean(jury?.canTally);
+  const canExecutePayout = claim.state === "Approved";
+  const canCancelStalled = claim.state === "JuryPending" && chainTimestamp !== null && Boolean(jury?.cancelAvailableAt && chainTimestamp > jury.cancelAvailableAt);
+
+  async function resolve(action: "finalize" | "payout" | "cancel") {
+    setResolutionBusy(true);
+    setResolutionError("");
+    setResolutionFeedback("");
+    try {
+      if (action === "finalize") await finalizeClaim(account, claimId, setResolutionFeedback);
+      else if (action === "payout") await executeClaimPayout(account, claimId, setResolutionFeedback);
+      else await cancelStalledClaim(account, claimId, setResolutionFeedback);
+      setResolutionFeedback("Protocol recovery action confirmed.");
+      setRefresh((value) => value + 1);
+      onClaimChanged?.();
+    } catch (cause) {
+      setResolutionError(errorText(cause));
+      setResolutionFeedback("");
+    } finally {
+      setResolutionBusy(false);
+    }
+  }
   return <section className="claims-panel claim-detail" aria-label={`Claim ${claim.id} details`}>
     <div className="claims-panel-heading"><div><button className="text-button detail-back" type="button" onClick={onBack}>← Back to list</button><h2>Claim #{claim.id}</h2></div><button className="text-button" type="button" disabled={loading} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
     {error && <p className="notice warning" role="alert">{error}</p>}
@@ -87,10 +113,11 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
 
     <div className="detail-section-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h3>Jury</h3></div>{jury && <span>{jury.commits} committed · {jury.approvals + jury.rejections} revealed</span>}</div>
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>
-      <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div></dl>
+      <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Quorum</dt><dd>{jury.approvals + jury.rejections} / {jury.quorum} revealed</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} approve · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
       {chainTimeError && <p className="notice warning">Could not synchronize blockchain time: {chainTimeError}</p>}
       <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? "Revealed" : juror.committed ? "Committed" : "Waiting"}</span></div>)}</div>
       {enableJurorActions && <JuryVotePanel claim={claim} account={account} chainTimestamp={chainTimestamp} evidenceVerified={evidenceVerified} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />}
     </>}
+    {(canFinalize || canExecutePayout || canCancelStalled) && <section className="recovery-panel"><span className="eyebrow">PERMISSIONLESS RECOVERY</span><h3>Keeper fallback</h3><p>Anyone may submit this transaction if the automatic keeper has not moved the claim forward.</p>{canFinalize && <button className="primary" type="button" disabled={resolutionBusy} onClick={() => void resolve("finalize")}>Finalize jury result</button>}{canExecutePayout && <button className="primary" type="button" disabled={resolutionBusy} onClick={() => void resolve("payout")}>Execute approved payout</button>}{canCancelStalled && <button className="danger-button" type="button" disabled={resolutionBusy} onClick={() => void resolve("cancel")}>Cancel stalled claim</button>}{resolutionFeedback && <p className="notice" role="status">{resolutionFeedback}</p>}{resolutionError && <p className="notice warning" role="alert">{resolutionError}</p>}</section>}
   </section>;
 }

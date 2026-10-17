@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ClaimDetailView } from "../api";
 import { commitJuryVote, computeVoteCommitment, deriveVoteSalt, readVoteCommitment, revealJuryVote } from "../contracts/jury";
-import { loadLegacyVoteSecret, removeLegacyVoteSecret, type LegacyVoteSecret } from "./voteSecret";
+import { loadLegacyVoteSecret, loadVoteSecret, removeLegacyVoteSecret, removeVoteSecret, saveVoteSecret, type VoteSecret } from "./voteSecret";
 
 interface JuryVotePanelProps {
   claim: ClaimDetailView;
@@ -33,14 +33,27 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
-  const [legacySecret, setLegacySecret] = useState<LegacyVoteSecret | null>(null);
+  const [legacySecret, setLegacySecret] = useState<VoteSecret | null>(null);
+  const [storedSecret, setStoredSecret] = useState<VoteSecret | null>(null);
 
   useEffect(() => {
+    let active = true;
     setLegacySecret(loadLegacyVoteSecret(account, claim.id));
+    setStoredSecret(null);
+    void loadVoteSecret(account, claim.id).then((secret) => { if (active) setStoredSecret(secret); });
     setChoice(null);
     setFeedback("");
     setError("");
+    return () => { active = false; };
   }, [account, claim.id]);
+
+  useEffect(() => {
+    if (!juror?.revealed) return;
+    removeVoteSecret(account, claim.id);
+    removeLegacyVoteSecret(account, claim.id);
+    setStoredSecret(null);
+    setLegacySecret(null);
+  }, [account, claim.id, juror?.revealed]);
 
   if (!juror) return null;
 
@@ -53,10 +66,12 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
       setFeedback("Sign the private salt message. This does not reveal or cast your vote.");
       const salt = await deriveVoteSalt(account, claim.id);
       const commitment = computeVoteCommitment(claim.id, account, choice, salt);
+      await saveVoteSecret(account, claim.id, { approve: choice, salt, commitment });
       await commitJuryVote(account, claim.id, commitment, setFeedback);
       removeLegacyVoteSecret(account, claim.id);
       setLegacySecret(null);
-      setFeedback("Vote committed. Your wallet can recreate the reveal secret later.");
+      setStoredSecret({ approve: choice, salt, commitment });
+      setFeedback("Vote committed. An encrypted recovery copy is saved in this browser.");
       onChanged();
     } catch (cause) {
       setError(errorText(cause));
@@ -70,12 +85,19 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
     setError("");
     try {
       const onChain = await readVoteCommitment(account, claim.id);
+      const storedMatches = storedSecret !== null
+        && onChain.toLowerCase() === storedSecret.commitment.toLowerCase()
+        && computeVoteCommitment(claim.id, account, storedSecret.approve, storedSecret.salt).toLowerCase() === onChain.toLowerCase();
       const legacyMatches = legacySecret !== null
         && onChain.toLowerCase() === legacySecret.commitment.toLowerCase()
         && computeVoteCommitment(claim.id, account, legacySecret.approve, legacySecret.salt).toLowerCase() === onChain.toLowerCase();
       let salt: string;
       let approve: boolean | null;
-      if (legacyMatches) {
+      if (storedMatches) {
+        salt = storedSecret.salt;
+        approve = storedSecret.approve;
+        setFeedback("Recovered the encrypted vote secret from this browser.");
+      } else if (legacyMatches) {
         salt = legacySecret.salt;
         approve = legacySecret.approve;
         setFeedback("Recovered the earlier browser-stored commitment. It will be deleted after reveal.");
@@ -92,7 +114,9 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
       }
       if (approve === null) throw new Error("This wallet could not reproduce the secret used for the on-chain commitment.");
       await revealJuryVote(account, claim.id, approve, salt, setFeedback);
+      removeVoteSecret(account, claim.id);
       removeLegacyVoteSecret(account, claim.id);
+      setStoredSecret(null);
       setLegacySecret(null);
       setFeedback("Vote revealed successfully.");
       onChanged();
@@ -123,7 +147,8 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
       {!commitOpen && <p className="notice warning">The commit window is closed.</p>}
     </> : <>
       <h3>{revealOpen ? "Reveal your vote" : "Vote committed"}</h3>
-      <p>The reveal secret is not stored in this browser. Your wallet will reproduce it by signing the same private message.</p>
+      <p>This browser keeps an encrypted recovery copy. If it is unavailable, your wallet will try to reproduce the secret by signing the same private message.</p>
+      {storedSecret && <p className="notice">Encrypted recovery is available in this browser and will be deleted after reveal.</p>}
       {legacySecret && <p className="notice">An earlier browser-stored commitment is available for one-time reveal and will be deleted afterward.</p>}
       {revealOpen ? <button className="primary full" type="button" disabled={busy} onClick={() => void reveal()}>{busy ? "Recovering & revealing…" : "Recover secret & reveal vote"}</button> : <p className="notice">Reveal opens after all jurors commit or the commit deadline passes.</p>}
     </>}

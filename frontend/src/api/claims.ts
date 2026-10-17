@@ -1,7 +1,7 @@
 import { getAddress } from "ethers";
 import { getWalletAuthHeaders } from "./auth";
 import { ApiError, apiRequest } from "./client";
-import type { ClaimDetailView, ClaimView, EvidenceDetail, EvidenceSummary } from "./types";
+import type { ClaimDetailView, ClaimState, ClaimView, EvidenceDetail, EvidenceSummary } from "./types";
 
 export const MAX_EVIDENCE_FILES = 10;
 export const MAX_EVIDENCE_FILE_BYTES = 5 * 1024 * 1024;
@@ -57,16 +57,20 @@ export async function uploadEvidence(address: string, description: string, files
   });
 }
 
-export async function getClaimsForMember(address: string): Promise<ClaimView[]> {
+export async function getClaimsForMember(address: string, state?: ClaimState): Promise<ClaimView[]> {
+  const query = new URLSearchParams({ claimant: getAddress(address) });
+  if (state) query.set("state", state);
   const response = await apiRequest<{ claims: ClaimView[] }>(
-    `/api/claims?claimant=${encodeURIComponent(getAddress(address))}`,
+    `/api/claims?${query.toString()}`,
   );
   return response.claims;
 }
 
-export async function getClaimsForJuror(address: string): Promise<ClaimView[]> {
+export async function getClaimsForJuror(address: string, state?: ClaimState): Promise<ClaimView[]> {
+  const query = new URLSearchParams({ juror: getAddress(address) });
+  if (state) query.set("state", state);
   const response = await apiRequest<{ claims: ClaimView[] }>(
-    `/api/claims?juror=${encodeURIComponent(getAddress(address))}`,
+    `/api/claims?${query.toString()}`,
   );
   return response.claims;
 }

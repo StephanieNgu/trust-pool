@@ -56,7 +56,7 @@ loads local addresses from `deployments/localhost.json`, which `npm run deploy:l
 [Smart Contracts](#smart-contracts)). The deploy script also gives every Hardhat dev account
 10,000 mUSDC; import one of the private keys printed by `npm run chain` into MetaMask to use it.
 
-### Dashboard and device coverage
+### Dashboard, community pool and device coverage
 
 Without a connected wallet, the dashboard displays a connection prompt and empty balance cards.
 With a wallet on the local network, it reads the mUSDC balance, shared pool balance, current payout
@@ -83,6 +83,7 @@ attach up to 10 supported images or PDFs (5 MB each). The frontend validates the
 signs in to the protected evidence API when needed, uploads the encrypted evidence bundle, then asks
 MetaMask to submit its returned hash to `ClaimManager`. The same page loads the connected wallet's
 claims from the backend and shows their current state, evidence hash, jury progress and payout.
+Use the status selector to ask the backend for only Submitted, Voting, Paid or another claim state.
 Select **View details** for policy, evidence, payout, deadlines, outcome and every juror's
 commit/reveal status.
 
@@ -91,9 +92,11 @@ or reveal actions from completed reviews, and opens the same claim detail view. 
 open the private evidence, verify its exact raw bundle against the on-chain hash, and only then commit
 a sealed approve/reject vote. Evidence previews are created from those verified bytes rather than a
 second unverified file response. The vote salt is derived from a private, claim-specific wallet
-signature and is never stored in browser storage or displayed. During reveal the wallet reproduces
-the same salt, and the frontend checks both possible vote commitments against the blockchain before
-submitting the matching reveal. Claim and jury state refresh automatically against chain time.
+signature and is never displayed or sent to the backend. An exact recovery copy is encrypted with a
+non-exportable browser key so a wallet that produces a different signature later does not strand the
+vote; if that copy is unavailable, the wallet can still try to reproduce the salt. Recovery data is
+deleted after reveal. The frontend checks both possible commitments against the blockchain before
+submitting the matching reveal. Claim, jury, dashboard and pool state refresh automatically.
 
 An active policy past its waiting period is required, and a policy may have only one open claim.
 Evidence may remain stored if the user rejects or the chain rejects the transaction after upload;
@@ -105,6 +108,14 @@ requests the necessary mUSDC approval for the Pool, waits for confirmation, then
 coverage transaction. The device identifier is hashed locally. After confirmation, the dashboard
 refreshes and the purchase appears in the current session's activity list. Activity is not persisted
 across reloads. The avatar and member name are placeholders; there is no email/password login.
+
+The **Community Pool** workspace shows the live reserve, the connected wallet's contributions,
+protocol contribution and payout totals, and the current payout cap. A member can approve mUSDC and
+call `Pool.contribute`; voluntary contributions become shared, non-refundable pool funds. An active
+policy can also be cancelled from its dashboard card through an explicit confirmation step. The UI
+and PolicyRegistry both block cancellation while that policy has an open claim, then refresh policy
+and pool data after a confirmed transaction. Claim details expose permissionless keeper fallbacks to
+finalize a closed vote, execute an approved payout or cancel a timed-out randomness request.
 
 To verify the purchase flow, start the local chain (`npm run chain`), deploy the contracts
 (`npm run deploy:local`), start the frontend (`npm run dev`), and connect a funded local development wallet. Verify both MetaMask confirmations,

@@ -4,6 +4,7 @@ import {
   ALLOWED_EVIDENCE_TYPES,
   getClaimsForMember,
   uploadEvidence,
+  type ClaimState,
   type ClaimView,
   type DashboardOverview,
 } from "../api";
@@ -43,10 +44,12 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   const [claimsError, setClaimsError] = useState("");
   const [claimRefresh, setClaimRefresh] = useState(0);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  const [stateFilter, setStateFilter] = useState<ClaimState | "All">("All");
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setClaims([]);
+    setSelectedClaimId(null);
     setClaimsError("");
   }, [account]);
 
@@ -55,12 +58,12 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     setClaimsError("");
     if (!account || !ready) return () => { active = false; };
     setLoadingClaims(true);
-    void getClaimsForMember(account)
+    void getClaimsForMember(account, stateFilter === "All" ? undefined : stateFilter)
       .then((items) => { if (active) setClaims(items); })
       .catch((cause) => { if (active) setClaimsError(message(cause)); })
       .finally(() => { if (active) setLoadingClaims(false); });
     return () => { active = false; };
-  }, [account, ready, claimRefresh]);
+  }, [account, ready, claimRefresh, stateFilter]);
 
   useEffect(() => {
     if (!account || !ready) return;
@@ -142,10 +145,10 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     </form>
 
     {selectedClaimId && account ? <ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onAuthenticated={onAuthenticated} onClaimChanged={() => setClaimRefresh((value) => value + 1)} onBack={() => setSelectedClaimId(null)} /> : <section className="claims-panel" aria-label="My claims">
-      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div>
+      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><div className="claims-panel-actions"><label htmlFor="claim-state-filter">Status</label><select id="claim-state-filter" value={stateFilter} disabled={!ready || loadingClaims} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div></div>
       {claimsError && <p className="notice warning" role="alert">{claimsError}</p>}
       {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
-      {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>No claims yet</strong><p>Your submitted claims and their jury status will appear here.</p></div>}
+      {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No claims yet" : `No ${CLAIM_STATE_COPY[stateFilter].toLowerCase()} claims`}</strong><p>{stateFilter === "All" ? "Your submitted claims and their jury status will appear here." : "Choose another status to view the rest of your claim history."}</p></div>}
       <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>
         <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatUnits(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
         <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Approved" || claim.state === "Paid" ? <div><dt>Payout</dt><dd>{formatUnits(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>

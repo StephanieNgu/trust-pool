@@ -20,7 +20,7 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     uint256 public immutable maxPayoutBps;
 
     address public registry;
-    address public claimManager;
+    address public override claimManager;
 
     mapping(address => uint256) public contributionsOf;
     uint256 public totalContributed;

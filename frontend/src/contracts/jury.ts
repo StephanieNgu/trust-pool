@@ -35,10 +35,9 @@ export function computeVoteCommitment(claimId: string, juror: string, approve: b
 }
 
 /**
- * Derives a recoverable salt from a wallet signature without sending that signature anywhere.
- * The fixed message binds the salt to this chain, JuryModule, claim and juror. Mainstream EVM
- * wallets produce the same signature for the same personal_sign message, so the juror can recreate
- * the salt during reveal without keeping a plaintext secret in browser storage.
+ * Derives a salt from a wallet signature without sending that signature anywhere. The fixed message
+ * binds it to this chain, JuryModule, claim and juror. The frontend also stores an encrypted copy
+ * because byte-for-byte deterministic signatures are common but are not guaranteed by EIP-191.
  */
 export async function deriveVoteSalt(account: string, claimId: string): Promise<string> {
   const provider = getBrowserProvider();

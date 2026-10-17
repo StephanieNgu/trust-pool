@@ -4,8 +4,15 @@ import type { ApiConfig, ApiHealth, MemberView, PoolView } from "./types";
 
 export interface DashboardOverview {
   balance: string;
+  contributed: string;
   pool: string;
   cap: string;
+  totalContributed: string;
+  totalPaidOut: string;
+  maxPayoutBps: number;
+  policyCount: number;
+  holderCount: number;
+  claimCount: number;
   coverage: string;
   active: boolean;
   policyId: string;
@@ -19,6 +26,9 @@ export interface DashboardOverview {
   openClaimId: string | null;
   backendBlock: number;
   keeperRunning: boolean;
+  keeperLastTickAt: number | null;
+  keeperLastError: string | null;
+  keeperAutoResolve: boolean;
 }
 
 export function getHealth(): Promise<ApiHealth> {
@@ -54,8 +64,15 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
 
   return {
     balance: formatUnits(member.balance, decimals),
+    contributed: formatUnits(member.contributed, decimals),
     pool: formatUnits(pool.balance, decimals),
     cap: formatUnits(pool.maxPayout, decimals),
+    totalContributed: formatUnits(pool.totalContributed, decimals),
+    totalPaidOut: formatUnits(pool.totalPaidOut, decimals),
+    maxPayoutBps: pool.maxPayoutBps,
+    policyCount: pool.policyCount,
+    holderCount: pool.holderCount,
+    claimCount: pool.claimCount,
     coverage: formatUnits(policy?.coverageLimit ?? "0", decimals),
     active: policy?.status === "Active",
     policyId: policy?.id ?? "0",
@@ -69,5 +86,8 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     openClaimId: policy?.openClaimId ?? null,
     backendBlock: health.blockNumber,
     keeperRunning: health.keeper?.running ?? false,
+    keeperLastTickAt: health.keeper?.lastTickAt ?? null,
+    keeperLastError: health.keeper?.lastError ?? null,
+    keeperAutoResolve: health.keeper?.autoResolve ?? false,
   };
 }

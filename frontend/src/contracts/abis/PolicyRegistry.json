@@ -6,5 +6,6 @@
   "function isActive(address holder) view returns (bool)",
   "function isPastWaitingPeriod(address holder) view returns (bool)",
   "function maxCoverageLimit() view returns (uint256)",
-  "function waitingPeriod() view returns (uint256)"
+  "function waitingPeriod() view returns (uint256)",
+  "error OpenClaimExists(uint256 claimId)"
 ]
