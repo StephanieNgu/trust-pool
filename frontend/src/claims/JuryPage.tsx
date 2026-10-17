@@ -8,6 +8,7 @@ interface JuryPageProps {
   account: string | null;
   ready: boolean;
   overview: DashboardOverview | null;
+  onAuthenticated(): void;
 }
 
 function errorText(error: unknown) {
@@ -25,7 +26,7 @@ function jurorTask(claim: ClaimView, account: string) {
   return "Vote revealed";
 }
 
-export function JuryPage({ account, ready, overview }: JuryPageProps) {
+export function JuryPage({ account, ready, overview, onAuthenticated }: JuryPageProps) {
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -33,9 +34,13 @@ export function JuryPage({ account, ready, overview }: JuryPageProps) {
   const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
-    let active = true;
     setClaims([]);
     setSelectedClaimId(null);
+    setError("");
+  }, [account]);
+
+  useEffect(() => {
+    let active = true;
     setError("");
     if (!account || !ready) return () => { active = false; };
     setLoading(true);
@@ -46,8 +51,14 @@ export function JuryPage({ account, ready, overview }: JuryPageProps) {
     return () => { active = false; };
   }, [account, ready, refresh]);
 
+  useEffect(() => {
+    if (!account || !ready) return;
+    const timer = window.setInterval(() => setRefresh((value) => value + 1), 10_000);
+    return () => window.clearInterval(timer);
+  }, [account, ready]);
+
   if (selectedClaimId && account) {
-    return <div className="jury-detail-layout"><ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onBack={() => setSelectedClaimId(null)} /></div>;
+    return <div className="jury-detail-layout"><ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} enableJurorActions onAuthenticated={onAuthenticated} onClaimChanged={() => setRefresh((value) => value + 1)} onBack={() => setSelectedClaimId(null)} /></div>;
   }
 
   const activeTasks = account ? claims.filter((claim) => jurorTask(claim, account).includes("required")).length : 0;

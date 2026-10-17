@@ -40,22 +40,33 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [claimsError, setClaimsError] = useState("");
   const [claimRefresh, setClaimRefresh] = useState(0);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    let active = true;
     setClaims([]);
-    setError("");
+    setClaimsError("");
+  }, [account]);
+
+  useEffect(() => {
+    let active = true;
+    setClaimsError("");
     if (!account || !ready) return () => { active = false; };
     setLoadingClaims(true);
     void getClaimsForMember(account)
       .then((items) => { if (active) setClaims(items); })
-      .catch((cause) => { if (active) setError(message(cause)); })
+      .catch((cause) => { if (active) setClaimsError(message(cause)); })
       .finally(() => { if (active) setLoadingClaims(false); });
     return () => { active = false; };
   }, [account, ready, claimRefresh]);
+
+  useEffect(() => {
+    if (!account || !ready) return;
+    const timer = window.setInterval(() => setClaimRefresh((value) => value + 1), 10_000);
+    return () => window.clearInterval(timer);
+  }, [account, ready]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -130,8 +141,9 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       {error && <p className="notice warning" role="alert">{error}</p>}
     </form>
 
-    {selectedClaimId && account ? <ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onBack={() => setSelectedClaimId(null)} /> : <section className="claims-panel" aria-label="My claims">
+    {selectedClaimId && account ? <ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onAuthenticated={onAuthenticated} onClaimChanged={() => setClaimRefresh((value) => value + 1)} onBack={() => setSelectedClaimId(null)} /> : <section className="claims-panel" aria-label="My claims">
       <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div>
+      {claimsError && <p className="notice warning" role="alert">{claimsError}</p>}
       {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
       {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>No claims yet</strong><p>Your submitted claims and their jury status will appear here.</p></div>}
       <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>

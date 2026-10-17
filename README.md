@@ -69,6 +69,13 @@ timestamped authentication message, sign it in MetaMask, and cache the resulting
 headers in the browser session until shortly before the 10-minute signature expiry. Read-only
 dashboard routes do not require this signature.
 
+For a MetaMask-free local walkthrough, open `http://127.0.0.1:5173/?demo=1`. In development only,
+the frontend offers Hardhat's first well-known test account and forwards its transactions to the
+local RPC node. Use the **Demo role** selector to switch between the claimant and five juror accounts;
+wallet-specific dashboard, authentication, claims and jury assignments refresh automatically. Never
+send real funds to these test accounts or use their public development mnemonic outside the local
+prototype.
+
 ### Claims and evidence
 
 The **Claims** workspace lets an eligible policyholder request a payout, describe the incident and
@@ -80,9 +87,13 @@ Select **View details** for policy, evidence, payout, deadlines, outcome and eve
 commit/reveal status.
 
 The **Jury Queue** workspace queries assignments for the connected wallet, separates required commit
-or reveal actions from completed reviews, and opens the same claim detail view. Commit and reveal
-transactions are not part of this frontend milestone yet; the queue currently provides status and
-deadlines so those actions can be added without changing the read-side flow.
+or reveal actions from completed reviews, and opens the same claim detail view. A selected juror can
+open the private evidence, verify its exact raw bundle against the on-chain hash, and only then commit
+a sealed approve/reject vote. Evidence previews are created from those verified bytes rather than a
+second unverified file response. The vote salt is derived from a private, claim-specific wallet
+signature and is never stored in browser storage or displayed. During reveal the wallet reproduces
+the same salt, and the frontend checks both possible vote commitments against the blockchain before
+submitting the matching reveal. Claim and jury state refresh automatically against chain time.
 
 An active policy past its waiting period is required, and a policy may have only one open claim.
 Evidence may remain stored if the user rejects or the chain rejects the transaction after upload;
@@ -182,7 +193,7 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal voting, tallies | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype parameters (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
 
 **Voting is commit-reveal.** A juror first calls `commitVote(claimId, commitment)` with
 `commitment = JuryModule.computeCommitment(claimId, juror, approve, salt)` for a secret 32-byte

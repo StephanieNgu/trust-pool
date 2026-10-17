@@ -1,5 +1,6 @@
 import { BrowserProvider } from "ethers";
 import type { InjectedEthereumProvider } from "./ethereum";
+import { createLocalDemoProvider } from "./localDemoProvider";
 
 export const HARDHAT_LOCAL_CHAIN_ID = "0x7a69";
 
@@ -8,8 +9,11 @@ export interface WalletSnapshot {
   chainId: string | null;
 }
 
+const localDemoProvider = import.meta.env.DEV ? createLocalDemoProvider() : null;
+
 export function getInjectedProvider(): InjectedEthereumProvider | null {
-  return window.ethereum ?? null;
+  const demoRequested = import.meta.env.DEV && new URLSearchParams(window.location.search).get("demo") === "1";
+  return window.ethereum ?? (demoRequested ? localDemoProvider : null);
 }
 
 export async function readWalletSnapshot(): Promise<WalletSnapshot> {

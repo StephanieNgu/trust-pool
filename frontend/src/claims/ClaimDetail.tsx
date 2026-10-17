@@ -1,6 +1,9 @@
 import { formatUnits } from "ethers";
 import { useEffect, useState } from "react";
 import { getClaim, type ClaimDetailView, type ClaimJury } from "../api";
+import { readChainTimestamp } from "../contracts/jury";
+import { JuryVotePanel } from "./JuryVotePanel";
+import { EvidenceViewer } from "./EvidenceViewer";
 import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
 
 interface ClaimDetailProps {
@@ -8,6 +11,9 @@ interface ClaimDetailProps {
   account: string;
   tokenDecimals: number;
   tokenSymbol: string;
+  enableJurorActions?: boolean;
+  onAuthenticated?(): void;
+  onClaimChanged?(): void;
   onBack(): void;
 }
 
@@ -23,11 +29,14 @@ function outcomeCopy(reason: ClaimJury["outcomeReason"]) {
   return "Pending";
 }
 
-export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, onBack }: ClaimDetailProps) {
+export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enableJurorActions = false, onAuthenticated, onClaimChanged, onBack }: ClaimDetailProps) {
   const [claim, setClaim] = useState<ClaimDetailView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [chainTimestamp, setChainTimestamp] = useState<number | null>(null);
+  const [chainTimeError, setChainTimeError] = useState("");
+  const [evidenceVerified, setEvidenceVerified] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -37,8 +46,21 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, onBa
       .then((value) => { if (active) setClaim(value); })
       .catch((cause) => { if (active) setError(errorText(cause)); })
       .finally(() => { if (active) setLoading(false); });
+    setChainTimeError("");
+    void readChainTimestamp()
+      .then((value) => { if (active) setChainTimestamp(value); })
+      .catch((cause) => { if (active) { setChainTimestamp(null); setChainTimeError(errorText(cause)); } });
     return () => { active = false; };
   }, [claimId, refresh]);
+
+  useEffect(() => {
+    setEvidenceVerified(false);
+  }, [account, claimId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setRefresh((value) => value + 1), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (loading && !claim) return <section className="claims-panel"><p className="muted" role="status">Loading claim #{claimId}…</p></section>;
   if (error && !claim) return <section className="claims-panel"><button className="text-button" type="button" onClick={onBack}>← Back</button><p className="notice warning" role="alert">{error}</p></section>;
@@ -61,10 +83,14 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, onBa
       <div><dt>Your role</dt><dd>{claim.claimant.toLowerCase() === account.toLowerCase() ? "Claimant" : currentJuror ? "Selected juror" : "Observer"}</dd></div>
     </dl>
 
+    <EvidenceViewer account={account} claim={claim} onAuthenticated={onAuthenticated} onVerificationChange={setEvidenceVerified} />
+
     <div className="detail-section-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h3>Jury</h3></div>{jury && <span>{jury.commits} committed · {jury.approvals + jury.rejections} revealed</span>}</div>
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>
       <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div></dl>
+      {chainTimeError && <p className="notice warning">Could not synchronize blockchain time: {chainTimeError}</p>}
       <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? "Revealed" : juror.committed ? "Committed" : "Waiting"}</span></div>)}</div>
+      {enableJurorActions && <JuryVotePanel claim={claim} account={account} chainTimestamp={chainTimestamp} evidenceVerified={evidenceVerified} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />}
     </>}
   </section>;
 }

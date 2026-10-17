@@ -21,6 +21,8 @@ export {
   getClaim,
   getClaimsForMember,
   getClaimsForJuror,
+  getEvidence,
+  getEvidenceResource,
   uploadEvidence,
   validateEvidenceFiles,
 } from "./claims";
@@ -31,6 +33,8 @@ export type {
   ClaimJury,
   ClaimState,
   ClaimView,
+  EvidenceDetail,
+  EvidenceFileAccess,
   EvidenceFileInfo,
   EvidenceSummary,
   MemberPolicy,

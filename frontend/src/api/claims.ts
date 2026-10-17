@@ -1,7 +1,7 @@
 import { getAddress } from "ethers";
 import { getWalletAuthHeaders } from "./auth";
-import { apiRequest } from "./client";
-import type { ClaimDetailView, ClaimView, EvidenceSummary } from "./types";
+import { ApiError, apiRequest } from "./client";
+import type { ClaimDetailView, ClaimView, EvidenceDetail, EvidenceSummary } from "./types";
 
 export const MAX_EVIDENCE_FILES = 10;
 export const MAX_EVIDENCE_FILE_BYTES = 5 * 1024 * 1024;
@@ -74,4 +74,33 @@ export async function getClaimsForJuror(address: string): Promise<ClaimView[]> {
 export function getClaim(claimId: string): Promise<ClaimDetailView> {
   if (!/^\d+$/.test(claimId) || claimId === "0") throw new Error("Claim id must be a positive integer.");
   return apiRequest<ClaimDetailView>(`/api/claims/${claimId}`);
+}
+
+export async function getEvidence(address: string, evidenceHash: string): Promise<EvidenceDetail> {
+  const headers = await getWalletAuthHeaders(address);
+  return apiRequest<EvidenceDetail>(`/api/evidence/${encodeURIComponent(evidenceHash)}`, { headers });
+}
+
+export async function getEvidenceResource(address: string, path: string): Promise<Uint8Array> {
+  if (!path.startsWith("/api/evidence/")) throw new Error("The backend returned an invalid evidence URL.");
+  const headers = await getWalletAuthHeaders(address);
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 30_000);
+
+  try {
+    const response = await fetch(path, { headers: { Accept: "*/*", ...headers }, signal: controller.signal });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new ApiError(body?.error ?? `Evidence request failed with status ${response.status}.`, response.status);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError("The evidence request timed out.", 0);
+    }
+    throw new ApiError("Could not download the evidence from the TrustPool backend.", 0);
+  } finally {
+    window.clearTimeout(timer);
+  }
 }

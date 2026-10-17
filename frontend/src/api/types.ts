@@ -109,9 +109,18 @@ export interface EvidenceFileInfo {
   size: number;
 }
 
+export interface EvidenceFileAccess extends EvidenceFileInfo {
+  url: string;
+}
+
 export interface EvidenceSummary {
   evidenceHash: string;
   description: string;
   size: number;
   files: EvidenceFileInfo[];
+}
+
+export interface EvidenceDetail extends Omit<EvidenceSummary, "files"> {
+  rawUrl: string;
+  files: EvidenceFileAccess[];
 }
