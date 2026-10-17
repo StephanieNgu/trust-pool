@@ -4,11 +4,12 @@ import {
   ALLOWED_EVIDENCE_TYPES,
   getClaimsForMember,
   uploadEvidence,
-  type ClaimState,
   type ClaimView,
   type DashboardOverview,
 } from "../api";
 import { submitClaim } from "../contracts/claims";
+import { ClaimDetail } from "./ClaimDetail";
+import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
 
 interface ClaimsPageProps {
   account: string | null;
@@ -18,26 +19,12 @@ interface ClaimsPageProps {
   onSubmitted(): void;
 }
 
-const STATE_COPY: Record<ClaimState, string> = {
-  Submitted: "Submitted",
-  JuryPending: "Selecting jury",
-  Voting: "Voting",
-  Approved: "Approved",
-  Rejected: "Rejected",
-  Paid: "Paid",
-  Cancelled: "Cancelled",
-};
-
 function message(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet. You can try again.";
   }
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
-}
-
-function short(value: string) {
-  return `${value.slice(0, 8)}…${value.slice(-6)}`;
 }
 
 function fileSize(bytes: number) {
@@ -54,6 +41,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
   const [claimRefresh, setClaimRefresh] = useState(0);
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -93,7 +81,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     try {
       const evidence = await uploadEvidence(account, description.trim(), files);
       onAuthenticated();
-      setFeedback(`Evidence uploaded (${short(evidence.evidenceHash)}).`);
+      setFeedback(`Evidence uploaded (${shortHash(evidence.evidenceHash)}).`);
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
       setFeedback("Claim submitted successfully. The keeper will select a jury next.");
       setAmount("");
@@ -142,14 +130,15 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       {error && <p className="notice warning" role="alert">{error}</p>}
     </form>
 
-    <section className="claims-panel" aria-label="My claims">
+    {selectedClaimId && account ? <ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onBack={() => setSelectedClaimId(null)} /> : <section className="claims-panel" aria-label="My claims">
       <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div>
       {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
       {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>No claims yet</strong><p>Your submitted claims and their jury status will appear here.</p></div>}
       <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>
-        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatUnits(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{STATE_COPY[claim.state]}</span></div>
-        <dl><div><dt>Submitted</dt><dd>{new Date(claim.submittedAt * 1000).toLocaleString()}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{short(claim.evidenceHash)}</dd></div>{claim.state === "Approved" || claim.state === "Paid" ? <div><dt>Payout</dt><dd>{formatUnits(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
+        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatUnits(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
+        <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Approved" || claim.state === "Paid" ? <div><dt>Payout</dt><dd>{formatUnits(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
+        <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>View details →</button>
       </article>)}</div>
-    </section>
+    </section>}
   </div>;
 }

@@ -76,6 +76,13 @@ attach up to 10 supported images or PDFs (5 MB each). The frontend validates the
 signs in to the protected evidence API when needed, uploads the encrypted evidence bundle, then asks
 MetaMask to submit its returned hash to `ClaimManager`. The same page loads the connected wallet's
 claims from the backend and shows their current state, evidence hash, jury progress and payout.
+Select **View details** for policy, evidence, payout, deadlines, outcome and every juror's
+commit/reveal status.
+
+The **Jury Queue** workspace queries assignments for the connected wallet, separates required commit
+or reveal actions from completed reviews, and opens the same claim detail view. Commit and reveal
+transactions are not part of this frontend milestone yet; the queue currently provides status and
+deadlines so those actions can be added without changing the read-side flow.
 
 An active policy past its waiting period is required, and a policy may have only one open claim.
 Evidence may remain stored if the user rejects or the chain rejects the transaction after upload;

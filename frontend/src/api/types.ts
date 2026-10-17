@@ -95,6 +95,13 @@ export interface ClaimView {
   jury: ClaimJury | null;
 }
 
+export interface ClaimDetailView extends ClaimView {
+  evidence: {
+    available: boolean;
+    url: string | null;
+  };
+}
+
 export interface EvidenceFileInfo {
   index: number;
   name: string;

@@ -1,7 +1,7 @@
 import { getAddress } from "ethers";
 import { getWalletAuthHeaders } from "./auth";
 import { apiRequest } from "./client";
-import type { ClaimView, EvidenceSummary } from "./types";
+import type { ClaimDetailView, ClaimView, EvidenceSummary } from "./types";
 
 export const MAX_EVIDENCE_FILES = 10;
 export const MAX_EVIDENCE_FILE_BYTES = 5 * 1024 * 1024;
@@ -62,4 +62,16 @@ export async function getClaimsForMember(address: string): Promise<ClaimView[]> 
     `/api/claims?claimant=${encodeURIComponent(getAddress(address))}`,
   );
   return response.claims;
+}
+
+export async function getClaimsForJuror(address: string): Promise<ClaimView[]> {
+  const response = await apiRequest<{ claims: ClaimView[] }>(
+    `/api/claims?juror=${encodeURIComponent(getAddress(address))}`,
+  );
+  return response.claims;
+}
+
+export function getClaim(claimId: string): Promise<ClaimDetailView> {
+  if (!/^\d+$/.test(claimId) || claimId === "0") throw new Error("Claim id must be a positive integer.");
+  return apiRequest<ClaimDetailView>(`/api/claims/${claimId}`);
 }

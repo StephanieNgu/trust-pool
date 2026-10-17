@@ -18,13 +18,16 @@ export {
   ALLOWED_EVIDENCE_TYPES,
   MAX_EVIDENCE_FILE_BYTES,
   MAX_EVIDENCE_FILES,
+  getClaim,
   getClaimsForMember,
+  getClaimsForJuror,
   uploadEvidence,
   validateEvidenceFiles,
 } from "./claims";
 export type {
   ApiConfig,
   ApiHealth,
+  ClaimDetailView,
   ClaimJury,
   ClaimState,
   ClaimView,
