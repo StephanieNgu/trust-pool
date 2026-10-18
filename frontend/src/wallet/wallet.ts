@@ -9,10 +9,11 @@ export interface WalletSnapshot {
   chainId: string | null;
 }
 
-const localDemoProvider = import.meta.env.DEV ? createLocalDemoProvider() : null;
+const isDevBuild = import.meta.env?.DEV === true;
+const localDemoProvider = isDevBuild ? createLocalDemoProvider() : null;
 
 export function getInjectedProvider(): InjectedEthereumProvider | null {
-  const demoRequested = import.meta.env.DEV && new URLSearchParams(window.location.search).get("demo") === "1";
+  const demoRequested = isDevBuild && new URLSearchParams(window.location.search).get("demo") === "1";
   return window.ethereum ?? (demoRequested ? localDemoProvider : null);
 }
 
