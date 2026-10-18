@@ -242,6 +242,7 @@ in-process Hardhat chain):
 npm test
 npm run test:contracts   # contracts only
 npm run test:backend     # backend only
+npm run test:frontend    #frontend only
 ```
 
 For a coverage report:
