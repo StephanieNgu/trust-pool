@@ -123,6 +123,8 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
 
   return {
     ...ctx,
+    deployment,
+    baseUrl,
     signers,
     holders,
     claimant: holders[0],
