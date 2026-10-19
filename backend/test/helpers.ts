@@ -41,10 +41,23 @@ export async function increaseTime(seconds: number | bigint) {
   await hre.network.provider.send("evm_mine", []);
 }
 
-/** Deploys the protocol with seven policyholders past the waiting period and a seeded pool. */
-export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
+/**
+ * Deploys the protocol with seven policyholders past the waiting period and a seeded pool. With
+ * `vrf: true`, juries come from VRFRandomness behind a mock Chainlink coordinator (`t.coordinator`).
+ */
+export async function setup(keeperOptions: Partial<KeeperOptions> = {}, { vrf = false } = {}) {
   await hre.run("compile", { quiet: true });
-  const ctx = await deployContracts();
+  let coordinator: Contract | undefined;
+  if (vrf) {
+    coordinator = (await ethers.deployContract("MockVRFCoordinator")) as unknown as Contract;
+    await (await coordinator.createSubscription()).wait();
+  }
+  const ctx = await deployContracts(
+    {},
+    coordinator
+      ? { vrf: { coordinator: await coordinator.getAddress(), subscriptionId: 1n, keyHash: id("lane"), addConsumer: true } }
+      : {},
+  );
   const signers = await ethers.getSigners();
   const holders = signers.slice(1, 8);
   const poolAddr = await ctx.pool.getAddress();
@@ -67,6 +80,7 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
     network: "hardhat",
     chainId: "31337",
     deployer: ctx.deployer.address,
+    randomnessProvider: ctx.randomnessProvider,
     addresses,
     params: Object.fromEntries(Object.entries(ctx.params).map(([k, v]) => [k, String(v)])),
   };
@@ -123,6 +137,7 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
 
   return {
     ...ctx,
+    coordinator,
     deployment,
     baseUrl,
     signers,

@@ -16,6 +16,8 @@ export interface Deployment {
   network: string;
   chainId: string;
   deployer: string;
+  /** "mock" (MockRandomness) or "vrf" (Chainlink VRF); absent in files written before VRF support. */
+  randomnessProvider?: "mock" | "vrf";
   addresses: DeploymentAddresses;
   params: Record<string, string>;
 }

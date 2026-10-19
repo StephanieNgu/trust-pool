@@ -1,8 +1,9 @@
 // The keeper moves claims along without anyone having to push them by hand:
 //
-//   JuryPending  -> fulfils the pending randomness request, which selects the jury (needs the
-//                   MockRandomness owner key; production swaps this for Chainlink VRF). If the
-//                   randomness is still missing after the timeout, cancels the claim instead.
+//   JuryPending  -> with MockRandomness, fulfils the pending randomness request, which selects the
+//                   jury (needs the MockRandomness owner key). With Chainlink VRF the coordinator
+//                   answers on its own and the keeper leaves it alone. Either way, if the randomness
+//                   is still missing after the timeout, cancels the claim instead.
 //   Voting       -> calls finalize once the voting window has closed or every juror has voted
 //   Approved     -> calls executePayout, so approved claims are paid automatically
 //
@@ -19,7 +20,7 @@ export interface Logger {
 }
 
 export interface KeeperOptions {
-  /** Fulfil randomness requests. Requires `signer` to own MockRandomness. */
+  /** Fulfil randomness requests. Requires MockRandomness, owned by `signer`. */
   fulfillRandomness: boolean;
   /** Finalize claims whose voting has closed and pay approved claims. */
   autoResolve: boolean;
@@ -68,7 +69,8 @@ export class Keeper {
 
   /**
    * Builds a keeper whose contracts send transactions from `signer`. Randomness fulfilment is
-   * switched off, with a warning, when the signer does not own the randomness provider.
+   * switched off when the provider is Chainlink VRF (which fulfils itself) or, with a warning, when
+   * the signer does not own MockRandomness.
    */
   static async create(contracts: ProtocolContracts, signer: Signer, options: KeeperOptions): Promise<Keeper> {
     const logger = options.logger ?? silent;
@@ -78,6 +80,10 @@ export class Keeper {
     ) as unknown as ProtocolContracts;
 
     let fulfillRandomness = options.fulfillRandomness;
+    if (fulfillRandomness && !(await isMockRandomness(contracts))) {
+      logger.info("Jury randomness comes from Chainlink VRF; the keeper only cancels claims whose randomness stalls.");
+      fulfillRandomness = false;
+    }
     if (fulfillRandomness) {
       const owner: string = await contracts.randomness.owner();
       if (owner.toLowerCase() !== address.toLowerCase()) {
@@ -195,6 +201,16 @@ export class Keeper {
       this.lastErrors.set(key, error);
       return false;
     }
+  }
+}
+
+/** MockRandomness exposes pendingRequester; VRFRandomness does not, so the call reverts there. */
+async function isMockRandomness(contracts: ProtocolContracts): Promise<boolean> {
+  try {
+    await contracts.randomness.pendingRequester(0);
+    return true;
+  } catch {
+    return false;
   }
 }
 
