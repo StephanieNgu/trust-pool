@@ -106,7 +106,8 @@ describe("LocalEvidenceStore", async () => {
     assert.equal(first.created, true);
     assert.equal(second.created, false);
     assert.ok(first.key.equals(second.key));
-    assert.equal((await stat(keyFile)).mode & 0o777, 0o600);
+    // Windows has no POSIX permission bits (files report 0o666), so only check the mode elsewhere.
+    if (process.platform !== "win32") assert.equal((await stat(keyFile)).mode & 0o777, 0o600);
   });
 
   it("rejects oversized files", async () => {
