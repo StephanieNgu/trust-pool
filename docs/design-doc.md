@@ -294,6 +294,8 @@ sequenceDiagram
 | Evidence disk or backup is copied | AES-256-GCM encryption at rest | Key management service, key rotation |
 | Device ID guessed from its hash | None: `keccak256(IMEI)` can be brute-forced for known IMEI ranges | Salt the device hash per policy |
 | Jurors collude or don't care | None: there is no juror reward or stake in the MVP, so the protocol makes no anti-collusion claim | Juror stake, coherence rewards |
+| One policyholder claims again and again | None: the coverage limit caps each claim, but a paid claim does not reduce it | Lifetime coverage limit, each payout deducted (§10a) |
+| The same damage is claimed twice | None: a new claim can reuse the old evidence, and jurors see only the current claim | Jurors see the policy's claim history and earlier evidence (§10a) |
 
 ## 9. Testing and CI
 
@@ -317,6 +319,23 @@ These are known gaps, deliberately left out of the prototype.
 9. **End-to-end evidence encryption** to each juror's key, so even the backend cannot read evidence (encryption at rest and juror-only access are built)
 10. **Regulatory structure**, since this resembles insurance in most jurisdictions (a discretionary-mutual model is one path)
 11. **Upgradeability,** timelocks, and an emergency pause
+
+## 10a. Feature-complete Plan: Closing Loopholes
+
+The goal for the feature-complete milestone is to close the ways the MVP can be gamed, not to add new surface. Agreed so far:
+
+| Loophole | Today (MVP) | Planned fix | Touches |
+|---|---|---|---|
+| Repeat claims | `coverageLimit` caps each claim; a paid claim leaves it unchanged, so a holder can keep claiming | Make `coverageLimit` a lifetime total per policy. `executePayout` deducts the paid amount; `submitClaim` checks the request against what remains; the policy is exhausted at zero | `PolicyRegistry`, `ClaimManager`, dashboard |
+| Duplicate claims | A new claim can reuse earlier evidence, and jurors see only the claim in front of them | Show jurors the policy's earlier claims (amount, outcome, date) and let them open that earlier evidence while the new claim is in Voting, so they can judge whether it is the same damage | Backend evidence access rules, claim detail and jury screens |
+| Biased jury selection | The keeper owns `MockRandomness` and chooses the seed | `VRFRandomness` adapter (Chainlink VRF v2.5) on Sepolia, as in §6b | New adapter, deploy config |
+| Jurors with nothing at stake | No juror reward or penalty | Design juror stakes and coherence rewards (future work 3); build only if time allows | `PolicyRegistry`, `JuryModule` |
+
+Considered and not planned:
+- **Rejecting a reused evidence hash on-chain.** Cheap to add, but any re-saved or re-encoded photo produces a new hash, so it stops only the laziest duplicate. Human review of the claim history covers it.
+- **Automatic near-duplicate image detection** (perceptual hashing in the backend). Too much effort for this milestone; jurors comparing evidence covers the same risk.
+
+Also planned: readable contract error messages in the frontend (it currently shows "unknown custom error") and browser end-to-end tests.
 
 ## 11. Repository Layout
 
