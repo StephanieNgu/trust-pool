@@ -7,6 +7,7 @@ const SEED_LIQUIDITY = USDC(10_000);
 const EVIDENCE = ethers.keccak256(ethers.toUtf8Bytes("ipfs://demo-evidence-bundle"));
 
 const deviceHash = (label) => ethers.keccak256(ethers.toUtf8Bytes(`device:${label}`));
+const enrollmentHash = (label) => ethers.keccak256(ethers.toUtf8Bytes(`enrollment:${label}`));
 
 /** Fresh deployment with no policies. */
 async function deployFixture() {
@@ -32,7 +33,7 @@ async function activePoolFixture() {
   for (const [i, h] of holders.entries()) {
     await token.mint(h.address, USDC(1_000));
     await token.connect(h).approve(await pool.getAddress(), ethers.MaxUint256);
-    await registry.connect(h).buyPolicy(deviceHash(i), COVERAGE);
+    await registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
   }
   await time.increase(ctx.params.waitingPeriod);
 
@@ -91,6 +92,7 @@ module.exports = {
   EVIDENCE,
   HOLDER_COUNT,
   deviceHash,
+  enrollmentHash,
   deployFixture,
   activePoolFixture,
   selectJury,

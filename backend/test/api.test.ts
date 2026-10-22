@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Keeper } from "../src/keeper";
-import { PHOTO, USDC, setup } from "./helpers";
+import { PHOTO, USDC, setup, testDevice, testImei } from "./helpers";
 
 describe("API", () => {
   let t: Awaited<ReturnType<typeof setup>>;
@@ -56,11 +56,16 @@ describe("API", () => {
     const hash = res.body.evidenceHash;
     assert.match(hash, /^0x[0-9a-f]{64}$/);
 
+    // Each upload is stamped with its own capture code, so the same photos sent again are a new bundle.
     const again = await t.post("/api/evidence", { description: "Both sides", files }, t.claimant);
-    assert.equal(again.body.evidenceHash, hash, "same evidence, same hash");
+    assert.notEqual(again.body.evidenceHash, hash, "new capture, new hash");
 
     const summary = (await t.getAs(`/api/evidence/${hash}`, t.claimant)).body;
     assert.equal(summary.description, "Both sides");
+    assert.equal(summary.kind, "claim");
+    assert.equal(summary.device, null);
+    assert.match(summary.capture.code, /^TP-[2-9A-Z]{6}$/);
+    assert.ok(summary.capture.receivedAt >= summary.capture.issuedAt);
     assert.deepEqual(
       summary.files.map((f: { name: string; size: number; url: string }) => [f.name, f.size, f.url]),
       [
@@ -78,6 +83,74 @@ describe("API", () => {
 
     // Uppercase hex is accepted too.
     assert.equal((await t.getAs(`/api/evidence/0x${hash.slice(2).toUpperCase()}`, t.claimant)).status, 200);
+  });
+
+  describe("capture codes", () => {
+    const files = [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }];
+
+    it("issues a code only to a signed-in wallet", async () => {
+      assert.equal((await t.postRaw("/api/capture/code", {})).status, 401);
+      const res = await t.postRaw("/api/capture/code", {}, t.claimant);
+      assert.equal(res.status, 201);
+      assert.match(res.body.code, /^TP-[2-9A-Z]{6}$/);
+      assert.equal(res.body.expiresAt - res.body.issuedAt, 15 * 60);
+    });
+
+    it("requires an unused code issued to the uploading wallet", async () => {
+      const upload = (json: object, signer = t.claimant) => t.postRaw("/api/evidence", { files, ...json }, signer);
+      assert.equal((await upload({})).status, 400, "no code");
+      assert.equal((await upload({ captureCode: "TP-AAAAAA" })).status, 400, "never issued");
+
+      const othersCode = await t.captureCode(t.holders[3]);
+      assert.equal((await upload({ captureCode: othersCode })).status, 400, "issued to another wallet");
+
+      const code = await t.captureCode(t.claimant);
+      const res = await upload({ captureCode: code });
+      assert.equal(res.status, 201);
+      assert.equal(res.body.capture.code, code);
+      assert.equal((await upload({ captureCode: code })).status, 400, "already used");
+    });
+
+    it("keeps the code when the upload is rejected for another reason", async () => {
+      const code = await t.captureCode(t.claimant);
+      assert.equal((await t.postRaw("/api/evidence", { files: [], captureCode: code }, t.claimant)).status, 400);
+      assert.equal((await t.postRaw("/api/evidence", { files, captureCode: code }, t.claimant)).status, 201);
+    });
+  });
+
+  describe("enrollment", () => {
+    const files = [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }];
+
+    it("lets a wallet without a policy enrol a device", async () => {
+      const newcomer = t.signers[15];
+      const res = await t.post("/api/evidence", { kind: "enrollment", device: testDevice(40), files }, newcomer);
+      assert.equal(res.status, 201);
+      assert.equal(res.body.kind, "enrollment");
+      assert.deepEqual(res.body.device, testDevice(40));
+    });
+
+    it("rejects missing or invalid device details", async () => {
+      const newcomer = t.signers[15];
+      const bad = [
+        {},
+        { device: { ...testDevice(41), imei: "12345" } },
+        { device: { ...testDevice(41), imei: testImei(41).slice(0, 14) + ((Number(testImei(41)[14]) + 1) % 10) } },
+        { device: { ...testDevice(41), model: "" } },
+        { device: { imei: testImei(41) } },
+      ];
+      for (const extra of bad) {
+        const res = await t.post("/api/evidence", { kind: "enrollment", files, ...extra }, newcomer);
+        assert.equal(res.status, 400, JSON.stringify(extra));
+      }
+      assert.equal((await t.post("/api/evidence", { kind: "selfie", files }, newcomer)).status, 400);
+    });
+
+    it("shows the policy's enrollment hash in the member view", async () => {
+      const member = (await t.api(`/api/members/${t.claimant.address}`)).body;
+      assert.match(member.policy.enrollmentHash, /^0x[0-9a-f]{64}$/);
+      assert.equal((await t.getAs(`/api/evidence/${member.policy.enrollmentHash}`, t.claimant)).body.kind, "enrollment");
+      assert.equal((await t.getAs(`/api/evidence/${member.policy.enrollmentHash}`, t.holders[4])).status, 403);
+    });
   });
 
   describe("evidence privacy", () => {

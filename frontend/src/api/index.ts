@@ -16,19 +16,28 @@ export {
 } from "./auth";
 export {
   ALLOWED_EVIDENCE_TYPES,
+  MAX_DEVICE_FIELD_LENGTH,
   MAX_EVIDENCE_FILE_BYTES,
   MAX_EVIDENCE_FILES,
+  enrollDevice,
   getClaim,
   getClaimsForMember,
   getClaimsForJuror,
   getEvidence,
   getEvidenceResource,
+  isValidImei,
+  requestCaptureCode,
   uploadEvidence,
+  validateDeviceDetails,
   validateEvidenceFiles,
 } from "./claims";
 export type {
   ApiConfig,
   ApiHealth,
+  CaptureCode,
+  CaptureStamp,
+  DeviceDetails,
+  EvidenceKind,
   ClaimDetailView,
   ClaimJury,
   ClaimState,

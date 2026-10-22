@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256 } from "ethers";
 import { Keeper } from "../src/keeper";
-import { PHOTO, USDC, commit, increaseTime, reveal, setup, signerFor } from "./helpers";
+import { PHOTO, USDC, commit, increaseTime, reveal, setup, signerFor, testImei } from "./helpers";
 
 describe("claim flow through the backend", () => {
   let t: Awaited<ReturnType<typeof setup>>;
@@ -19,8 +19,10 @@ describe("claim flow through the backend", () => {
     const { claimant, claimManager, token, api, post, getAs, keeper, signers, jury } = t;
 
     // 1. Claimant uploads photos and gets the hash to put on-chain.
+    //    The phone still turns on, so they include its IMEI from Settings > About.
     const upload = await post("/api/evidence", {
       description: "Cracked screen after a drop",
+      device: { imei: testImei(0) },
       files: [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }],
     }, claimant);
     assert.equal(upload.status, 201);
@@ -32,6 +34,10 @@ describe("claim flow through the backend", () => {
     assert.equal(claim.state, "JuryPending");
     assert.equal(claim.jury.phase, "AwaitingRandomness");
     assert.deepEqual(claim.evidence, { available: true, url: `/api/evidence/${evidenceHash}` });
+    const { enrollmentHash } = claim;
+    assert.equal(enrollmentHash, (await t.registry.getPolicy(claimant.address)).enrollmentHash);
+    assert.deepEqual(claim.enrollment, { available: true, url: `/api/evidence/${enrollmentHash}` });
+    assert.deepEqual(claim.deviceCheck, { enrollmentImeiMatchesPolicy: true, claimImeiMatchesEnrollment: true });
 
     // 3. Keeper fulfils the randomness request; five jurors are selected, claimant excluded.
     const actions = await keeper.tick();
@@ -59,10 +65,17 @@ describe("claim flow through the backend", () => {
       assert.equal(raw.status, 200);
       assert.equal(keccak256(Buffer.from(raw.text)), (await claimManager.getClaim(1)).evidenceHash);
     }
-    // A policyholder who is not on this jury cannot see it.
+    // Jurors also see the photos taken at signup, to check it is the same phone.
+    for (const addr of jurorAddrs) {
+      const enrollment = await getAs(`/api/evidence/${enrollmentHash}`, signerFor(signers, addr));
+      assert.equal(enrollment.status, 200);
+      assert.equal(enrollment.body.kind, "enrollment");
+    }
+    // A policyholder who is not on this jury cannot see either.
     const outsider = t.holders.find((h) => h !== claimant && !jurorAddrs.includes(h.address));
     assert.ok(outsider);
     assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, outsider)).status, 403);
+    assert.equal((await getAs(`/api/evidence/${enrollmentHash}`, outsider)).status, 403);
 
     // Commit-reveal: 4 approve, 1 reject. While sealed, the API shows who committed but no tally.
     for (const [i, addr] of jurorAddrs.entries()) {
@@ -106,6 +119,7 @@ describe("claim flow through the backend", () => {
 
     // Jurors only see evidence while voting is open.
     assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, signerFor(signers, jurorAddrs[0]))).status, 403);
+    assert.equal((await getAs(`/api/evidence/${enrollmentHash}`, signerFor(signers, jurorAddrs[0]))).status, 403);
     assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, claimant)).status, 200);
 
     const member = (await api(`/api/members/${claimant.address}`)).body;

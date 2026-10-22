@@ -75,7 +75,7 @@ classDiagram
     class PolicyRegistry {
         +mapping policyOf
         +uint256 waitingPeriod
-        +buyPolicy(deviceId, coverageLimit)
+        +buyPolicy(deviceIdHash, coverageLimit, enrollmentHash)
         +isActive(holder) bool
         +eligibleJurors(exclude) address[]
     }
@@ -87,6 +87,7 @@ classDiagram
         +uint256 coverageLimit
         +uint256 startTime
         +Status status
+        +bytes32 enrollmentHash
     }
 
     class Pool {
@@ -229,9 +230,15 @@ Which contract may call which privileged function. All wiring is one-time: each 
 
 The Express backend stores evidence, runs a keeper, and serves read-only views of on-chain state. It never holds user keys.
 
+**Device photos.** Each claim is checked against the phone registered at signup.
+- At signup the member enters the IMEI (checked with its Luhn digit), serial, make, model and colour, and takes three photos: the front with the screen on, the back, and Settings > About. These go to the backend as an "enrollment" bundle, and its hash is stored on the policy (`enrollmentHash`) next to `keccak256(IMEI)`.
+- Before taking photos, at signup or for a claim, the app requests a one-time capture code (`POST /api/capture/code`) that should appear in the first photo. The backend stamps the bundle with the code and when it was issued and received, and refuses a code that is missing, expired (15 minutes), used, or issued to another wallet. This shows the photos were taken just now rather than found online.
+- Jurors see the signup photos and the claim photos side by side, with automatic checks: does the signup IMEI hash to the policy's `deviceIdHash`, and does the IMEI given with the claim (optional, if the phone still turns on) match the signup one. The frontend warns if a claim was filed with the signup bundle instead of new photos.
+- Limits: a web app cannot stop someone uploading an old photo instead of using the camera, so the capture code is the freshness check. A phone that is already broken inside but looks fine at signup is not caught; the waiting period is the main defence there.
+
 **Evidence policy.** Evidence is private, not public IPFS.
-- Uploading requires a wallet signature from a holder with an Active policy.
-- A bundle is served only to (a) the wallets that uploaded it and (b) the selected jurors of a claim that one of those uploaders filed with it, and to jurors only while that claim is in Voting. Other members, past jurors and anonymous callers get nothing. Copying a hash from the chain and filing a claim with it grants nothing.
+- Uploading claim evidence requires a wallet signature from a holder with an Active policy. Enrollment bundles only need a signature, since they come before the policy exists.
+- A bundle is served only to (a) the wallets that uploaded it and (b) the selected jurors of a claim that one of those uploaders filed with it (as its evidence, or as the enrollment of its policy), and to jurors only while that claim is in Voting. Other members, past jurors and anonymous callers get nothing. Copying a hash from the chain and filing a claim with it grants nothing.
 - Requests are authenticated with a signed, timestamped message (EIP-191, valid 10 minutes); there are no passwords or sessions.
 - Every bundle is encrypted at rest with AES-256-GCM under the backend's evidence key (`EVIDENCE_ENCRYPTION_KEY`; on a local chain a key file is generated). The evidence hash is bound as authenticated data, so a file swapped or altered on disk fails to decrypt. The hash on-chain is of the plaintext, so jurors still verify it after download.
 - Trust boundary: the backend holds the key and decrypts for authorized readers, so its operator could read evidence. End-to-end encryption to each juror's own key was not chosen because jurors are unknown when evidence is uploaded and MetaMask has deprecated its encryption API; it remains future work #9.

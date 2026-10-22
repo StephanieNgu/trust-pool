@@ -7,8 +7,8 @@ import { Interface, type InterfaceAbi } from "ethers";
 import mockStablecoinAbi from "../src/contracts/abis/MockStablecoin.json";
 import policyRegistryAbi from "../src/contracts/abis/PolicyRegistry.json";
 import poolAbi from "../src/contracts/abis/Pool.json";
-import { ALLOWED_EVIDENCE_TYPES, MAX_EVIDENCE_FILE_BYTES, MAX_EVIDENCE_FILES } from "../src/api";
-import { ALLOWED_CONTENT_TYPES, MAX_DESCRIPTION_LENGTH, MAX_FILE_BYTES, MAX_FILES } from "../../backend/src/evidence";
+import { ALLOWED_EVIDENCE_TYPES, MAX_DEVICE_FIELD_LENGTH as UI_MAX_DEVICE_FIELD_LENGTH, MAX_EVIDENCE_FILE_BYTES, MAX_EVIDENCE_FILES, isValidImei as uiIsValidImei } from "../src/api";
+import { ALLOWED_CONTENT_TYPES, MAX_DESCRIPTION_LENGTH, MAX_DEVICE_FIELD_LENGTH, MAX_FILE_BYTES, MAX_FILES, isValidImei } from "../../backend/src/evidence";
 
 const FRONTEND_ABIS: Record<string, InterfaceAbi> = {
   MockStablecoin: mockStablecoinAbi,
@@ -43,5 +43,9 @@ describe("frontend evidence rules", () => {
     assert.equal(MAX_EVIDENCE_FILE_BYTES, MAX_FILE_BYTES);
     // uploadEvidence enforces 2,000 characters before sending.
     assert.equal(MAX_DESCRIPTION_LENGTH, 2_000);
+    assert.equal(UI_MAX_DEVICE_FIELD_LENGTH, MAX_DEVICE_FIELD_LENGTH);
+    for (const imei of ["490154203237518", "490154203237517", "35693803564380", "3569380356438090", "49015420323751x", ""]) {
+      assert.equal(uiIsValidImei(imei), isValidImei(imei), imei);
+    }
   });
 });

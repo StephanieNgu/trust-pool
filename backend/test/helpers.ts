@@ -10,7 +10,8 @@ import { type Contract, type Signer, id } from "ethers";
 import { createApp } from "../src/app";
 import { AUTH_HEADERS, authMessage } from "../src/auth";
 import { connectContracts, type Deployment, type DeploymentAddresses } from "../src/chain";
-import { LocalEvidenceStore } from "../src/evidence";
+import { CaptureChallenges } from "../src/capture";
+import { deviceIdHash, LocalEvidenceStore } from "../src/evidence";
 import { Keeper, type KeeperOptions } from "../src/keeper";
 import { deployContracts, USDC } from "../../scripts/lib/deployContracts";
 
@@ -18,6 +19,31 @@ export { USDC };
 export const { ethers } = hre;
 
 export const PHOTO = Buffer.from("not really a jpeg, but the bytes are what matter").toString("base64");
+
+/** A valid IMEI (Luhn check digit included) for test device `i`: 35000000000000 + i, then the check digit. */
+export function testImei(i: number): string {
+  const body = (35_000_000_000_000 + i).toString();
+  for (let check = 0; check <= 9; check++) {
+    const imei = body + check;
+    let sum = 0;
+    for (let k = 0; k < 15; k++) {
+      let digit = Number(imei[14 - k]);
+      if (k % 2 === 1) digit = digit * 2 > 9 ? digit * 2 - 9 : digit * 2;
+      sum += digit;
+    }
+    if (sum % 10 === 0) return imei;
+  }
+  throw new Error("unreachable");
+}
+
+/** The device details a member enters at signup, for test device `i`. */
+export const testDevice = (i: number) => ({
+  imei: testImei(i),
+  serial: `SERIAL${i}`,
+  make: "Apple",
+  model: "iPhone 13",
+  color: "Blue",
+});
 
 const saltFor = (claimId: number, juror: string) => id(`salt:${claimId}:${juror}`);
 
@@ -48,6 +74,9 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
   const signers = await ethers.getSigners();
   const holders = signers.slice(1, 8);
   const poolAddr = await ctx.pool.getAddress();
+  const evidenceDir = await mkdtemp(join(tmpdir(), "trustpool-evidence-"));
+  const evidence = new LocalEvidenceStore(evidenceDir, randomBytes(32));
+  const captures = new CaptureChallenges();
 
   await (await ctx.token.mint(ctx.deployer.address, USDC(10_000))).wait();
   await (await ctx.token.approve(poolAddr, USDC(10_000))).wait();
@@ -55,7 +84,14 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
   for (const [i, h] of holders.entries()) {
     await (await ctx.token.mint(h.address, USDC(1_000))).wait();
     await (await ctx.token.connect(h).approve(poolAddr, ethers.MaxUint256)).wait();
-    await (await ctx.registry.connect(h).buyPolicy(ethers.id(`device:${i}`), USDC(1_000))).wait();
+    // Enrol as the app would: device details and signup photos stamped with a capture code.
+    const stamp = captures.consume(h.address, captures.issue(h.address).code);
+    const enrollment = await evidence.put(
+      { kind: "enrollment", device: testDevice(i), files: [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }] },
+      h.address,
+      stamp,
+    );
+    await (await ctx.registry.connect(h).buyPolicy(deviceIdHash(testImei(i)), USDC(1_000), enrollment.evidenceHash)).wait();
   }
   await increaseTime(ctx.params.waitingPeriod);
 
@@ -79,9 +115,7 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
     seed: () => 42n,
     ...keeperOptions,
   });
-  const evidenceDir = await mkdtemp(join(tmpdir(), "trustpool-evidence-"));
-  const evidence = new LocalEvidenceStore(evidenceDir, randomBytes(32));
-  const app = createApp({ deployment, provider, contracts, evidence, keeper, corsOrigin: "*" });
+  const app = createApp({ deployment, provider, contracts, evidence, captures, keeper, corsOrigin: "*" });
   const server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -107,12 +141,25 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
       [AUTH_HEADERS.signature]: await signer.signMessage(authMessage(address, deployment.chainId, issuedAt)),
     };
   };
-  const post = async (path: string, json: unknown, signer?: Signer) =>
+  /** POST exactly `json`. */
+  const postRaw = async (path: string, json: unknown, signer?: Signer) =>
     api(path, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(signer ? await authHeaders(signer) : {}) },
       body: JSON.stringify(json),
     });
+  /** A fresh capture code for `signer`, as the app requests before opening the camera. */
+  const captureCode = async (signer: Signer): Promise<string> => (await postRaw("/api/capture/code", {}, signer)).body.code;
+  /**
+   * POST as the app would. Evidence uploads get a fresh capture code unless `json` already has one,
+   * so tests about other things need not repeat that step; capture tests use postRaw.
+   */
+  const post = async (path: string, json: unknown, signer?: Signer) => {
+    if (path === "/api/evidence" && signer && json && typeof json === "object" && !("captureCode" in json)) {
+      json = { ...json, captureCode: await captureCode(signer) };
+    }
+    return postRaw(path, json, signer);
+  };
   /** GET as `signer`. */
   const getAs = async (path: string, signer: Signer) => api(path, { headers: await authHeaders(signer) });
 
@@ -133,6 +180,9 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
     evidence,
     api,
     post,
+    postRaw,
+    captureCode,
+    captures,
     getAs,
     authHeaders,
     close,

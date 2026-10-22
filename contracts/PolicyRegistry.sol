@@ -35,12 +35,14 @@ contract PolicyRegistry is IPolicyRegistry, Ownable {
         address indexed holder,
         bytes32 deviceIdHash,
         uint256 coverageLimit,
-        uint256 premium
+        uint256 premium,
+        bytes32 enrollmentHash
     );
     event PolicyLapsed(uint256 indexed policyId, address indexed holder);
 
     error ZeroAddress();
     error InvalidDevice();
+    error InvalidEnrollment();
     error InvalidCoverage();
     error InvalidBps();
     error AlreadyHasActivePolicy();
@@ -75,8 +77,14 @@ contract PolicyRegistry is IPolicyRegistry, Ownable {
     /// @notice Buy a policy. The caller must first approve the Pool for `premiumFor(coverageLimit)`.
     /// @param deviceIdHash keccak256 of the device identifier (e.g. IMEI); the raw ID never goes on-chain.
     /// @param coverageLimit Maximum amount any single claim on this policy can pay, in token units.
-    function buyPolicy(bytes32 deviceIdHash, uint256 coverageLimit) external returns (uint256 policyId) {
+    /// @param enrollmentHash Hash of the enrollment bundle (device details and signup photos) held by
+    ///        the backend. Jurors compare a claim's photos against it to check it is the same device.
+    function buyPolicy(bytes32 deviceIdHash, uint256 coverageLimit, bytes32 enrollmentHash)
+        external
+        returns (uint256 policyId)
+    {
         if (deviceIdHash == bytes32(0)) revert InvalidDevice();
+        if (enrollmentHash == bytes32(0)) revert InvalidEnrollment();
         if (coverageLimit == 0 || coverageLimit > maxCoverageLimit) revert InvalidCoverage();
         if (_policyOf[msg.sender].status == Status.Active) revert AlreadyHasActivePolicy();
         if (deviceCovered[deviceIdHash]) revert DeviceAlreadyCovered();
@@ -91,7 +99,8 @@ contract PolicyRegistry is IPolicyRegistry, Ownable {
             deviceIdHash: deviceIdHash,
             coverageLimit: coverageLimit,
             startTime: block.timestamp,
-            status: Status.Active
+            status: Status.Active,
+            enrollmentHash: enrollmentHash
         });
         deviceCovered[deviceIdHash] = true;
 
@@ -100,7 +109,7 @@ contract PolicyRegistry is IPolicyRegistry, Ownable {
             _holders.push(msg.sender);
         }
 
-        emit PolicyPurchased(policyId, msg.sender, deviceIdHash, coverageLimit, premium);
+        emit PolicyPurchased(policyId, msg.sender, deviceIdHash, coverageLimit, premium, enrollmentHash);
         pool.collectPremium(msg.sender, premium);
     }
 

@@ -1,7 +1,16 @@
 import { getAddress } from "ethers";
 import { getWalletAuthHeaders } from "./auth";
 import { ApiError, apiRequest } from "./client";
-import type { ClaimDetailView, ClaimState, ClaimView, EvidenceDetail, EvidenceSummary } from "./types";
+import type {
+  CaptureCode,
+  ClaimDetailView,
+  ClaimState,
+  ClaimView,
+  DeviceDetails,
+  EvidenceDetail,
+  EvidenceKind,
+  EvidenceSummary,
+} from "./types";
 
 export const MAX_EVIDENCE_FILES = 10;
 export const MAX_EVIDENCE_FILE_BYTES = 5 * 1024 * 1024;
@@ -42,9 +51,54 @@ export function validateEvidenceFiles(files: File[]): void {
   }
 }
 
-export async function uploadEvidence(address: string, description: string, files: File[]): Promise<EvidenceSummary> {
+export const MAX_DEVICE_FIELD_LENGTH = 64;
+export const DEVICE_TEXT_FIELDS = ["serial", "make", "model", "color"] as const;
+
+/** True for a 15-digit IMEI whose last digit is its Luhn check digit, as the backend requires. */
+export function isValidImei(imei: string): boolean {
+  if (!/^\d{15}$/.test(imei)) return false;
+  let sum = 0;
+  for (let i = 0; i < 15; i++) {
+    let digit = Number(imei[14 - i]);
+    if (i % 2 === 1) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+  }
+  return sum % 10 === 0;
+}
+
+/** Trims the device fields and checks them the way the backend will; throws a readable error. */
+export function validateDeviceDetails(device: DeviceDetails, kind: EvidenceKind): DeviceDetails {
+  const imei = device.imei.replace(/[\s-]/g, "");
+  if (!isValidImei(imei)) throw new Error("Enter the phone's 15-digit IMEI. Dial *#06# or look in Settings > About.");
+  const result: DeviceDetails = { imei };
+  for (const field of DEVICE_TEXT_FIELDS) {
+    const value = device[field]?.trim() ?? "";
+    if (!value && kind === "claim") continue;
+    if (!value || value.length > MAX_DEVICE_FIELD_LENGTH) {
+      throw new Error(`Enter the device ${field} (up to ${MAX_DEVICE_FIELD_LENGTH} characters).`);
+    }
+    result[field] = value;
+  }
+  return result;
+}
+
+/** A one-time code for the photos about to be taken. Asks the wallet to sign in if needed. */
+export async function requestCaptureCode(address: string): Promise<CaptureCode> {
+  const headers = await getWalletAuthHeaders(address);
+  return apiRequest<CaptureCode>("/api/capture/code", { method: "POST", headers });
+}
+
+async function postBundle(
+  address: string,
+  body: { kind: EvidenceKind; description: string; device?: DeviceDetails; captureCode: string },
+  files: File[],
+): Promise<EvidenceSummary> {
   validateEvidenceFiles(files);
-  if (description.length > 2_000) throw new Error("Evidence description must be 2,000 characters or fewer.");
+  if (body.description.length > 2_000) throw new Error("Evidence description must be 2,000 characters or fewer.");
+  if (!body.captureCode) throw new Error("Get a capture code before taking the photos.");
   const headers = await getWalletAuthHeaders(address);
   const encoded = await Promise.all(
     files.map(async (file) => ({ name: file.name, contentType: file.type, data: await fileAsBase64(file) })),
@@ -52,9 +106,35 @@ export async function uploadEvidence(address: string, description: string, files
   return apiRequest<EvidenceSummary>("/api/evidence", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify({ description, files: encoded }),
+    body: JSON.stringify({ ...body, files: encoded }),
     timeoutMs: 60_000,
   });
+}
+
+/**
+ * Uploads claim evidence. `captureCode` must be one this wallet requested and the photos should show.
+ * `imei` is optional: include it when the phone still turns on, so it can be matched to the enrollment.
+ */
+export async function uploadEvidence(
+  address: string,
+  description: string,
+  files: File[],
+  captureCode: string,
+  imei?: string,
+): Promise<EvidenceSummary> {
+  const device = imei?.trim() ? validateDeviceDetails({ imei }, "claim") : undefined;
+  return postBundle(address, { kind: "claim", description, device, captureCode }, files);
+}
+
+/** Uploads the signup photos and device details. Pass the returned hash to purchaseCoverage. */
+export async function enrollDevice(
+  address: string,
+  device: DeviceDetails,
+  files: File[],
+  captureCode: string,
+): Promise<EvidenceSummary> {
+  const details = validateDeviceDetails(device, "enrollment");
+  return postBundle(address, { kind: "enrollment", description: "", device: details, captureCode }, files);
 }
 
 export async function getClaimsForMember(address: string, state?: ClaimState): Promise<ClaimView[]> {

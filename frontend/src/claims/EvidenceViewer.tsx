@@ -1,11 +1,21 @@
 import { keccak256 } from "ethers";
 import { useEffect, useRef, useState } from "react";
-import { ALLOWED_EVIDENCE_TYPES, getEvidence, getEvidenceResource, type ClaimDetailView } from "../api";
-import { shortHash } from "./presentation";
+import {
+  ALLOWED_EVIDENCE_TYPES,
+  getEvidence,
+  getEvidenceResource,
+  type CaptureStamp,
+  type ClaimDetailView,
+  type DeviceDetails,
+  type EvidenceKind,
+} from "../api";
+import { dateTime, shortHash } from "./presentation";
 
 interface EvidenceViewerProps {
   account: string;
   claim: ClaimDetailView;
+  /** Which bundle to show: the claim's photos, or the photos taken when the device was enrolled. */
+  source?: EvidenceKind;
   onAuthenticated?(): void;
   onVerificationChange?(verified: boolean): void;
 }
@@ -27,7 +37,10 @@ interface StoredEvidenceFile {
 
 interface StoredEvidenceBundle {
   version: number;
+  kind?: EvidenceKind;
   description: string;
+  device?: DeviceDetails | null;
+  capture?: CaptureStamp | null;
   files: StoredEvidenceFile[];
 }
 
@@ -44,7 +57,7 @@ function fileSize(bytes: number) {
 
 function parseVerifiedBundle(raw: Uint8Array): StoredEvidenceBundle {
   const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)) as Partial<StoredEvidenceBundle>;
-  if (parsed.version !== 1 || typeof parsed.description !== "string" || !Array.isArray(parsed.files) || parsed.files.length === 0 || parsed.files.length > 10) {
+  if ((parsed.version !== 1 && parsed.version !== 2) || typeof parsed.description !== "string" || !Array.isArray(parsed.files) || parsed.files.length === 0 || parsed.files.length > 10) {
     throw new Error("The verified evidence bundle has an invalid format.");
   }
   for (const file of parsed.files) {
@@ -75,8 +88,18 @@ function decodeFile(data: string, expectedSize: number): Uint8Array<ArrayBuffer>
   return bytes;
 }
 
-export function EvidenceViewer({ account, claim, onAuthenticated, onVerificationChange }: EvidenceViewerProps) {
+const COPY = {
+  claim: { eyebrow: "PRIVATE EVIDENCE", title: "Claim photos" },
+  enrollment: { eyebrow: "REGISTERED AT SIGNUP", title: "Signup photos" },
+} as const;
+
+export function EvidenceViewer({ account, claim, source = "claim", onAuthenticated, onVerificationChange }: EvidenceViewerProps) {
+  const evidenceHash = (source === "claim" ? claim.evidenceHash : claim.enrollmentHash) ?? "";
+  const available = source === "claim" ? claim.evidence.available : claim.enrollment.available;
   const [description, setDescription] = useState("");
+  const [device, setDevice] = useState<DeviceDetails | null>(null);
+  const [capture, setCapture] = useState<CaptureStamp | null>(null);
+  const [kindMismatch, setKindMismatch] = useState(false);
   const [files, setFiles] = useState<EvidencePreview[]>([]);
   const [verified, setVerified] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
@@ -93,12 +116,15 @@ export function EvidenceViewer({ account, claim, onAuthenticated, onVerification
     requestId.current += 1;
     releasePreviews();
     setDescription("");
+    setDevice(null);
+    setCapture(null);
+    setKindMismatch(false);
     setFiles([]);
     setVerified(null);
     setError("");
     setLoading(false);
     onVerificationChange?.(false);
-  }, [account, claim.evidenceHash, onVerificationChange]);
+  }, [account, evidenceHash, onVerificationChange]);
 
   useEffect(() => () => {
     requestId.current += 1;
@@ -117,13 +143,13 @@ export function EvidenceViewer({ account, claim, onAuthenticated, onVerification
 
     const createdUrls: string[] = [];
     try {
-      const evidence = await getEvidence(account, claim.evidenceHash);
+      const evidence = await getEvidence(account, evidenceHash);
       onAuthenticated?.();
-      if (evidence.evidenceHash.toLowerCase() !== claim.evidenceHash.toLowerCase()) {
+      if (evidence.evidenceHash.toLowerCase() !== evidenceHash.toLowerCase()) {
         throw new Error("The backend returned evidence for a different on-chain hash.");
       }
       const raw = await getEvidenceResource(account, evidence.rawUrl);
-      const matchesChain = keccak256(raw).toLowerCase() === claim.evidenceHash.toLowerCase();
+      const matchesChain = keccak256(raw).toLowerCase() === evidenceHash.toLowerCase();
       setVerified(matchesChain);
       if (!matchesChain) throw new Error("The evidence bundle does not match the hash recorded on-chain.");
 
@@ -141,8 +167,13 @@ export function EvidenceViewer({ account, claim, onAuthenticated, onVerification
       }
       objectUrls.current = createdUrls;
       setDescription(bundle.description);
+      setDevice(bundle.device ?? null);
+      setCapture(bundle.capture ?? null);
+      // A claim filed with the signup bundle as its evidence shows no new photos at all.
+      const mismatch = (bundle.kind ?? "claim") !== source;
+      setKindMismatch(mismatch);
       setFiles(previews);
-      onVerificationChange?.(true);
+      onVerificationChange?.(!mismatch);
     } catch (cause) {
       createdUrls.forEach((url) => URL.revokeObjectURL(url));
       if (requestId.current === activeRequest) setError(errorText(cause));
@@ -154,21 +185,29 @@ export function EvidenceViewer({ account, claim, onAuthenticated, onVerification
   const claimant = claim.claimant.toLowerCase() === account.toLowerCase();
   const selectedJuror = claim.jury?.jurors.some((juror) => juror.address.toLowerCase() === account.toLowerCase()) ?? false;
   const canRead = claimant || (selectedJuror && claim.state === "Voting");
+  const copy = COPY[source];
 
-  return <section className="evidence-viewer" aria-label="Claim evidence">
-    <div className="detail-section-heading evidence-heading"><div><span className="eyebrow">PRIVATE EVIDENCE</span><h3>Evidence files</h3></div>{verified !== null && <span className={verified ? "evidence-verified" : "evidence-mismatch"}>{verified ? "✓ Hash verified" : "⚠ Hash mismatch"}</span>}</div>
-    {!claim.evidence.available ? <p className="notice warning">The evidence bundle is not available in this backend.</p> : !canRead ? <p className="muted">Evidence files are private. Only the claimant and selected jurors during active voting can open them.</p> : <>
+  if (source === "enrollment" && !claim.enrollmentHash) {
+    return <section className="evidence-viewer" aria-label={copy.title}><div className="detail-section-heading evidence-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h3>{copy.title}</h3></div></div><p className="notice warning">This policy has no signup photos on record, so the device cannot be compared.</p></section>;
+  }
+
+  return <section className="evidence-viewer" aria-label={copy.title}>
+    <div className="detail-section-heading evidence-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h3>{copy.title}</h3></div>{verified !== null && <span className={verified ? "evidence-verified" : "evidence-mismatch"}>{verified ? "✓ Hash verified" : "⚠ Hash mismatch"}</span>}</div>
+    {!available ? <p className="notice warning">The evidence bundle is not available in this backend.</p> : !canRead ? <p className="muted">Evidence files are private. Only the claimant and selected jurors during active voting can open them.</p> : <>
       {files.length === 0 && !loading && <div className="evidence-locked"><div><strong>Wallet verification required</strong><p>The backend checks that this wallet is the claimant or a selected juror before decrypting the original files.</p></div><button className="primary" type="button" onClick={() => void loadEvidence()}>Sign in & view evidence</button></div>}
       {loading && <p className="muted" role="status">Authenticating wallet, verifying the bundle, and loading evidence…</p>}
       {error && <p className="notice warning" role="alert">{error}<button className="text-button" type="button" onClick={() => void loadEvidence()}>Try again</button></p>}
       {files.length > 0 && <>
-        <div className="evidence-description"><span>CLAIMANT STATEMENT</span><p>{description || "No written description was provided."}</p></div>
+        {kindMismatch && <p className="notice warning" role="alert">{source === "claim" ? "This claim was filed with the signup photos instead of new photos of the damage. Do not approve it." : "This is not an enrollment bundle."}</p>}
+        {source === "claim" && <div className="evidence-description"><span>CLAIMANT STATEMENT</span><p>{description || "No written description was provided."}</p></div>}
+        {device && <dl className="detail-grid compact">{(["make", "model", "color", "serial", "imei"] as const).filter((key) => device[key]).map((key) => <div key={key}><dt>{key === "imei" ? "IMEI" : key[0].toUpperCase() + key.slice(1)}</dt><dd>{device[key]}</dd></div>)}</dl>}
+        {capture ? <p className="evidence-stamp">The first photo should show the code <code>{capture.code}</code>. Code issued {dateTime(capture.issuedAt)}, photos received {dateTime(capture.receivedAt)}.</p> : <p className="notice warning">These photos were uploaded without a capture code, so nothing shows when they were taken.</p>}
         {!verified && <p className="notice warning" role="alert">Do not vote on this evidence. Its content hash does not match the hash recorded on-chain.</p>}
         <div className="evidence-files">{files.map((file) => <article className="evidence-file" key={file.index}>
           {file.contentType.startsWith("image/") && file.contentType !== "image/heic" ? <a href={file.objectUrl} target="_blank" rel="noreferrer" title={`Open ${file.name}`}><img src={file.objectUrl} alt={`Evidence: ${file.name}`} /></a> : <div className="evidence-document"><strong>{file.contentType === "image/heic" ? "HEIC" : "PDF"}</strong><span>{file.contentType === "image/heic" ? "Open the original in a compatible viewer" : "Document evidence"}</span></div>}
           <div className="evidence-file-meta"><div><strong title={file.name}>{file.name}</strong><span>{file.contentType} · {fileSize(file.size)}</span></div><a href={file.objectUrl} target="_blank" rel="noreferrer">Open original ↗</a></div>
         </article>)}</div>
-        <div className="evidence-integrity"><span>On-chain fingerprint</span><code title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</code><button className="text-button" type="button" onClick={() => void loadEvidence()}>Verify again</button></div>
+        <div className="evidence-integrity"><span>On-chain fingerprint</span><code title={evidenceHash}>{shortHash(evidenceHash)}</code><button className="text-button" type="button" onClick={() => void loadEvidence()}>Verify again</button></div>
       </>}
     </>}
   </section>;

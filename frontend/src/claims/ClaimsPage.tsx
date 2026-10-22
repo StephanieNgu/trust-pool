@@ -4,10 +4,12 @@ import {
   ALLOWED_EVIDENCE_TYPES,
   getClaimsForMember,
   uploadEvidence,
+  type CaptureCode,
   type ClaimState,
   type ClaimView,
   type DashboardOverview,
 } from "../api";
+import { CaptureCodePanel } from "../capture/CapturePanel";
 import { submitClaim } from "../contracts/claims";
 import { ClaimDetail } from "./ClaimDetail";
 import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
@@ -36,6 +38,8 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [captureCode, setCaptureCode] = useState<CaptureCode | null>(null);
+  const [imei, setImei] = useState("");
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [loadingClaims, setLoadingClaims] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -46,11 +50,13 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [stateFilter, setStateFilter] = useState<ClaimState | "All">("All");
   const fileInput = useRef<HTMLInputElement>(null);
+  const cameraInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setClaims([]);
     setSelectedClaimId(null);
     setClaimsError("");
+    setCaptureCode(null);
   }, [account]);
 
   useEffect(() => {
@@ -93,7 +99,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     setError("");
     setFeedback("Preparing evidence for secure upload…");
     try {
-      const evidence = await uploadEvidence(account, description.trim(), files);
+      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", imei);
       onAuthenticated();
       setFeedback(`Evidence uploaded (${shortHash(evidence.evidenceHash)}).`);
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
@@ -101,18 +107,22 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       setAmount("");
       setDescription("");
       setFiles([]);
+      setCaptureCode(null);
+      setImei("");
       if (fileInput.current) fileInput.current.value = "";
       setClaimRefresh((value) => value + 1);
       onSubmitted();
     } catch (cause) {
       setError(message(cause));
+      // The code is used up once the upload succeeds or expires; ask for a new one if it was rejected.
+      if (cause instanceof Error && /capture code/i.test(cause.message)) setCaptureCode(null);
     } finally {
       setBusy(false);
     }
   }
 
   const canSubmit = Boolean(
-    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && amount && files.length,
+    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && amount && files.length && captureCode,
   );
   const accepted = ALLOWED_EVIDENCE_TYPES.join(",");
 
@@ -134,9 +144,22 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       <textarea id="claim-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the damage, loss, and when it occurred." maxLength={2000} rows={5} disabled={busy} />
       <small>{description.length}/2,000 characters</small>
 
-      <label htmlFor="claim-files">Evidence files</label>
-      <input ref={fileInput} id="claim-files" className="file-input" type="file" accept={accepted} multiple required disabled={busy} onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
-      <small>1–10 JPEG, PNG, WebP, GIF, HEIC or PDF files. Maximum 5 MB each.</small>
+      <label htmlFor="claim-imei">IMEI, if the phone still turns on <span className="muted">(optional)</span></label>
+      <input id="claim-imei" value={imei} inputMode="numeric" placeholder="15 digits: dial *#06#" maxLength={20} disabled={busy} onChange={(event) => setImei(event.target.value)} />
+      <small>Checked against the IMEI you registered. If the phone is dead, photograph the SIM tray or back-panel serial instead.</small>
+
+      <label>Photos of the damage</label>
+      <CaptureCodePanel account={account} code={captureCode} disabled={busy || !ready} onCode={setCaptureCode} onAuthenticated={onAuthenticated} />
+      {captureCode && <>
+        <small>Jurors compare these with the photos you took at signup, so show the whole phone, the damage, and your code.</small>
+        <div className="capture-buttons">
+          <button className="primary" type="button" disabled={busy} onClick={() => cameraInput.current?.click()}>Take a photo</button>
+          <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>Add a file or receipt</button>
+        </div>
+        <input ref={cameraInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
+        <input ref={fileInput} id="claim-files" className="visually-hidden" type="file" accept={accepted} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
+        <small>1–10 JPEG, PNG, WebP, GIF, HEIC or PDF files. Maximum 5 MB each.</small>
+      </>}
       {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}-${index}`}><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><button type="button" disabled={busy} onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}>Remove</button></li>)}</ul>}
 
       <button className="primary full" type="submit" disabled={!canSubmit || busy}>{busy ? "Submitting claim…" : "Upload evidence & submit claim"}</button>

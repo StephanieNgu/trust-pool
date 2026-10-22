@@ -19,7 +19,7 @@ export const poolAbi = [
 
 export const registryAbi = [
   "function isActive(address holder) view returns (bool)",
-  "function getPolicy(address holder) view returns (tuple(uint256 id, address holder, bytes32 deviceIdHash, uint256 coverageLimit, uint256 startTime, uint8 status))",
+  "function getPolicy(address holder) view returns (tuple(uint256 id, address holder, bytes32 deviceIdHash, uint256 coverageLimit, uint256 startTime, uint8 status, bytes32 enrollmentHash))",
   "function isPastWaitingPeriod(address holder) view returns (bool)",
   "function premiumFor(uint256 coverageLimit) view returns (uint256)",
   "function waitingPeriod() view returns (uint256)",
