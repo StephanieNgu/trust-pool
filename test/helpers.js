@@ -22,7 +22,11 @@ async function deployFixture() {
  */
 const HOLDER_COUNT = 7;
 async function activePoolFixture() {
-  const ctx = await deployFixture();
+  return populate(await deployFixture());
+}
+
+/** Adds seed liquidity and `HOLDER_COUNT` policyholders past the waiting period to a deployment. */
+async function populate(ctx) {
   const { token, pool, registry, deployer, signers } = ctx;
   const holders = signers.slice(1, 1 + HOLDER_COUNT);
 
@@ -38,6 +42,19 @@ async function activePoolFixture() {
   await time.increase(ctx.params.waitingPeriod);
 
   return { ...ctx, holders, claimant: holders[0] };
+}
+
+/**
+ * Like activePoolFixture, but juries are drawn by VRFRandomness through a mock Chainlink VRF v2.5
+ * coordinator, with VRFRandomness registered on a subscription the deployer owns.
+ */
+async function vrfPoolFixture() {
+  const coordinator = await ethers.deployContract("MockVRFCoordinator");
+  await coordinator.createSubscription();
+  const vrf = { coordinator: await coordinator.getAddress(), subscriptionId: 1n, keyHash: ethers.id("lane"), addConsumer: true };
+  const ctx = await deployContracts({}, { vrf });
+  const signers = await ethers.getSigners();
+  return { ...(await populate({ ...ctx, signers })), coordinator, vrf };
 }
 
 /** Fulfils randomness for `claimId` and returns the selected jurors as signers. */
@@ -95,6 +112,7 @@ module.exports = {
   enrollmentHash,
   deployFixture,
   activePoolFixture,
+  vrfPoolFixture,
   selectJury,
   submitClaim,
   saltFor,

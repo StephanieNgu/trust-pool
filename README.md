@@ -134,8 +134,9 @@ holds user keys: members still sign their own transactions in MetaMask. It does 
   not that the claim is true). Jurors lose access once voting ends. Files live in `data/evidence/`,
   encrypted with AES-256-GCM. See
   [design doc §6b](docs/design-doc.md#6b-off-chain-backend-and-evidence-privacy) for the full policy.
-* **Keeper.** Polls open claims and moves them along: fulfils jury randomness (as the
-  `MockRandomness` owner, using a CSPRNG seed), cancels a claim whose randomness is more than a day
+* **Keeper.** Polls open claims and moves them along: on a local chain fulfils jury randomness (as
+  the `MockRandomness` owner, using a CSPRNG seed; with Chainlink VRF it detects that and leaves it
+  to the coordinator), cancels a claim whose randomness is more than a day
   late, finalizes once voting closes or every juror has voted, and pays approved claims. Everything
   except randomness is callable by anyone on-chain, so the keeper cannot change an outcome.
 * **Read API** for the dashboard: pool stats, a member's policy, claims filtered by claimant, juror or
@@ -187,9 +188,9 @@ Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 | `EVIDENCE_KEY_FILE` | `data/evidence.key` | Local chain only: generated on first start when no key is set |
 | `CORS_ORIGIN` | `*` | |
 | `KEEPER_ENABLED` | `true` | |
-| `KEEPER_PRIVATE_KEY` | unset | Required off the local chain; must own `MockRandomness` to select juries |
+| `KEEPER_PRIVATE_KEY` | unset | Required off the local chain; with `MockRandomness` it must be the owner to select juries |
 | `KEEPER_INTERVAL_MS` | `5000` | |
-| `KEEPER_FULFILL_RANDOMNESS` | `true` | |
+| `KEEPER_FULFILL_RANDOMNESS` | `true` | Ignored with Chainlink VRF, which fulfils on its own |
 | `KEEPER_AUTO_RESOLVE` | `true` | Finalize and pay automatically |
 
 ## Smart Contracts
@@ -203,7 +204,8 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `Pool` | Holds all funds; takes premiums and contributions; pays approved claims up to `maxPayoutBps` of its balance | **Yes** |
 | `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Approved/Rejected → Paid | No |
 | `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal voting, tallies | No |
-| `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
+| `VRFRandomness` | Chainlink VRF v2.5 randomness provider behind `IRandomnessProvider`; used on Sepolia | No |
+| `MockRandomness` | **Demo-only** randomness provider for local chains and tests; the owner picks the seed | No |
 
 Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
 
@@ -232,6 +234,31 @@ Compile only:
 ```powershell
 npm run compile
 ```
+
+### Deploying to Sepolia with Chainlink VRF
+
+Off a local chain, `scripts/deploy.js` deploys `VRFRandomness` so juries are drawn by Chainlink VRF v2.5
+instead of the mock. You need:
+
+1. A Sepolia RPC URL and a deployer key with Sepolia ETH.
+2. A VRF v2.5 subscription created from the deployer's wallet at [vrf.chain.link](https://vrf.chain.link)
+   (Sepolia) and funded with testnet LINK from [faucets.chain.link](https://faucets.chain.link). The deploy
+   adds `VRFRandomness` to it as a consumer, which only the subscription owner can do.
+
+```powershell
+$env:SEPOLIA_RPC_URL = "https://..."
+$env:DEPLOYER_PRIVATE_KEY = "0x..."
+$env:VRF_SUBSCRIPTION_ID = "1234..."
+npx hardhat run scripts/deploy.js --network sepolia   # writes deployments/sepolia.json
+```
+
+The Sepolia coordinator and 100 gwei key hash are built in; override them with `VRF_COORDINATOR` and
+`VRF_KEY_HASH`, and check them against Chainlink's
+[supported networks](https://docs.chain.link/vrf/v2-5/supported-networks) page. Optional:
+`VRF_CALLBACK_GAS_LIMIT` (default 1,000,000), `VRF_REQUEST_CONFIRMATIONS` (3), `VRF_NATIVE_PAYMENT=true`
+to pay in Sepolia ETH instead of LINK. `RANDOMNESS=mock` deploys the demo randomness instead. Run the
+backend against it with `RPC_URL`, `DEPLOYMENT_FILE=deployments/sepolia.json`, `KEEPER_PRIVATE_KEY` and
+`EVIDENCE_ENCRYPTION_KEY`.
 
 ## Running Tests
 
@@ -325,8 +352,11 @@ trust-pool/
 │   ├── ClaimManager.sol
 │   ├── JuryModule.sol
 │   ├── interfaces/
+│   ├── randomness/
+│   │   └── VRFRandomness.sol
 │   └── mocks/
-│       └── MockRandomness.sol
+│       ├── MockRandomness.sol
+│       └── MockVRFCoordinator.sol
 ├── test/
 │   ├── helpers.js
 │   ├── unit/

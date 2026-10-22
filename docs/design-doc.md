@@ -6,7 +6,7 @@ A peer-to-peer device insurance protocol on an EVM blockchain. Policyholders con
 
 **Goals for this milestone:** one working happy-path claim flow, end to end, on a local network.
 
-**Non-goals (see Section 10):** production-grade randomness, Sybil resistance, appeals, solvency modeling, regulatory structure.
+**Non-goals (see Section 10):** Sybil resistance, appeals, solvency modeling, regulatory structure.
 
 ## 2. Architecture at a Glance
 
@@ -20,10 +20,10 @@ flowchart LR
 
     subgraph OffChain["Off-chain services"]
         IPFS["Evidence service (Express): encrypted, juror-only files"]
-        RNG["Randomness source: mock in demo, Chainlink VRF in prod"]
+        RNG["Randomness source: Chainlink VRF v2.5 on Sepolia, mock on a local chain"]
     end
 
-    subgraph OnChain["EVM chain: Hardhat local, Sepolia stretch"]
+    subgraph OnChain["EVM chain: Hardhat local or Sepolia"]
         PR["PolicyRegistry"]
         POOL["Pool"]
         CM["ClaimManager"]
@@ -49,7 +49,7 @@ flowchart LR
 - **Separate contracts by responsibility.** Money (Pool), membership (PolicyRegistry), claim workflow (ClaimManager), and jury logic (JuryModule) each change for different reasons. Keeping jury logic separate means we can swap in a better selection or voting scheme without touching the contract that holds funds.
 - **Only the Pool moves money.** Every other contract has zero token custody, which shrinks the attack surface and makes audits easier.
 - **Evidence stays off-chain.** Only a content hash goes on-chain. This keeps gas low, avoids putting personal data on an immutable ledger, and lets jurors verify the file has not been altered since submission.
-- **Randomness is behind an interface.** The demo uses a mock; production swaps in Chainlink VRF with no changes to JuryModule.
+- **Randomness is behind an interface.** Local chains use a mock; Sepolia uses Chainlink VRF v2.5 through `VRFRandomness`, with no changes to JuryModule.
 
 ## 3. Component Responsibilities
 
@@ -60,7 +60,7 @@ flowchart LR
 | **Pool** | Accepts contributions, holds the stablecoin, executes payouts (callable only by ClaimManager) | **Yes** |
 | **ClaimManager** | Owns the claim state machine, validates eligibility, triggers jury selection, finalizes outcomes, requests payout | No |
 | **JuryModule** | Requests randomness, selects jurors, runs commit-reveal voting, tallies revealed votes | No |
-| **IRandomnessProvider** | Interface: `requestRandomness(claimId)`. Implementations: `MockRandomness` (demo), `VRFRandomness` (future) | No |
+| **IRandomnessProvider** | Interface: `requestRandomness(claimId)`. Implementations: `VRFRandomness` (Chainlink VRF v2.5, Sepolia), `MockRandomness` (local chains and tests) | No |
 | **Frontend / CLI** | Wallet connection, evidence upload, claim submission, voting, status views | n/a |
 
 ## 4. Data Model
@@ -223,6 +223,8 @@ Which contract may call which privileged function. All wiring is one-time: each 
 | `JuryModule.fulfillRandomness` | The randomness provider | Constructor (immutable) |
 | `ClaimManager.startVoting` | JuryModule | Constructor (immutable) |
 | `MockRandomness.fulfill` | MockRandomness owner (the deployer / backend keeper) | Constructor |
+| `VRFRandomness.requestRandomness` | JuryModule only | `setConsumer`, once, by the owner |
+| `VRFRandomness.rawFulfillRandomWords` | The Chainlink VRF coordinator only | Constructor |
 | `PolicyRegistry.lapsePolicy` | PolicyRegistry owner | Constructor |
 | `ClaimManager.finalize`, `executePayout`, `cancelStalledClaim` | Anyone (guarded by claim state and timing) | n/a |
 
@@ -261,9 +263,9 @@ sequenceDiagram
     J->>J: keccak256(bytes) == on-chain evidenceHash
 ```
 
-**Keeper.** Polls open claims. It fulfils randomness (as the MockRandomness owner, with a CSPRNG seed), cancels claims whose randomness timed out, finalizes when voting has closed, and pays approved claims. Everything except fulfilment is permissionless, so the keeper saves users transactions but cannot change an outcome.
+**Keeper.** Polls open claims. With MockRandomness it fulfils randomness (as the owner, with a CSPRNG seed); with VRF it leaves that to Chainlink. It cancels claims whose randomness timed out, finalizes when voting has closed, and pays approved claims. Everything except fulfilment is permissionless, so the keeper saves users transactions but cannot change an outcome.
 
-**Randomness trust.** With MockRandomness the owner chooses the seed and could pick a favourable jury. The prototype makes no claim of unbiased selection. Migration: deploy a `VRFRandomness` adapter implementing `IRandomnessProvider` on Sepolia (Chainlink VRF v2.5), pass it to a new JuryModule, and drop the keeper's fulfilment step; the timeout and cancel path already cover a callback that never arrives.
+**Randomness trust.** On Sepolia, juries are seeded by Chainlink VRF v2.5 through `VRFRandomness`: JuryModule calls `requestRandomness`, the adapter asks the coordinator for one random word billed to a LINK-funded subscription, and the coordinator's verified callback forwards it to `JuryModule.fulfillRandomness`. Nobody in the project, including the deployer, can choose the seed. The adapter accepts requests only from JuryModule, makes at most one request per claim, and never reverts in the callback (a late answer for a cancelled claim is logged as `FulfillmentFailed`), so a misbehaving callback cannot block the coordinator. If the subscription runs dry, requests stay pending and the 1-day timeout cancels the claim. On a local chain, MockRandomness stays: its owner chooses the seed and could pick a favourable jury, which is acceptable only for demos and tests.
 
 ## 7. Key Design Decisions
 
@@ -271,7 +273,7 @@ sequenceDiagram
 |---|---|---|---|
 | Contract structure | 4 focused contracts | Separation of concerns, upgrade path, easier testing | One monolith: simpler, but tangled and harder to audit |
 | Fund custody | Pool only | Smallest attack surface | Escrow per claim: more gas and complexity |
-| Randomness | Interface with mock, VRF later | Deterministic tests now, real randomness later | Blockhash: manipulable by validators |
+| Randomness | Interface: Chainlink VRF v2.5 on Sepolia, mock locally | Verifiable randomness in deployment, deterministic tests locally | Blockhash: manipulable by validators |
 | Jury selection | Fisher-Yates style sampling on the eligible list, seeded by the randomness output | Simple and auditable; fine for a small demo pool | Off-chain selection: cheaper but requires trusting the selector |
 | Voting | Commit-reveal: sealed votes for 2 days, then 1 day to reveal | No juror can see or copy another's vote before committing, which removes herding | Plain on-chain vote: one transaction per juror, but later jurors see earlier votes |
 | Commit-reveal salt | Chosen by the juror's wallet; the frontend should derive it from a wallet signature over the claim id so it can be recovered | A lost salt means a vote cannot be revealed; deriving it avoids storing secrets | Backend stores salts: convenient, but the backend could then read every vote early |
@@ -292,7 +294,7 @@ sequenceDiagram
 | Claimant sits on their own jury | Claimant excluded from selection | Also exclude linked accounts |
 | Jurors copy each other's votes | Commit-reveal: votes are sealed until every juror has committed or the commit window ends | Juror incentives for honest reveals |
 | Juror never reveals | Unrevealed commits count as no vote; quorum rule rejects the claim if too few reveal | Slash non-revealers |
-| Randomness is predicted or gamed | Mock only, clearly labeled | Chainlink VRF |
+| Randomness is predicted or gamed | Chainlink VRF on Sepolia; mock only on local chains | Built |
 | Pool drained by a single large claim | Coverage limit and `maxPayoutBps` cap | Solvency modeling, reserve ratios, pro-rata payouts |
 | Reentrancy on payout | Checks-effects-interactions, OpenZeppelin `ReentrancyGuard` | External audit |
 | Non-voting jurors stall a claim | Voting deadline and quorum rule | Slash non-voters, replace with fresh jurors |
@@ -316,7 +318,7 @@ These are known gaps, deliberately left out of the prototype.
 1. **Bribery resistance** beyond commit-reveal (which is built): votes become public on reveal, so a briber can still check them afterwards
 2. **Appeals** with escalating jury sizes
 3. **Juror incentives:** fees, coherence rewards, and penalties for non-voters
-4. **Real randomness** via Chainlink VRF or drand
+4. **Mainnet randomness:** VRF is built and runs on Sepolia; mainnet needs a funded subscription and subscription monitoring
 5. **Sybil resistance:** identity checks or device attestation (IMEI, Apple and Google attestation)
 6. **Claimant bond** forfeited on fraudulent claims
 7. **Solvency modeling:** reserve ratios, pro-rata payouts on shortfall, withdrawal lockups
@@ -335,7 +337,9 @@ These are known gaps, deliberately left out of the prototype.
   ClaimManager.sol
   JuryModule.sol
   interfaces/IRandomnessProvider.sol
+  randomness/VRFRandomness.sol
   mocks/MockRandomness.sol
+  mocks/MockVRFCoordinator.sol
 /test
   integration/happyPath.test.js
   unit/*.test.js

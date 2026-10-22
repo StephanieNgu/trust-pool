@@ -128,6 +128,7 @@ export function createApp(deps: AppDeps) {
     res.json({
       network: deployment.network,
       chainId: deployment.chainId,
+      randomnessProvider: deployment.randomnessProvider ?? "mock",
       addresses: deployment.addresses,
       params: deployment.params,
       token: { symbol, decimals: Number(decimals) },
