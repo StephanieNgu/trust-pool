@@ -137,12 +137,27 @@ describe("API", () => {
         { device: { ...testDevice(41), imei: testImei(41).slice(0, 14) + ((Number(testImei(41)[14]) + 1) % 10) } },
         { device: { ...testDevice(41), model: "" } },
         { device: { imei: testImei(41) } },
+        { device: { ...testDevice(41), type: "drone" } },
+        { device: { ...testDevice(41), imei: undefined } },
+        { device: { ...testDevice(41), type: "camera", imei: undefined, serial: undefined } },
       ];
       for (const extra of bad) {
         const res = await t.post("/api/evidence", { kind: "enrollment", files, ...extra }, newcomer);
         assert.equal(res.status, 400, JSON.stringify(extra));
       }
       assert.equal((await t.post("/api/evidence", { kind: "selfie", files }, newcomer)).status, 400);
+    });
+
+    it("enrols a device without an IMEI by its serial number", async () => {
+      const camera = { type: "camera", serial: " 0123 456 ", make: "Canon", model: "EOS R50", color: "Black" };
+      const res = await t.post("/api/evidence", { kind: "enrollment", device: camera, files }, t.signers[15]);
+      assert.equal(res.status, 201);
+      assert.deepEqual(res.body.device, { ...camera, serial: "0123 456" });
+      // A tablet may give an IMEI, but it must be a valid one.
+      const tablet = { ...testDevice(42), type: "tablet" };
+      assert.equal((await t.post("/api/evidence", { kind: "enrollment", device: tablet, files }, t.signers[15])).status, 201);
+      const badTablet = { ...tablet, imei: "12345" };
+      assert.equal((await t.post("/api/evidence", { kind: "enrollment", device: badTablet, files }, t.signers[15])).status, 400);
     });
 
     it("shows the policy's enrollment hash in the member view", async () => {

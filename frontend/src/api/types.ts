@@ -109,10 +109,12 @@ export interface ClaimDetailView extends ClaimView {
     available: boolean;
     url: string | null;
   };
-  /** Automatic IMEI comparisons; null when there was nothing to compare. */
+  /** Automatic comparisons; null when there was nothing to compare. */
   deviceCheck: {
-    enrollmentImeiMatchesPolicy: boolean | null;
-    claimImeiMatchesEnrollment: boolean | null;
+    /** The enrolled IMEI (or make and serial) hashes to the policy's on-chain deviceIdHash. */
+    enrollmentMatchesPolicy: boolean | null;
+    /** The IMEI or serial given with the claim is the enrolled one. */
+    claimMatchesEnrollment: boolean | null;
   };
 }
 
@@ -129,9 +131,15 @@ export interface EvidenceFileAccess extends EvidenceFileInfo {
 
 export type EvidenceKind = "claim" | "enrollment";
 
-/** Device details. Enrollment has all of them; a claim may carry just the IMEI. */
+export type DeviceType = "phone" | "tablet" | "laptop" | "camera" | "other";
+
+/**
+ * Device details. Enrollment has the type, serial, make, model and colour, plus the IMEI for a phone;
+ * a claim may carry just the IMEI or serial, to be matched against the enrollment.
+ */
 export interface DeviceDetails {
-  imei: string;
+  type?: DeviceType;
+  imei?: string;
   serial?: string;
   make?: string;
   model?: string;

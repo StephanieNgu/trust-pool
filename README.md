@@ -159,10 +159,10 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/pool` | Balance, per-claim cap, totals, policy and claim counts |
 | `GET /api/members/:address` | Wallet balance, contributions, policy, claim-eligible date, open claim |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
-| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, revealed tally, deadlines), evidence and signup-photo links, and `deviceCheck` (do the IMEIs match?) |
+| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, revealed tally, deadlines), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?) |
 | `GET /api/auth/message?address=` | The message to sign with the wallet for the evidence routes |
 | `POST /api/capture/code` 🔒 | A one-time code (e.g. `TP-7K4Q2M`) to show in the photos about to be taken; valid 15 minutes, for one upload |
-| `POST /api/evidence` 🔒 | Upload `{ kind, captureCode, description, device, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. `kind: "enrollment"` (signup photos plus `device: { imei, serial, make, model, color }`) is open to any wallet and its hash goes to `buyPolicy`; `kind: "claim"` (default, optional `device: { imei }`) needs an active policy and its hash goes to `submitClaim` |
+| `POST /api/evidence` 🔒 | Upload `{ kind, captureCode, description, device, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. `kind: "enrollment"` (signup photos plus `device: { type, imei, serial, make, model, color }`, with `imei` required for a phone and absent or optional for other types) is open to any wallet and its hash goes to `buyPolicy`; `kind: "claim"` (default, optional `device: { imei }` or `{ serial }`) needs an active policy and its hash goes to `submitClaim` |
 | `GET /api/evidence/:hash` 🔒 | Kind, description, device details, capture code and times, and file list |
 | `GET /api/evidence/:hash/raw` 🔒 | Exact stored bytes; `keccak256` of these equals the on-chain hash |
 | `GET /api/evidence/:hash/files/:index` 🔒 | One file, for display (fetch it, then show it from a blob URL) |

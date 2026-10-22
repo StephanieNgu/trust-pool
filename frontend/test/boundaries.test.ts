@@ -7,8 +7,8 @@ import { Interface, type InterfaceAbi } from "ethers";
 import mockStablecoinAbi from "../src/contracts/abis/MockStablecoin.json";
 import policyRegistryAbi from "../src/contracts/abis/PolicyRegistry.json";
 import poolAbi from "../src/contracts/abis/Pool.json";
-import { ALLOWED_EVIDENCE_TYPES, MAX_DEVICE_FIELD_LENGTH as UI_MAX_DEVICE_FIELD_LENGTH, MAX_EVIDENCE_FILE_BYTES, MAX_EVIDENCE_FILES, isValidImei as uiIsValidImei } from "../src/api";
-import { ALLOWED_CONTENT_TYPES, MAX_DESCRIPTION_LENGTH, MAX_DEVICE_FIELD_LENGTH, MAX_FILE_BYTES, MAX_FILES, isValidImei } from "../../backend/src/evidence";
+import { ALLOWED_EVIDENCE_TYPES, DEVICE_TYPES as UI_DEVICE_TYPES, MAX_DEVICE_FIELD_LENGTH as UI_MAX_DEVICE_FIELD_LENGTH, deviceIdentifier as uiDeviceIdentifier, MAX_EVIDENCE_FILE_BYTES, MAX_EVIDENCE_FILES, isValidImei as uiIsValidImei } from "../src/api";
+import { ALLOWED_CONTENT_TYPES, DEVICE_TYPES, MAX_DESCRIPTION_LENGTH, MAX_DEVICE_FIELD_LENGTH, deviceIdentifier, MAX_FILE_BYTES, MAX_FILES, isValidImei } from "../../backend/src/evidence";
 
 const FRONTEND_ABIS: Record<string, InterfaceAbi> = {
   MockStablecoin: mockStablecoinAbi,
@@ -44,6 +44,15 @@ describe("frontend evidence rules", () => {
     // uploadEvidence enforces 2,000 characters before sending.
     assert.equal(MAX_DESCRIPTION_LENGTH, 2_000);
     assert.equal(UI_MAX_DEVICE_FIELD_LENGTH, MAX_DEVICE_FIELD_LENGTH);
+    assert.deepEqual([...UI_DEVICE_TYPES], [...DEVICE_TYPES]);
+    // The on-chain deviceIdHash must be computed the same way on both sides.
+    for (const device of [
+      { imei: "490154203237518", serial: "F2LX", make: "Apple" },
+      { serial: " ab 12c ", make: " Canon " },
+      { serial: "SN-9", make: "Sony" },
+    ]) {
+      assert.equal(uiDeviceIdentifier(device), deviceIdentifier(device), JSON.stringify(device));
+    }
     for (const imei of ["490154203237518", "490154203237517", "35693803564380", "3569380356438090", "49015420323751x", ""]) {
       assert.equal(uiIsValidImei(imei), isValidImei(imei), imei);
     }

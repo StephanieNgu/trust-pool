@@ -16,9 +16,13 @@ export {
 } from "./auth";
 export {
   ALLOWED_EVIDENCE_TYPES,
+  DEVICE_TYPES,
   MAX_DEVICE_FIELD_LENGTH,
   MAX_EVIDENCE_FILE_BYTES,
   MAX_EVIDENCE_FILES,
+  claimDeviceId,
+  deviceIdHash,
+  deviceIdentifier,
   enrollDevice,
   getClaim,
   getClaimsForMember,
@@ -37,6 +41,7 @@ export type {
   CaptureCode,
   CaptureStamp,
   DeviceDetails,
+  DeviceType,
   EvidenceKind,
   ClaimDetailView,
   ClaimJury,

@@ -7,6 +7,7 @@ import type { Deployment, ProtocolContracts } from "./chain";
 import {
   deviceIdHash,
   encodeBundle,
+  sameDevice,
   EvidenceError,
   LocalEvidenceStore,
   MAX_FILE_BYTES,
@@ -161,20 +162,17 @@ export function createApp(deps: AppDeps) {
 
   /**
    * Automatic checks shown to jurors next to the photos. Only yes/no answers are public; the IMEIs
-   * themselves stay in the private bundles. null means there was nothing to compare.
+   * and serials themselves stay in the private bundles. null means there was nothing to compare.
    */
   async function checkDevice(claimant: string, claimHash: string, enrollmentHash: string | null) {
     const enrolled = enrollmentHash ? await evidence.getDevice(enrollmentHash) : null;
     const claimed = (await evidence.has(claimHash)) ? await evidence.getDevice(claimHash) : null;
-    let enrollmentImeiMatchesPolicy: boolean | null = null;
+    let enrollmentMatchesPolicy: boolean | null = null;
     if (enrolled) {
       const policy = await contracts.registry.getPolicy(claimant);
-      enrollmentImeiMatchesPolicy = deviceIdHash(enrolled.imei) === policy.deviceIdHash;
+      enrollmentMatchesPolicy = deviceIdHash(enrolled) === policy.deviceIdHash;
     }
-    return {
-      enrollmentImeiMatchesPolicy,
-      claimImeiMatchesEnrollment: enrolled && claimed ? claimed.imei === enrolled.imei : null,
-    };
+    return { enrollmentMatchesPolicy, claimMatchesEnrollment: sameDevice(claimed, enrolled) };
   }
 
   app.get("/api/claims/:id", async (req, res) => {

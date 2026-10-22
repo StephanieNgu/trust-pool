@@ -44,9 +44,16 @@ export interface EvidenceFileInput {
   data: string;
 }
 
-/** Device details. Required in full for enrollment; a claim may include just the IMEI. */
+export const DEVICE_TYPES = ["phone", "tablet", "laptop", "camera", "other"] as const;
+export type DeviceType = (typeof DEVICE_TYPES)[number];
+
+/**
+ * Device details. Enrollment needs the type, serial, make, model and colour, plus the IMEI for a
+ * phone (optional for other devices). A claim may include just the IMEI or serial, to be matched.
+ */
 export interface DeviceDetails {
-  imei: string;
+  type?: DeviceType;
+  imei?: string;
   serial?: string;
   make?: string;
   model?: string;
@@ -125,35 +132,79 @@ export function isValidImei(imei: string): boolean {
   return sum % 10 === 0;
 }
 
-/** The on-chain `deviceIdHash` for an IMEI; the frontend computes the same thing before buyPolicy. */
-export function deviceIdHash(imei: string): string {
-  return keccak256(toUtf8Bytes(imei));
+/** Serial numbers are compared without spaces and case, since people type them both ways. */
+export function normalizeSerial(serial: string): string {
+  return serial.replace(/\s+/g, "").toUpperCase();
+}
+
+/**
+ * The string whose keccak256 is the policy's on-chain `deviceIdHash`: the IMEI when the device has
+ * one, otherwise make and serial (serials are only unique per manufacturer). The frontend computes
+ * the same thing before buyPolicy; frontend/test/boundaries.test.ts keeps the two in step.
+ */
+export function deviceIdentifier(device: Pick<DeviceDetails, "imei" | "serial" | "make">): string {
+  if (device.imei) return device.imei;
+  if (!device.serial || !device.make) throw new Error("A device needs an IMEI, or a make and serial number.");
+  return `${device.make.trim().toLowerCase()}:${normalizeSerial(device.serial)}`;
+}
+
+export function deviceIdHash(device: Pick<DeviceDetails, "imei" | "serial" | "make">): string {
+  return keccak256(toUtf8Bytes(deviceIdentifier(device)));
 }
 
 function validateDevice(device: unknown, kind: BundleKind): DeviceDetails | null {
   if (device === undefined || device === null) {
-    if (kind === "enrollment") throw new EvidenceError("Enrollment needs device details: imei, serial, make, model, color.", 400);
+    if (kind === "enrollment") throw new EvidenceError("Enrollment needs device details: type, serial, make, model, color.", 400);
     return null;
   }
   if (typeof device !== "object") throw new EvidenceError("device must be an object.", 400);
-  const { imei, serial, make, model, color } = device as Partial<DeviceDetails>;
-  if (typeof imei !== "string" || !isValidImei(imei)) {
-    throw new EvidenceError("device.imei must be the phone's 15-digit IMEI (dial *#06# to see it).", 400);
+  const { type, imei, serial, make, model, color } = device as Partial<DeviceDetails>;
+  const enrolling = kind === "enrollment";
+  if (enrolling && !(DEVICE_TYPES as readonly unknown[]).includes(type)) {
+    throw new EvidenceError(`device.type must be one of ${DEVICE_TYPES.join(", ")}.`, 400);
   }
-  const text = (value: unknown, name: string): string | undefined => {
-    if (value === undefined && kind === "claim") return undefined;
+  const imeiRequired = enrolling && type === "phone";
+  if (imei !== undefined || imeiRequired) {
+    if (typeof imei !== "string" || !isValidImei(imei)) {
+      throw new EvidenceError("device.imei must be the 15-digit IMEI (dial *#06# on a phone to see it).", 400);
+    }
+  }
+  const text = (value: unknown, name: string, required: boolean): string | undefined => {
+    if (value === undefined && !required) return undefined;
     if (typeof value !== "string" || value.trim().length === 0 || value.length > MAX_DEVICE_FIELD_LENGTH) {
       throw new EvidenceError(`device.${name} must be a non-empty string of at most ${MAX_DEVICE_FIELD_LENGTH} characters.`, 400);
     }
     return value.trim();
   };
+  // A claim's device details are only there to be matched against the enrollment.
+  const fields = {
+    type: enrolling ? type : undefined,
+    imei,
+    serial: text(serial, "serial", enrolling),
+    make: enrolling ? text(make, "make", true) : undefined,
+    model: enrolling ? text(model, "model", true) : undefined,
+    color: enrolling ? text(color, "color", true) : undefined,
+  };
+  if (!enrolling && !fields.imei && !fields.serial) {
+    throw new EvidenceError("A claim's device details need an imei or a serial to match against.", 400);
+  }
   // Fixed key order keeps the serialization deterministic; absent optional fields are left out.
-  const result: DeviceDetails = { imei };
-  const fields = { serial: text(serial, "serial"), make: text(make, "make"), model: text(model, "model"), color: text(color, "color") };
+  const result: DeviceDetails = {};
   for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined) result[key as keyof typeof fields] = value;
+    if (value !== undefined) (result as Record<string, unknown>)[key] = value;
   }
   return result;
+}
+
+/**
+ * Whether a claim's device details name the enrolled device: by IMEI when both have one, otherwise
+ * by serial. null when there is nothing to compare.
+ */
+export function sameDevice(claimed: DeviceDetails | null, enrolled: DeviceDetails | null): boolean | null {
+  if (!claimed || !enrolled) return null;
+  if (claimed.imei && enrolled.imei) return claimed.imei === enrolled.imei;
+  if (claimed.serial && enrolled.serial) return normalizeSerial(claimed.serial) === normalizeSerial(enrolled.serial);
+  return null;
 }
 
 /**

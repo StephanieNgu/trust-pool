@@ -34,8 +34,8 @@ function DeviceCheck({ check }: { check: ClaimDetailView["deviceCheck"] }) {
   const badge = (value: boolean | null, yes: string, no: string, unknown: string) =>
     <span className={value === null ? "" : value ? "match" : "mismatch"}>{value === null ? unknown : value ? `✓ ${yes}` : `⚠ ${no}`}</span>;
   return <div className="imei-checks" aria-label="Automatic device checks">
-    {badge(check.enrollmentImeiMatchesPolicy, "Signup IMEI matches the policy", "Signup IMEI does not match the policy", "No signup IMEI on record")}
-    {badge(check.claimImeiMatchesEnrollment, "Claim IMEI matches signup", "Claim IMEI differs from signup", "No IMEI given with the claim")}
+    {badge(check.enrollmentMatchesPolicy, "Signup details match the policy", "Signup details do not match the policy", "No signup details on record")}
+    {badge(check.claimMatchesEnrollment, "Claim IMEI or serial matches signup", "Claim IMEI or serial differs from signup", "No IMEI or serial given with the claim")}
   </div>;
 }
 
@@ -119,7 +119,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
     </dl>
 
     <div className="detail-section-heading"><div><span className="eyebrow">SAME DEVICE?</span><h3>Signup photos and claim photos</h3></div></div>
-    <p className="muted">Check that the claim photos show the phone registered at signup (same model, colour and marks), that the damage is real, and that the first claim photo shows its capture code.</p>
+    <p className="muted">Check that the claim photos show the device registered at signup (same model, colour and marks), that the damage is real, and that the first claim photo shows its capture code.</p>
     <DeviceCheck check={claim.deviceCheck} />
     <div className="evidence-compare">
       <EvidenceViewer account={account} claim={claim} source="enrollment" onAuthenticated={onAuthenticated} />

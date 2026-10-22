@@ -3,7 +3,7 @@ import { HARDHAT_LOCAL_CHAIN_ID, useWallet } from "./wallet";
 import { authenticateWallet, clearWalletAuth, enrollDevice, getDashboardOverview, readCachedWalletAuth, validateDeviceDetails, type DashboardOverview } from "./api";
 import { ClaimsPage } from "./claims/ClaimsPage";
 import { JuryPage } from "./claims/JuryPage";
-import { DeviceEnrollment, EMPTY_ENROLLMENT, enrollmentComplete, enrollmentFiles, type EnrollmentDraft } from "./member/DeviceEnrollment";
+import { DeviceEnrollment, EMPTY_ENROLLMENT, enrollmentComplete, enrollmentDevice, enrollmentFiles, type EnrollmentDraft } from "./member/DeviceEnrollment";
 import { PolicyActions } from "./member/PolicyActions";
 import { PoolPage } from "./member/PoolPage";
 import { purchaseCoverage, quoteCoverage } from "./contracts/insurance";
@@ -105,7 +105,7 @@ export default function App() {
     const started = identity;
     setBusy(true); setFormError(""); setFeedback("");
     try {
-      validateDeviceDetails(enrollment.device, "enrollment");
+      validateDeviceDetails(enrollmentDevice(enrollment));
       if (!enrollmentComplete(enrollment)) throw new Error("Get a capture code and take all three photos of the device.");
       const value = await quoteCoverage(wallet.account, amount); if (currentIdentity.current === started) setPremium(value); }
     catch (error) { if (currentIdentity.current === started) setFormError(errorText(error)); }
@@ -121,11 +121,11 @@ export default function App() {
       let enrolled = enrollmentHash;
       if (!enrolled) {
         report("Uploading your device photos…");
-        enrolled = (await enrollDevice(account, enrollment.device, enrollmentFiles(enrollment), enrollment.captureCode?.code ?? "")).evidenceHash;
+        enrolled = (await enrollDevice(account, enrollmentDevice(enrollment), enrollmentFiles(enrollment), enrollment.captureCode?.code ?? "")).evidenceHash;
         if (currentIdentity.current === started) setEnrollmentHash(enrolled);
         setAuthStatus("authenticated");
       }
-      const hash = await purchaseCoverage(account, enrollment.device.imei, amount, premium, enrolled, report);
+      const hash = await purchaseCoverage(account, enrollmentDevice(enrollment), amount, premium, enrolled, report);
       setActivities(items => [{ hash, account, title: "Device coverage purchased", amount, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }, ...items]);
       if (currentIdentity.current === started) { setRefresh(value => value + 1); setPage("dashboard"); setEnrollment(EMPTY_ENROLLMENT); setEnrollmentHash(null); setAmount(""); }
     } catch (error) { if (currentIdentity.current === started) { setFormError(errorText(error)); setFeedback(""); } }

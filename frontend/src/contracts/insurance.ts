@@ -1,4 +1,5 @@
-import { ZeroHash, formatUnits, isHexString, keccak256, parseUnits, toUtf8Bytes } from "ethers";
+import { ZeroHash, formatUnits, isHexString, parseUnits } from "ethers";
+import { deviceIdHash, validateDeviceDetails, type DeviceDetails } from "../api";
 import { getBrowserProvider } from "../wallet";
 import { loadContracts } from "./contracts";
 
@@ -23,11 +24,12 @@ export async function quoteCoverage(account: string, amount: string) {
 }
 
 /**
- * Buys a policy for the device with this IMEI. `enrollmentHash` is the hash enrollDevice returned for
- * the signup photos; only hashes go on-chain, never the IMEI itself.
+ * Buys a policy for the enrolled device. `enrollmentHash` is the hash enrollDevice returned for the
+ * signup photos; only hashes go on-chain, never the IMEI or serial number itself.
  */
-export async function purchaseCoverage(account: string, imei: string, amount: string, quote: string, enrollmentHash: string, progress: (message: string) => void) {
+export async function purchaseCoverage(account: string, device: DeviceDetails, amount: string, quote: string, enrollmentHash: string, progress: (message: string) => void) {
   if (!isHexString(enrollmentHash, 32) || enrollmentHash === ZeroHash) throw new Error("Upload the device photos before buying coverage.");
+  const deviceHash = deviceIdHash(validateDeviceDetails(device));
   const { token, registry, deployment } = await session(account, true);
   const units = parseUnits(amount, 6);
   const premium: bigint = await registry.premiumFor(units);
@@ -40,7 +42,7 @@ export async function purchaseCoverage(account: string, imei: string, amount: st
     await approval.wait();
   }
   progress("Confirm your device coverage in MetaMask.");
-  const transaction = await registry.buyPolicy(keccak256(toUtf8Bytes(imei.replace(/[\s-]/g, ""))), units, enrollmentHash);
+  const transaction = await registry.buyPolicy(deviceHash, units, enrollmentHash);
   progress("Your coverage transaction is confirming…");
   const receipt = await transaction.wait();
   if (!receipt || receipt.status !== 1) throw new Error("The coverage transaction did not succeed.");

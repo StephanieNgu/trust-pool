@@ -38,6 +38,7 @@ export function testImei(i: number): string {
 
 /** The device details a member enters at signup, for test device `i`. */
 export const testDevice = (i: number) => ({
+  type: "phone" as const,
   imei: testImei(i),
   serial: `SERIAL${i}`,
   make: "Apple",
@@ -91,7 +92,7 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
       h.address,
       stamp,
     );
-    await (await ctx.registry.connect(h).buyPolicy(deviceIdHash(testImei(i)), USDC(1_000), enrollment.evidenceHash)).wait();
+    await (await ctx.registry.connect(h).buyPolicy(deviceIdHash(testDevice(i)), USDC(1_000), enrollment.evidenceHash)).wait();
   }
   await increaseTime(ctx.params.waitingPeriod);
 

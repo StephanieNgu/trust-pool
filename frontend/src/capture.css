@@ -111,3 +111,13 @@
   font-weight: 700;
   color: #1f3f73;
 }
+
+.device-enrollment select {
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid #dce3ed;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #253047;
+  font-size: 13px;
+}

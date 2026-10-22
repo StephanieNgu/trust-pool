@@ -37,7 +37,7 @@ describe("claim flow through the backend", () => {
     const { enrollmentHash } = claim;
     assert.equal(enrollmentHash, (await t.registry.getPolicy(claimant.address)).enrollmentHash);
     assert.deepEqual(claim.enrollment, { available: true, url: `/api/evidence/${enrollmentHash}` });
-    assert.deepEqual(claim.deviceCheck, { enrollmentImeiMatchesPolicy: true, claimImeiMatchesEnrollment: true });
+    assert.deepEqual(claim.deviceCheck, { enrollmentMatchesPolicy: true, claimMatchesEnrollment: true });
 
     // 3. Keeper fulfils the randomness request; five jurors are selected, claimant excluded.
     const actions = await keeper.tick();

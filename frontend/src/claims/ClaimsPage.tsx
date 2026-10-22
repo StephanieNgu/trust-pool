@@ -39,7 +39,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [captureCode, setCaptureCode] = useState<CaptureCode | null>(null);
-  const [imei, setImei] = useState("");
+  const [deviceId, setDeviceId] = useState("");
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [loadingClaims, setLoadingClaims] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -99,7 +99,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     setError("");
     setFeedback("Preparing evidence for secure upload…");
     try {
-      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", imei);
+      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId);
       onAuthenticated();
       setFeedback(`Evidence uploaded (${shortHash(evidence.evidenceHash)}).`);
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
@@ -108,7 +108,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       setDescription("");
       setFiles([]);
       setCaptureCode(null);
-      setImei("");
+      setDeviceId("");
       if (fileInput.current) fileInput.current.value = "";
       setClaimRefresh((value) => value + 1);
       onSubmitted();
@@ -144,14 +144,14 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       <textarea id="claim-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the damage, loss, and when it occurred." maxLength={2000} rows={5} disabled={busy} />
       <small>{description.length}/2,000 characters</small>
 
-      <label htmlFor="claim-imei">IMEI, if the phone still turns on <span className="muted">(optional)</span></label>
-      <input id="claim-imei" value={imei} inputMode="numeric" placeholder="15 digits: dial *#06#" maxLength={20} disabled={busy} onChange={(event) => setImei(event.target.value)} />
-      <small>Checked against the IMEI you registered. If the phone is dead, photograph the SIM tray or back-panel serial instead.</small>
+      <label htmlFor="claim-device-id">IMEI or serial number <span className="muted">(optional)</span></label>
+      <input id="claim-device-id" value={deviceId} placeholder="As shown on the device or its label" maxLength={64} disabled={busy} onChange={(event) => setDeviceId(event.target.value)} />
+      <small>Checked against the device you registered. If it no longer turns on, photograph its serial label or SIM tray instead.</small>
 
       <label>Photos of the damage</label>
       <CaptureCodePanel account={account} code={captureCode} disabled={busy || !ready} onCode={setCaptureCode} onAuthenticated={onAuthenticated} />
       {captureCode && <>
-        <small>Jurors compare these with the photos you took at signup, so show the whole phone, the damage, and your code.</small>
+        <small>Jurors compare these with the photos you took at signup, so show the whole device, the damage, and your code.</small>
         <div className="capture-buttons">
           <button className="primary" type="button" disabled={busy} onClick={() => cameraInput.current?.click()}>Take a photo</button>
           <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>Add a file or receipt</button>

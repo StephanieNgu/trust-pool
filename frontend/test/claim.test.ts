@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { keccak256 } from "ethers";
 import {
   ApiError,
+  claimDeviceId,
   getClaim,
   getClaimsForJuror,
   getClaimsForMember,
@@ -43,6 +44,13 @@ describe("frontend claim workflow", () => {
   });
   after(async () => {
     await stopStack(t);
+  });
+
+  it("reads what the claimant typed as an IMEI when it is one, else as a serial number", () => {
+    assert.deepEqual(claimDeviceId(` ${testImei(0).slice(0, 8)}-${testImei(0).slice(8)} `), { imei: testImei(0) });
+    assert.deepEqual(claimDeviceId(" C02XK1ABJG5H "), { serial: "C02XK1ABJG5H" });
+    assert.deepEqual(claimDeviceId("123456789012345"), { serial: "123456789012345" }, "15 digits failing the check digit");
+    assert.equal(claimDeviceId("  "), undefined);
   });
 
   it("checks evidence files before anything is signed or uploaded", () => {
@@ -153,7 +161,7 @@ describe("frontend claim workflow", () => {
     assert.ok(enrollmentHash);
     assert.equal(enrollmentHash, (await t.registry.getPolicy(claimant)).enrollmentHash);
     assert.deepEqual(claim.enrollment, { available: true, url: `/api/evidence/${enrollmentHash}` });
-    assert.deepEqual(claim.deviceCheck, { enrollmentImeiMatchesPolicy: true, claimImeiMatchesEnrollment: true });
+    assert.deepEqual(claim.deviceCheck, { enrollmentMatchesPolicy: true, claimMatchesEnrollment: true });
 
     const signup = await getEvidence(jurors[0], enrollmentHash);
     assert.equal(signup.kind, "enrollment");
