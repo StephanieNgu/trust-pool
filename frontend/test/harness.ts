@@ -12,7 +12,7 @@
 import hre from "hardhat";
 import { setup } from "../../backend/test/helpers";
 
-export { PHOTO, USDC, ethers, increaseTime, signerFor } from "../../backend/test/helpers";
+export { PHOTO, USDC, ethers, increaseTime, signerFor, testDevice, testImei } from "../../backend/test/helpers";
 
 export type Stack = Awaited<ReturnType<typeof setup>>;
 

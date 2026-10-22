@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { keccak256 } from "ethers";
 import {
   ApiError,
+  claimDeviceId,
   getClaim,
   getClaimsForJuror,
   getClaimsForMember,
@@ -14,6 +15,7 @@ import {
   getEvidence,
   getEvidenceResource,
   readCachedWalletAuth,
+  requestCaptureCode,
   uploadEvidence,
   validateEvidenceFiles,
 } from "../src/api";
@@ -25,7 +27,7 @@ import {
   readVoteCommitment,
   revealJuryVote,
 } from "../src/contracts/jury";
-import { USDC, increaseTime, pickedFile, progressLog, startStack, stopStack, type Stack } from "./harness";
+import { USDC, increaseTime, pickedFile, progressLog, startStack, stopStack, testImei, type Stack } from "./harness";
 
 const PHOTO_BYTES = new TextEncoder().encode("front of the phone, cracked from corner to corner");
 const ZERO_HASH = `0x${"0".repeat(64)}`;
@@ -44,6 +46,13 @@ describe("frontend claim workflow", () => {
     await stopStack(t);
   });
 
+  it("reads what the claimant typed as an IMEI when it is one, else as a serial number", () => {
+    assert.deepEqual(claimDeviceId(` ${testImei(0).slice(0, 8)}-${testImei(0).slice(8)} `), { imei: testImei(0) });
+    assert.deepEqual(claimDeviceId(" C02XK1ABJG5H "), { serial: "C02XK1ABJG5H" });
+    assert.deepEqual(claimDeviceId("123456789012345"), { serial: "123456789012345" }, "15 digits failing the check digit");
+    assert.equal(claimDeviceId("  "), undefined);
+  });
+
   it("checks evidence files before anything is signed or uploaded", () => {
     assert.throws(() => validateEvidenceFiles([]), /between 1 and 10/);
     assert.throws(() => validateEvidenceFiles([pickedFile("notes.txt", "text/plain", "hi")]), /not a supported/);
@@ -56,10 +65,16 @@ describe("frontend claim workflow", () => {
   });
 
   it("signs in, uploads evidence and caches the signature for later requests", async () => {
-    const summary = await uploadEvidence(claimant, "Cracked screen after a drop", [
-      pickedFile("front.jpg", "image/jpeg", PHOTO_BYTES),
-      pickedFile("receipt.pdf", "application/pdf", "%PDF-1.4 receipt"),
-    ]);
+    const { code } = await requestCaptureCode(claimant);
+    const summary = await uploadEvidence(
+      claimant,
+      "Cracked screen after a drop",
+      [pickedFile("front.jpg", "image/jpeg", PHOTO_BYTES), pickedFile("receipt.pdf", "application/pdf", "%PDF-1.4 receipt")],
+      code,
+      testImei(0),
+    );
+    assert.equal(summary.capture?.code, code);
+    assert.deepEqual(summary.device, { imei: testImei(0) });
     assert.match(summary.evidenceHash, /^0x[0-9a-f]{64}$/);
     assert.equal(summary.description, "Cracked screen after a drop");
     assert.deepEqual(
@@ -138,6 +153,21 @@ describe("frontend claim workflow", () => {
     assert.deepEqual(photo, PHOTO_BYTES);
 
     await assert.rejects(getEvidenceResource(juror, "https://example.com/evidence"), /invalid evidence URL/);
+  });
+
+  it("lets a juror compare the claim with the photos taken at signup", async () => {
+    const claim = await getClaim("1");
+    const { enrollmentHash } = claim;
+    assert.ok(enrollmentHash);
+    assert.equal(enrollmentHash, (await t.registry.getPolicy(claimant)).enrollmentHash);
+    assert.deepEqual(claim.enrollment, { available: true, url: `/api/evidence/${enrollmentHash}` });
+    assert.deepEqual(claim.deviceCheck, { enrollmentMatchesPolicy: true, claimMatchesEnrollment: true });
+
+    const signup = await getEvidence(jurors[0], enrollmentHash);
+    assert.equal(signup.kind, "enrollment");
+    assert.equal(signup.device?.imei, testImei(0));
+    const raw = await getEvidenceResource(jurors[0], signup.rawUrl);
+    assert.equal(keccak256(raw), enrollmentHash);
   });
 
   it("keeps the evidence from members who are not on the jury", async () => {
@@ -227,9 +257,12 @@ describe("frontend claim workflow", () => {
 
   it("cancels a claim whose jury randomness never arrives", async () => {
     const other = t.holders[1].address;
-    const { evidenceHash: hash } = await uploadEvidence(other, "Battery swelling", [
-      pickedFile("battery.png", "image/png", "png bytes"),
-    ]);
+    const { evidenceHash: hash } = await uploadEvidence(
+      other,
+      "Battery swelling",
+      [pickedFile("battery.png", "image/png", "png bytes")],
+      (await requestCaptureCode(other)).code,
+    );
     await submitClaim(other, "120", 6, hash, () => {});
     const id = (await getClaimsForMember(other))[0].id;
 

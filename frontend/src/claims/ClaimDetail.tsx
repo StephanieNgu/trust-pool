@@ -30,6 +30,15 @@ function outcomeCopy(reason: ClaimJury["outcomeReason"]) {
   return "Pending";
 }
 
+function DeviceCheck({ check }: { check: ClaimDetailView["deviceCheck"] }) {
+  const badge = (value: boolean | null, yes: string, no: string, unknown: string) =>
+    <span className={value === null ? "" : value ? "match" : "mismatch"}>{value === null ? unknown : value ? `✓ ${yes}` : `⚠ ${no}`}</span>;
+  return <div className="imei-checks" aria-label="Automatic device checks">
+    {badge(check.enrollmentMatchesPolicy, "Signup details match the policy", "Signup details do not match the policy", "No signup details on record")}
+    {badge(check.claimMatchesEnrollment, "Claim IMEI or serial matches signup", "Claim IMEI or serial differs from signup", "No IMEI or serial given with the claim")}
+  </div>;
+}
+
 export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enableJurorActions = false, onAuthenticated, onClaimChanged, onBack }: ClaimDetailProps) {
   const [claim, setClaim] = useState<ClaimDetailView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,7 +118,13 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
       <div><dt>Your role</dt><dd>{claim.claimant.toLowerCase() === account.toLowerCase() ? "Claimant" : currentJuror ? "Selected juror" : "Observer"}</dd></div>
     </dl>
 
-    <EvidenceViewer account={account} claim={claim} onAuthenticated={onAuthenticated} onVerificationChange={setEvidenceVerified} />
+    <div className="detail-section-heading"><div><span className="eyebrow">SAME DEVICE?</span><h3>Signup photos and claim photos</h3></div></div>
+    <p className="muted">Check that the claim photos show the device registered at signup (same model, colour and marks), that the damage is real, and that the first claim photo shows its capture code.</p>
+    <DeviceCheck check={claim.deviceCheck} />
+    <div className="evidence-compare">
+      <EvidenceViewer account={account} claim={claim} source="enrollment" onAuthenticated={onAuthenticated} />
+      <EvidenceViewer account={account} claim={claim} onAuthenticated={onAuthenticated} onVerificationChange={setEvidenceVerified} />
+    </div>
 
     <div className="detail-section-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h3>Jury</h3></div>{jury && <span>{jury.commits} committed · {jury.approvals + jury.rejections} revealed</span>}</div>
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>

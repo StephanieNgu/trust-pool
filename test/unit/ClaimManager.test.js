@@ -7,6 +7,7 @@ const {
   selectJury,
   submitClaim,
   deviceHash,
+  enrollmentHash,
   USDC,
   COVERAGE,
   EVIDENCE,
@@ -70,7 +71,7 @@ describe("ClaimManager", function () {
       const [, alice] = ctx.signers;
       await ctx.token.mint(alice.address, USDC(100));
       await ctx.token.connect(alice).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
-      await ctx.registry.connect(alice).buyPolicy(deviceHash("a"), COVERAGE);
+      await ctx.registry.connect(alice).buyPolicy(deviceHash("a"), COVERAGE, enrollmentHash("a"));
       await expect(ctx.claimManager.connect(alice).submitClaim(USDC(1), EVIDENCE)).to.be.revertedWithCustomError(
         ctx.claimManager,
         "WaitingPeriodNotElapsed",
@@ -181,7 +182,7 @@ describe("ClaimManager", function () {
       for (const [i, h] of holders.entries()) {
         await ctx.token.mint(h.address, USDC(100));
         await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
-        await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE);
+        await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
       }
       await time.increase(ctx.params.waitingPeriod);
 
@@ -219,7 +220,7 @@ describe("ClaimManager", function () {
       for (const [i, h] of holders.entries()) {
         await ctx.token.mint(h.address, USDC(100));
         await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
-        await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE);
+        await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
       }
       await time.increase(ctx.params.waitingPeriod);
 

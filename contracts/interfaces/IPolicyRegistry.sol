@@ -15,6 +15,8 @@ interface IPolicyRegistry {
         uint256 coverageLimit;
         uint256 startTime;
         Status status;
+        /// @dev Hash of the off-chain enrollment bundle: device details and photos taken at signup.
+        bytes32 enrollmentHash;
     }
 
     function getPolicy(address holder) external view returns (Policy memory);

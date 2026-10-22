@@ -27,7 +27,9 @@ async function main() {
     await (await token.mint(member.address, USDC(500))).wait();
     await (await token.connect(member).approve(poolAddr, ethers.MaxUint256)).wait();
     const deviceIdHash = ethers.keccak256(ethers.toUtf8Bytes(`IMEI-35-000000-${i}`));
-    await (await registry.connect(member).buyPolicy(deviceIdHash, USDC(1_000))).wait();
+    // Stands in for the hash of the signup photo bundle the backend would store.
+    const enrollmentHash = ethers.keccak256(ethers.toUtf8Bytes(`enrollment-photos-${i}`));
+    await (await registry.connect(member).buyPolicy(deviceIdHash, USDC(1_000), enrollmentHash)).wait();
   }
   console.log(`    Premium each: ${fmt(await registry.premiumFor(USDC(1_000)))}`);
 

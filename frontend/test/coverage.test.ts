@@ -3,10 +3,18 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256, toUtf8Bytes } from "ethers";
-import { getDashboardOverview, getMember } from "../src/api";
+import { enrollDevice, getDashboardOverview, getEvidence, getMember, requestCaptureCode } from "../src/api";
 import { purchaseCoverage, quoteCoverage } from "../src/contracts/insurance";
 import { cancelCoverage, contributeToPool } from "../src/contracts/member";
-import { USDC, browser, progressLog, startStack, stopStack, type Stack } from "./harness";
+import { USDC, browser, pickedFile, progressLog, startStack, stopStack, testDevice, testImei, type Stack } from "./harness";
+
+/** Stands in for a signup bundle in tests that fail before anything is sent. */
+const SOME_ENROLLMENT = `0x${"11".repeat(32)}`;
+const photos = () => [
+  pickedFile("IMG_0001.jpg", "image/jpeg", "front"),
+  pickedFile("IMG_0002.jpg", "image/jpeg", "back"),
+  pickedFile("IMG_0003.png", "image/png", "about screen"),
+];
 
 describe("frontend coverage workflow", () => {
   let t: Stack;
@@ -45,20 +53,51 @@ describe("frontend coverage workflow", () => {
   });
 
   it("refuses to buy against a stale quote or without enough mUSDC", async () => {
-    await assert.rejects(purchaseCoverage(account, "Phone", "800", "39.0", () => {}), /premium has changed/);
+    await assert.rejects(purchaseCoverage(account, testDevice(60), "800", "39.0", SOME_ENROLLMENT, () => {}), /premium has changed/);
 
     const broke = t.signers[11].address;
-    await assert.rejects(purchaseCoverage(broke, "Phone", "800", "40.0", () => {}), /Insufficient mUSDC/);
+    await assert.rejects(purchaseCoverage(broke, testDevice(60), "800", "40.0", SOME_ENROLLMENT, () => {}), /Insufficient mUSDC/);
 
     assert.equal((await getMember(account)).policy, null);
     assert.equal((await getMember(broke)).policy, null);
+  });
+
+  it("refuses to buy before the device photos are uploaded", async () => {
+    await assert.rejects(purchaseCoverage(account, testDevice(60), "800", "40.0", "", () => {}), /device photos/);
+    await assert.rejects(
+      purchaseCoverage(account, testDevice(60), "800", "40.0", `0x${"0".repeat(64)}`, () => {}),
+      /device photos/,
+    );
+  });
+
+  it("checks the device details before asking for a signature", async () => {
+    const code = { code: "TP-AAAAAA" };
+    await assert.rejects(enrollDevice(account, { ...testDevice(60), imei: "1234" }, photos(), code.code), /15-digit IMEI/);
+    await assert.rejects(enrollDevice(account, { ...testDevice(60), color: " " }, photos(), code.code), /device color/);
+    await assert.rejects(enrollDevice(account, testDevice(60), photos(), ""), /capture code/);
+    await assert.rejects(enrollDevice(account, { ...testDevice(60), imei: "" }, photos(), code.code), /15-digit IMEI/, "a phone needs its IMEI");
+    await assert.rejects(enrollDevice(account, { ...testDevice(60), type: undefined }, photos(), code.code), /kind of device/);
+  });
+
+  let enrollmentHash: string;
+  it("uploads the device details and signup photos with a capture code", async () => {
+    const { code } = await requestCaptureCode(account);
+    const summary = await enrollDevice(account, { ...testDevice(60), imei: ` ${testImei(60).slice(0, 8)} ${testImei(60).slice(8)} ` }, photos(), code);
+    assert.equal(summary.kind, "enrollment");
+    assert.deepEqual(summary.device, testDevice(60), "IMEI spaces removed, fields trimmed");
+    assert.equal(summary.capture?.code, code);
+    assert.equal(summary.files.length, 3);
+    enrollmentHash = summary.evidenceHash;
+    assert.equal((await getEvidence(account, enrollmentHash)).kind, "enrollment");
+
+    await assert.rejects(enrollDevice(account, testDevice(60), photos(), code), /already been used/);
   });
 
   it("approves the premium, buys the policy and shows it on the dashboard", async () => {
     const before = await getDashboardOverview(account);
     const progress = progressLog();
 
-    const txHash = await purchaseCoverage(account, "  Pixel 9 · IMEI 356938035643809  ", "800", "40.0", progress.report);
+    const txHash = await purchaseCoverage(account, testDevice(60), "800", "40.0", enrollmentHash, progress.report);
     assert.match(txHash, /^0x[0-9a-f]{64}$/);
     assert.deepEqual(progress.messages, [
       "Approve the mUSDC payment in MetaMask.",
@@ -79,15 +118,18 @@ describe("frontend coverage workflow", () => {
     assert.equal(after.pastWaitingPeriod, false);
     assert.notEqual(after.policyId, "0");
 
-    // Only the hash of the trimmed device id goes on-chain.
+    // Only hashes go on-chain: of the IMEI, and of the signup bundle.
     const policy = (await getMember(account)).policy;
     assert.ok(policy);
-    assert.equal(policy.deviceIdHash, keccak256(toUtf8Bytes("Pixel 9 · IMEI 356938035643809")));
-    assert.equal((await t.registry.getPolicy(account)).deviceIdHash, policy.deviceIdHash);
+    assert.equal(policy.deviceIdHash, keccak256(toUtf8Bytes(testImei(60))));
+    assert.equal(policy.enrollmentHash, enrollmentHash);
+    const onChain = await t.registry.getPolicy(account);
+    assert.equal(onChain.deviceIdHash, policy.deviceIdHash);
+    assert.equal(onChain.enrollmentHash, enrollmentHash);
   });
 
   it("does not let the same wallet buy a second policy", async () => {
-    await assert.rejects(purchaseCoverage(account, "Tablet", "500", "25.0", () => {}));
+    await assert.rejects(purchaseCoverage(account, testDevice(61), "500", "25.0", SOME_ENROLLMENT, () => {}));
     const policy = (await getMember(account)).policy;
     assert.equal(policy?.coverageLimit, USDC(800).toString());
   });
@@ -98,12 +140,15 @@ describe("frontend coverage workflow", () => {
     await (await t.token.connect(other).approve(await t.pool.getAddress(), USDC(100))).wait();
 
     const progress = progressLog();
-    await purchaseCoverage(other.address, "Laptop", "1000", "50.0", progress.report);
+    // A camera has no IMEI, so it is identified on-chain by make and serial number.
+    const camera = { type: "camera" as const, serial: "cam 0001", make: "Canon", model: "EOS R50", color: "Black" };
+    await purchaseCoverage(other.address, camera, "1000", "50.0", SOME_ENROLLMENT, progress.report);
     assert.deepEqual(progress.messages, [
       "Confirm your device coverage in MetaMask.",
       "Your coverage transaction is confirming…",
     ]);
     assert.equal((await getDashboardOverview(other.address)).coverage, "1000.0");
+    assert.equal((await t.registry.getPolicy(other.address)).deviceIdHash, keccak256(toUtf8Bytes("canon:CAM0001")));
   });
 
   it("adds a pool contribution to the member and pool totals", async () => {
@@ -148,7 +193,7 @@ describe("frontend coverage workflow", () => {
     browser.walletChainId = "0x1";
     try {
       await assert.rejects(quoteCoverage(account, "100"), /Switch to Hardhat Local/);
-      await assert.rejects(purchaseCoverage(account, "Phone", "100", "5.0", () => {}), /Switch to Hardhat Local/);
+      await assert.rejects(purchaseCoverage(account, testDevice(60), "100", "5.0", SOME_ENROLLMENT, () => {}), /Switch to Hardhat Local/);
     } finally {
       browser.walletChainId = null;
     }

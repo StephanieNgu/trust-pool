@@ -6,8 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keccak256 } from "ethers";
 import {
+  deviceIdHash,
+  deviceIdentifier,
+  encodeBundle,
   EvidenceError,
   LocalEvidenceStore,
+  sameDevice,
   MAX_FILE_BYTES,
   loadOrCreateKeyFile,
   parseEvidenceKey,
@@ -120,5 +124,29 @@ describe("LocalEvidenceStore", async () => {
     assert.equal(await store.getRaw(`0x${"00".repeat(32)}`), null);
     assert.equal(await store.getRaw("../../etc/passwd"), null);
     assert.equal(await store.has("../../etc/passwd"), false);
+  });
+});
+
+describe("device identity", () => {
+  it("identifies a device by IMEI when it has one, otherwise by make and serial", () => {
+    assert.equal(deviceIdentifier({ imei: "490154203237518", serial: "X", make: "Apple" }), "490154203237518");
+    assert.equal(deviceIdentifier({ serial: " ab 12c ", make: " Canon " }), "canon:AB12C");
+    assert.equal(deviceIdHash({ serial: "AB12C", make: "canon" }), keccak256(Buffer.from("canon:AB12C")));
+    assert.throws(() => deviceIdentifier({ serial: "AB12C" }));
+  });
+
+  it("matches a claim to the enrolled device by IMEI, else by serial", () => {
+    const phone = { type: "phone" as const, imei: "490154203237518", serial: "F2LX", make: "Apple" };
+    assert.equal(sameDevice({ imei: "490154203237518" }, phone), true);
+    assert.equal(sameDevice({ imei: "356938035643809" }, phone), false);
+    assert.equal(sameDevice({ serial: "f2 lx" }, phone), true);
+    assert.equal(sameDevice({ serial: "OTHER" }, { type: "camera", serial: "AB12C", make: "Canon" }), false);
+    assert.equal(sameDevice(null, phone), null);
+    assert.equal(sameDevice({ imei: "490154203237518" }, { type: "camera", serial: "AB12C", make: "Canon" }), null);
+  });
+
+  it("accepts a claim's IMEI or serial, but not neither", () => {
+    assert.doesNotThrow(() => encodeBundle({ device: { serial: "AB12C" }, files: [file("x")] }));
+    assert.throws(() => encodeBundle({ device: {}, files: [file("x")] }), EvidenceError);
   });
 });

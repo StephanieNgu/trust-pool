@@ -1,0 +1,123 @@
+/* Device photos: capture codes, photo slots at signup, and the signup-vs-claim comparison for jurors. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.device-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  column-gap: 14px;
+}
+
+.device-fields label {
+  margin-top: 18px !important;
+}
+
+.capture-code {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px dashed #b9cdec;
+  border-radius: 10px;
+  background: #f7faff;
+}
+
+.capture-code p {
+  margin: 8px 0 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #55657d;
+}
+
+.capture-code-value {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 30px;
+  letter-spacing: 3px;
+  color: #1f3f73;
+}
+
+.photo-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+}
+
+.photo-slot label {
+  margin-top: 18px !important;
+}
+
+.photo-slot img {
+  display: block;
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  margin: 8px 0;
+  border-radius: 8px;
+}
+
+.capture-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.evidence-compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.imei-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+
+.imei-checks span {
+  font-size: 10px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: #edf2f8;
+  color: #5e718e;
+}
+
+.imei-checks .match {
+  background: #e9f7ef;
+  color: #247952;
+}
+
+.imei-checks .mismatch {
+  background: #fff0ed;
+  color: #a74f43;
+}
+
+.evidence-stamp {
+  font-size: 11px;
+  line-height: 1.6;
+  color: #55657d;
+}
+
+.evidence-stamp code {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f3f73;
+}
+
+.device-enrollment select {
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid #dce3ed;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #253047;
+  font-size: 13px;
+}

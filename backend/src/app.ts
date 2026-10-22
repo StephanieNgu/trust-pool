@@ -2,8 +2,17 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { isAddress, type Provider } from "ethers";
 import { CLAIM_STATES, type ClaimState } from "./abis";
 import { AUTH_HEADERS, AUTH_MAX_AGE_SECONDS, AuthError, authMessage, authenticate } from "./auth";
+import { CaptureChallenges, CaptureError } from "./capture";
 import type { Deployment, ProtocolContracts } from "./chain";
-import { EvidenceError, LocalEvidenceStore, MAX_FILE_BYTES, MAX_FILES } from "./evidence";
+import {
+  deviceIdHash,
+  encodeBundle,
+  sameDevice,
+  EvidenceError,
+  LocalEvidenceStore,
+  MAX_FILE_BYTES,
+  MAX_FILES,
+} from "./evidence";
 import type { Keeper } from "./keeper";
 import { getClaimView, getMemberView, getPoolView, listClaims } from "./protocol";
 
@@ -13,6 +22,8 @@ export interface AppDeps {
   /** Read-only contract instances. Users sign their own transactions in their wallet. */
   contracts: ProtocolContracts;
   evidence: LocalEvidenceStore;
+  /** One-time photo capture codes; a fresh in-memory set by default. */
+  captures?: CaptureChallenges;
   keeper?: Keeper | null;
   /** Value for Access-Control-Allow-Origin; omit to disable CORS headers. */
   corsOrigin?: string;
@@ -47,6 +58,7 @@ function parseHash(value: unknown): string {
 
 export function createApp(deps: AppDeps) {
   const { deployment, provider, contracts, evidence, keeper } = deps;
+  const captures = deps.captures ?? new CaptureChallenges();
   const app = express();
   app.disable("x-powered-by");
 
@@ -82,21 +94,21 @@ export function createApp(deps: AppDeps) {
 
   /**
    * Evidence is private. It is served to whoever uploaded it, and to the jurors of a claim that one of
-   * its uploaders filed with it, only while that claim is being voted on. A claim filed by someone else
-   * who copied the hash from the chain grants nothing, so the hash being public does not make the
-   * files public. Other members, past jurors and anonymous callers get a 403.
+   * its uploaders filed with it, only while that claim is being voted on. That covers both the claim's
+   * own photos and the enrollment photos of the policy it was filed on, which jurors compare against.
+   * A claim filed by someone else who copied the hash from the chain grants nothing, so the hash being
+   * public does not make the files public. Other members, past jurors and anonymous callers get a 403.
    */
   async function requireEvidenceAccess(req: Request, evidenceHash: string): Promise<void> {
     const reader = wallet(req).toLowerCase();
     if (!(await evidence.has(evidenceHash))) throw new HttpError(404, "Evidence not found.");
     const uploaders = await evidence.getUploaders(evidenceHash);
     if (uploaders.includes(reader)) return;
-    const claims = await listClaims(contracts, { evidenceHash });
+    const claims = await listClaims(contracts, { juror: reader, state: "Voting" });
     const isJuror = claims.some(
       (c) =>
-        c.state === "Voting" &&
-        uploaders.includes(c.claimant.toLowerCase()) &&
-        (c.jury?.jurors.some((j) => j.address.toLowerCase() === reader) ?? false),
+        (c.evidenceHash.toLowerCase() === evidenceHash || c.enrollmentHash?.toLowerCase() === evidenceHash) &&
+        uploaders.includes(c.claimant.toLowerCase()),
     );
     if (!isJuror) {
       throw new HttpError(
@@ -148,13 +160,34 @@ export function createApp(deps: AppDeps) {
     res.json({ claims });
   });
 
+  /**
+   * Automatic checks shown to jurors next to the photos. Only yes/no answers are public; the IMEIs
+   * and serials themselves stay in the private bundles. null means there was nothing to compare.
+   */
+  async function checkDevice(claimant: string, claimHash: string, enrollmentHash: string | null) {
+    const enrolled = enrollmentHash ? await evidence.getDevice(enrollmentHash) : null;
+    const claimed = (await evidence.has(claimHash)) ? await evidence.getDevice(claimHash) : null;
+    let enrollmentMatchesPolicy: boolean | null = null;
+    if (enrolled) {
+      const policy = await contracts.registry.getPolicy(claimant);
+      enrollmentMatchesPolicy = deviceIdHash(enrolled) === policy.deviceIdHash;
+    }
+    return { enrollmentMatchesPolicy, claimMatchesEnrollment: sameDevice(claimed, enrolled) };
+  }
+
   app.get("/api/claims/:id", async (req, res) => {
     const claim = await getClaimView(contracts, parseClaimId(req.params.id));
     if (!claim) throw new HttpError(404, "Claim not found.");
     const available = await evidence.has(claim.evidenceHash);
+    const enrollmentAvailable = claim.enrollmentHash !== null && (await evidence.has(claim.enrollmentHash));
     res.json({
       ...claim,
       evidence: { available, url: available ? `/api/evidence/${claim.evidenceHash}` : null },
+      enrollment: {
+        available: enrollmentAvailable,
+        url: enrollmentAvailable ? `/api/evidence/${claim.enrollmentHash}` : null,
+      },
+      deviceCheck: await checkDevice(claim.claimant, claim.evidenceHash, enrollmentAvailable ? claim.enrollmentHash : null),
     });
   });
 
@@ -174,12 +207,29 @@ export function createApp(deps: AppDeps) {
     });
   });
 
+  /**
+   * A one-time code to show in the photos about to be taken. Upload them with it as `captureCode`
+   * within CAPTURE_CODE_TTL_SECONDS.
+   */
+  app.post("/api/capture/code", (req, res) => {
+    res.status(201).json(captures.issue(wallet(req)));
+  });
+
+  /**
+   * Upload a bundle. `kind: "enrollment"` (device details and signup photos) is open to any signed-in
+   * wallet, since it comes before buying a policy; its hash is passed to PolicyRegistry.buyPolicy.
+   * `kind: "claim"` (the default) needs an active policy; its hash is passed to submitClaim.
+   */
   app.post("/api/evidence", async (req, res) => {
     const uploader = wallet(req);
-    if (!(await contracts.registry.isActive(uploader))) {
-      throw new HttpError(403, "Only wallets with an active policy can upload evidence.");
+    const kind = (req.body as { kind?: unknown } | undefined)?.kind ?? "claim";
+    if (kind === "claim" && !(await contracts.registry.isActive(uploader))) {
+      throw new HttpError(403, "Only wallets with an active policy can upload claim evidence.");
     }
-    const summary = await evidence.put(req.body, uploader);
+    // Validate before using up the capture code, so a mistake in the form does not cost a retake.
+    encodeBundle(req.body);
+    const capture = captures.consume(uploader, (req.body as { captureCode?: unknown }).captureCode);
+    const summary = await evidence.put(req.body, uploader, capture);
     res.status(201).json(summary);
   });
 
@@ -226,7 +276,7 @@ export function createApp(deps: AppDeps) {
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     void _next;
-    if (err instanceof HttpError || err instanceof EvidenceError || err instanceof AuthError) {
+    if (err instanceof HttpError || err instanceof EvidenceError || err instanceof AuthError || err instanceof CaptureError) {
       res.status(err.status).json({ error: err.message });
       return;
     }

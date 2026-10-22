@@ -47,6 +47,8 @@ export interface ClaimView {
   amount: string;
   coverageLimit: string;
   evidenceHash: string;
+  /** The enrollment bundle of the policy the claim was filed on: the device as it was at signup. */
+  enrollmentHash: string | null;
   state: ClaimState;
   submittedAt: number;
   paidAmount: string;
@@ -74,7 +76,14 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
   const state = CLAIM_STATES[Number(claim.state)];
   if (state === "None") return null;
 
-  const [jury, payoutAmount] = await Promise.all([getJuryView(c, claimId), c.claimManager.payoutAmount(claimId)]);
+  const [jury, payoutAmount, policy] = await Promise.all([
+    getJuryView(c, claimId),
+    c.claimManager.payoutAmount(claimId),
+    c.registry.getPolicy(claim.claimant),
+  ]);
+  // A claim keeps its policy open, so the holder's current policy is the claim's unless it has since
+  // been closed and replaced; then the original enrollment is no longer on-chain.
+  const enrollmentHash = policy.id === claim.policyId && policy.enrollmentHash !== ZERO_HASH ? policy.enrollmentHash : null;
   return {
     id: claim.id.toString(),
     claimant: claim.claimant,
@@ -82,6 +91,7 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
     amount: claim.amount.toString(),
     coverageLimit: claim.coverageLimit.toString(),
     evidenceHash: claim.evidenceHash,
+    enrollmentHash,
     state,
     submittedAt: Number(claim.submittedAt),
     paidAmount: claim.paidAmount.toString(),
@@ -192,6 +202,7 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
         : {
             id: policy.id.toString(),
             deviceIdHash: policy.deviceIdHash,
+            enrollmentHash: policy.enrollmentHash,
             coverageLimit: policy.coverageLimit.toString(),
             startTime: Number(policy.startTime),
             status,
