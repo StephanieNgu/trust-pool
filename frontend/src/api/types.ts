@@ -59,12 +59,20 @@ export type ClaimState =
   | "Approved"
   | "Rejected"
   | "Paid"
-  | "Cancelled";
+  | "Cancelled"
+  /** The jury voted an amount; the claimant accepts it or withdraws before `offerDeadline`. */
+  | "Offered"
+  /** The claimant turned the jury's offer down. */
+  | "Withdrawn";
 
 export interface ClaimJuror {
   address: string;
   committed: boolean;
   revealed: boolean;
+  /** The amount this juror voted to pay once revealed, in token base units ("0" rejects); null while sealed. */
+  amount: string | null;
+  /** Hash of the juror's note once revealed, or null if sealed or no note. */
+  noteHash: string | null;
 }
 
 export interface ClaimJury {
@@ -75,6 +83,10 @@ export interface ClaimJury {
   commits: number;
   approvals: number;
   rejections: number;
+  /** The most a juror may vote: the amount asked for, in base units. */
+  maxAmount: string;
+  /** Once tallied: the median juror amount, in base units. */
+  award: string | null;
   quorum: number;
   outcome: "None" | "Approved" | "Rejected";
   outcomeReason: "majorityApproved" | "majorityRejected" | "tie" | "noQuorum" | null;
@@ -94,6 +106,8 @@ export interface ClaimView {
   enrollmentHash: string | null;
   state: ClaimState;
   submittedAt: number;
+  /** While Offered: when the time to accept or withdraw ends. Silence then counts as accepting. */
+  offerDeadline: number | null;
   paidAmount: string;
   payoutAmount: string;
   jury: ClaimJury | null;
@@ -164,10 +178,21 @@ export interface EvidenceSummary {
   evidenceHash: string;
   kind: EvidenceKind;
   description: string;
+  /** Claims: why the claimant asked for this amount, or "". */
+  amountReason: string;
   device: DeviceDetails | null;
   capture: CaptureStamp | null;
   size: number;
   files: EvidenceFileInfo[];
+}
+
+/** A revealed juror vote, shown to the claimant and the other jurors. */
+export interface JuryVote {
+  juror: string;
+  /** Token base units; "0" means the juror voted to reject. */
+  amount: string;
+  /** The juror's reasoning, or null if they left none. */
+  note: string | null;
 }
 
 export interface EvidenceDetail extends Omit<EvidenceSummary, "files"> {

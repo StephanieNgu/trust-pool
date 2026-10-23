@@ -191,6 +191,48 @@ export function createApp(deps: AppDeps) {
     });
   });
 
+  /**
+   * A juror's note, sent before they seal their vote. Returns the hash to seal with the amount
+   * (JuryModule.computeCommitment). The text stays private until the juror reveals.
+   */
+  app.post("/api/claims/:id/notes", async (req, res) => {
+    const juror = wallet(req);
+    const claim = await getClaimView(contracts, parseClaimId(req.params.id));
+    if (!claim) throw new HttpError(404, "Claim not found.");
+    const seat = claim.jury?.jurors.find((j) => j.address.toLowerCase() === juror.toLowerCase());
+    if (claim.state !== "Voting" || !seat) {
+      throw new HttpError(403, "Only the claim's jurors can add a note, while voting is open.");
+    }
+    if (seat.committed) throw new HttpError(409, "Your vote is already sealed, and its note with it.");
+    const noteHash = await evidence.putNote(Number(claim.id), juror, (req.body as { note?: unknown } | undefined)?.note);
+    res.status(201).json({ noteHash });
+  });
+
+  /**
+   * Revealed votes with each juror's amount and note. The amounts are public on-chain; the notes are
+   * shown only to the claimant and the claim's jurors, since they may describe the evidence.
+   */
+  app.get("/api/claims/:id/votes", async (req, res) => {
+    const reader = wallet(req).toLowerCase();
+    const claim = await getClaimView(contracts, parseClaimId(req.params.id));
+    if (!claim) throw new HttpError(404, "Claim not found.");
+    const jurors = claim.jury?.jurors ?? [];
+    if (claim.claimant.toLowerCase() !== reader && !jurors.some((j) => j.address.toLowerCase() === reader)) {
+      throw new HttpError(403, "Only the claimant and the claim's jurors can read the jurors' notes.");
+    }
+    const votes = await Promise.all(
+      jurors
+        .filter((j) => j.revealed)
+        .map(async (j) => ({
+          juror: j.address,
+          amount: j.amount,
+          note: j.noteHash ? await evidence.getNote(Number(claim.id), j.address, j.noteHash) : null,
+        })),
+    );
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json({ votes });
+  });
+
   // ---------------------------------------------------------------------------
   // Evidence: wallet-authenticated. Upload returns the hash to pass to ClaimManager.submitClaim.
   // ---------------------------------------------------------------------------

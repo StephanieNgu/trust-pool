@@ -121,3 +121,16 @@
   color: #253047;
   font-size: 13px;
 }
+
+/* Jury offers: the claimant's accept/withdraw panel and the jurors' amounts and reasoning. */
+.state-offered{background:#fff7e6;color:#9a6512}.state-withdrawn{background:#edf2f8;color:#5e718e}
+.offer-panel{border-color:#f0dfb8;background:#fffbf2}.offer-panel h3 small{font-size:12px;font-weight:500;color:#6f8098}
+.offer-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:16px}.offer-actions .notice{flex-basis:100%;margin:0}
+.jury-reasoning{margin-top:14px}.jury-reasoning .detail-section-heading{margin-top:0}
+.reasoning-list{list-style:none;margin:10px 0 0;padding:0;border:1px solid #e6ebf3;border-radius:10px;overflow:hidden;background:#fff}
+.reasoning-list li{display:grid;grid-template-columns:110px minmax(0,1fr) auto;gap:12px;align-items:baseline;padding:11px 13px;border-bottom:1px solid #edf1f6;font-size:11px;line-height:1.6}
+.reasoning-list li:last-child{border-bottom:0}.reasoning-amount{font-weight:700;color:#253047}.reasoning-note{overflow-wrap:anywhere;color:#425774}.reasoning-list code{font-size:9px;color:#8090a7}
+@media(max-width:480px){.reasoning-list li{grid-template-columns:1fr}}
+.vote-panel .amount-input input{width:100%;padding:12px 83px 12px 12px;border:1px solid #d5dfed;border-radius:8px;background:#fff;color:#253047;font-size:13px}
+.vote-panel .amount-input input:focus{outline:2px solid #94baf7;border-color:transparent}.vote-panel .amount-input>span{top:13px}
+.vote-panel small{display:block;margin-top:8px;font-size:10px;color:#78899f;line-height:1.6}

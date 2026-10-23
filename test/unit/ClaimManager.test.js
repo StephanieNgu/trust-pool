@@ -14,6 +14,7 @@ const {
   ClaimState,
   castVotes,
   votingPeriod,
+  finalizeAndAccept,
 } = require("../helpers");
 
 async function castAll(ctx, claimId, jurors, approve) {
@@ -25,6 +26,15 @@ async function approvedClaimFixture() {
   const claimId = await submitClaim(ctx, ctx.claimant, USDC(400));
   const jurors = await selectJury(ctx, claimId);
   await castAll(ctx, claimId, jurors, true);
+  await finalizeAndAccept(ctx, claimId, ctx.claimant);
+  return { ...ctx, claimId, jurors };
+}
+
+async function offeredClaimFixture() {
+  const ctx = await activePoolFixture();
+  const claimId = await submitClaim(ctx, ctx.claimant, USDC(400));
+  const jurors = await selectJury(ctx, claimId);
+  await castVotes(ctx, claimId, jurors, [USDC(150), USDC(150), USDC(200), USDC(400), 0n]);
   await ctx.claimManager.finalize(claimId);
   return { ...ctx, claimId, jurors };
 }
@@ -160,6 +170,83 @@ describe("ClaimManager", function () {
     });
   });
 
+  describe("offers", function () {
+    it("offers the median juror amount with a response deadline", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const claimId = await submitClaim(ctx, ctx.claimant, USDC(400));
+      await castVotes(ctx, claimId, await selectJury(ctx, claimId), [USDC(150), USDC(150), USDC(200), USDC(400), 0n]);
+      await expect(ctx.claimManager.finalize(claimId))
+        .to.emit(ctx.claimManager, "OfferMade")
+        .and.to.emit(ctx.claimManager, "ClaimStateChanged")
+        .withArgs(claimId, ClaimState.Voting, ClaimState.Offered);
+      const claim = await ctx.claimManager.getClaim(claimId);
+      expect(claim.approvedAmount).to.equal(USDC(150));
+      expect(claim.offerDeadline).to.equal(BigInt(await time.latest()) + BigInt(ctx.params.responsePeriod));
+      expect(await ctx.claimManager.payoutAmount(claimId)).to.equal(USDC(150));
+    });
+
+    it("cannot pay before the offer is accepted", async function () {
+      const ctx = await loadFixture(offeredClaimFixture);
+      await expect(ctx.claimManager.executePayout(ctx.claimId))
+        .to.be.revertedWithCustomError(ctx.claimManager, "WrongState")
+        .withArgs(ClaimState.Approved, ClaimState.Offered);
+    });
+
+    it("lets the claimant accept, and only the claimant before the deadline", async function () {
+      const ctx = await loadFixture(offeredClaimFixture);
+      const { claimManager, claimId, claimant, holders } = ctx;
+      await expect(claimManager.connect(holders[3]).acceptOffer(claimId)).to.be.revertedWithCustomError(
+        claimManager,
+        "ResponseWindowOpen",
+      );
+      await expect(claimManager.connect(claimant).acceptOffer(claimId))
+        .to.emit(claimManager, "ClaimStateChanged")
+        .withArgs(claimId, ClaimState.Offered, ClaimState.Approved);
+      await expect(claimManager.executePayout(claimId))
+        .to.emit(claimManager, "ClaimPaid")
+        .withArgs(claimId, claimant.address, USDC(150));
+    });
+
+    it("counts silence as accepting once the deadline passes", async function () {
+      const ctx = await loadFixture(offeredClaimFixture);
+      const { claimManager, claimId, claimant, holders, params } = ctx;
+      await time.increase(params.responsePeriod + 1);
+      await expect(claimManager.connect(claimant).withdrawClaim(claimId)).to.be.revertedWithCustomError(
+        claimManager,
+        "ResponseWindowClosed",
+      );
+      await claimManager.connect(holders[3]).acceptOffer(claimId);
+      expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Approved);
+    });
+
+    it("lets the claimant withdraw, paying nothing and freeing the policy", async function () {
+      const ctx = await loadFixture(offeredClaimFixture);
+      const { claimManager, claimId, claimant, holders } = ctx;
+      await expect(claimManager.connect(holders[3]).withdrawClaim(claimId)).to.be.revertedWithCustomError(
+        claimManager,
+        "NotClaimant",
+      );
+      await expect(claimManager.connect(claimant).withdrawClaim(claimId))
+        .to.emit(claimManager, "ClaimStateChanged")
+        .withArgs(claimId, ClaimState.Offered, ClaimState.Withdrawn);
+      expect(await claimManager.payoutAmount(claimId)).to.equal(0n);
+      await expect(claimManager.executePayout(claimId)).to.be.revertedWithCustomError(claimManager, "WrongState");
+      await expect(claimManager.acceptOffer(claimId)).to.be.revertedWithCustomError(claimManager, "WrongState");
+      await expect(claimManager.connect(claimant).submitClaim(USDC(1), EVIDENCE)).to.emit(
+        claimManager,
+        "ClaimSubmitted",
+      );
+    });
+
+    it("rejects a zero response period", async function () {
+      const { registry, pool, jury } = await loadFixture(deployFixture);
+      const CM = await ethers.getContractFactory("ClaimManager");
+      await expect(
+        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 0),
+      ).to.be.revertedWithCustomError(CM, "InvalidConfig");
+    });
+  });
+
   describe("executePayout", function () {
     it("pays the claim amount and cannot pay twice", async function () {
       const ctx = await loadFixture(approvedClaimFixture);
@@ -188,7 +275,7 @@ describe("ClaimManager", function () {
 
       const claimId = await submitClaim(ctx, holders[0], USDC(900));
       await castAll(ctx, claimId, await selectJury(ctx, claimId), true);
-      await ctx.claimManager.finalize(claimId);
+      await finalizeAndAccept(ctx, claimId, holders[0]);
 
       expect(await ctx.pool.maxPayout()).to.equal(USDC(70));
       await expect(ctx.claimManager.executePayout(claimId))
@@ -228,8 +315,8 @@ describe("ClaimManager", function () {
       await castAll(ctx, first, await selectJury(ctx, first), true);
       const second = await submitClaim(ctx, holders[1], USDC(900));
       await castAll(ctx, second, await selectJury(ctx, second, 7n), true);
-      await ctx.claimManager.finalize(first);
-      await ctx.claimManager.finalize(second);
+      await finalizeAndAccept(ctx, first, holders[0]);
+      await finalizeAndAccept(ctx, second, holders[1]);
 
       await ctx.claimManager.executePayout(first);
       const approved = (await ctx.claimManager.getClaim(second)).approvedAmount;

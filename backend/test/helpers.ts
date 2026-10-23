@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import hre from "hardhat";
-import { type Contract, type Signer, id } from "ethers";
+import { type Contract, type Signer, ZeroHash, id } from "ethers";
 import { createApp } from "../src/app";
 import { AUTH_HEADERS, authMessage } from "../src/auth";
 import { connectContracts, type Deployment, type DeploymentAddresses } from "../src/chain";
@@ -48,19 +48,29 @@ export const testDevice = (i: number) => ({
 
 const saltFor = (claimId: number, juror: string) => id(`salt:${claimId}:${juror}`);
 
-/** Commits a sealed vote, as a juror's wallet would. */
-export async function commit(jury: Contract, juror: Signer, claimId: number, approve: boolean) {
+/** A juror's vote: the amount to pay, or true for the full claim and false (0) to reject. */
+export type Vote = bigint | boolean;
+
+async function voteAmount(jury: Contract, claimId: number, vote: Vote): Promise<bigint> {
+  if (typeof vote === "bigint") return vote;
+  return vote ? (await jury.getAward(claimId)).maxAmount : 0n;
+}
+
+/** Commits a sealed vote, as a juror's wallet would. `noteHash` is from POST /api/claims/:id/notes. */
+export async function commit(jury: Contract, juror: Signer, claimId: number, vote: Vote, noteHash = ZeroHash) {
   const address = await juror.getAddress();
-  const commitment = await jury.computeCommitment(claimId, address, approve, saltFor(claimId, address));
+  const amount = await voteAmount(jury, claimId, vote);
+  const commitment = await jury.computeCommitment(claimId, address, amount, noteHash, saltFor(claimId, address));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (await (jury.connect(juror) as any).commitVote(claimId, commitment)).wait();
 }
 
 /** Reveals a vote committed with `commit`. */
-export async function reveal(jury: Contract, juror: Signer, claimId: number, approve: boolean) {
+export async function reveal(jury: Contract, juror: Signer, claimId: number, vote: Vote, noteHash = ZeroHash) {
   const address = await juror.getAddress();
+  const amount = await voteAmount(jury, claimId, vote);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (await (jury.connect(juror) as any).revealVote(claimId, approve, saltFor(claimId, address))).wait();
+  await (await (jury.connect(juror) as any).revealVote(claimId, amount, noteHash, saltFor(claimId, address))).wait();
 }
 
 export async function increaseTime(seconds: number | bigint) {

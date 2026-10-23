@@ -11,6 +11,7 @@ import type {
   EvidenceDetail,
   EvidenceKind,
   EvidenceSummary,
+  JuryVote,
 } from "./types";
 
 export const MAX_EVIDENCE_FILES = 10;
@@ -128,13 +129,19 @@ export async function requestCaptureCode(address: string): Promise<CaptureCode> 
   return apiRequest<CaptureCode>("/api/capture/code", { method: "POST", headers });
 }
 
+export const MAX_AMOUNT_REASON_LENGTH = 1_000;
+export const MAX_JURY_NOTE_LENGTH = 500;
+
 async function postBundle(
   address: string,
-  body: { kind: EvidenceKind; description: string; device?: DeviceDetails; captureCode: string },
+  body: { kind: EvidenceKind; description: string; amountReason?: string; device?: DeviceDetails; captureCode: string },
   files: File[],
 ): Promise<EvidenceSummary> {
   validateEvidenceFiles(files);
   if (body.description.length > 2_000) throw new Error("Evidence description must be 2,000 characters or fewer.");
+  if ((body.amountReason?.length ?? 0) > MAX_AMOUNT_REASON_LENGTH) {
+    throw new Error(`The explanation of the amount must be ${MAX_AMOUNT_REASON_LENGTH.toLocaleString()} characters or fewer.`);
+  }
   if (!body.captureCode) throw new Error("Get a capture code before taking the photos.");
   const headers = await getWalletAuthHeaders(address);
   const encoded = await Promise.all(
@@ -151,6 +158,7 @@ async function postBundle(
 /**
  * Uploads claim evidence. `captureCode` must be one this wallet requested and the photos should show.
  * `deviceId` is optional: the IMEI or serial number the claimant typed, matched against the enrollment.
+ * `amountReason` tells jurors why the claim asks for this amount; a repair quote can be one of `files`.
  */
 export async function uploadEvidence(
   address: string,
@@ -158,9 +166,11 @@ export async function uploadEvidence(
   files: File[],
   captureCode: string,
   deviceId = "",
+  amountReason = "",
 ): Promise<EvidenceSummary> {
   const device = claimDeviceId(deviceId);
-  return postBundle(address, { kind: "claim", description, device, captureCode }, files);
+  const reason = amountReason.trim();
+  return postBundle(address, { kind: "claim", description, ...(reason ? { amountReason: reason } : {}), device, captureCode }, files);
 }
 
 /** Uploads the signup photos and device details. Pass the returned hash to purchaseCoverage. */
@@ -195,6 +205,31 @@ export async function getClaimsForJuror(address: string, state?: ClaimState): Pr
 export function getClaim(claimId: string): Promise<ClaimDetailView> {
   if (!/^\d+$/.test(claimId) || claimId === "0") throw new Error("Claim id must be a positive integer.");
   return apiRequest<ClaimDetailView>(`/api/claims/${claimId}`);
+}
+
+/**
+ * Stores a juror's note for a claim, before they seal their vote, and returns the hash to seal with it.
+ * The note stays private until the juror reveals; then the claimant and the other jurors can read it.
+ */
+export async function submitJuryNote(address: string, claimId: string, note: string): Promise<string> {
+  if (!/^\d+$/.test(claimId) || claimId === "0") throw new Error("Claim id must be a positive integer.");
+  if (!note.trim() || note.length > MAX_JURY_NOTE_LENGTH) {
+    throw new Error(`Write a note of up to ${MAX_JURY_NOTE_LENGTH} characters.`);
+  }
+  const headers = await getWalletAuthHeaders(address);
+  const { noteHash } = await apiRequest<{ noteHash: string }>(`/api/claims/${claimId}/notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({ note }),
+  });
+  return noteHash;
+}
+
+/** Every revealed juror's amount and note. Only the claimant and the claim's jurors may read them. */
+export async function getJuryVotes(address: string, claimId: string): Promise<JuryVote[]> {
+  if (!/^\d+$/.test(claimId) || claimId === "0") throw new Error("Claim id must be a positive integer.");
+  const headers = await getWalletAuthHeaders(address);
+  return (await apiRequest<{ votes: JuryVote[] }>(`/api/claims/${claimId}/votes`, { headers })).votes;
 }
 
 export async function getEvidence(address: string, evidenceHash: string): Promise<EvidenceDetail> {

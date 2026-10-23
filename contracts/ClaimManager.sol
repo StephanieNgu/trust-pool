@@ -10,8 +10,12 @@ import {IPool} from "./interfaces/IPool.sol";
 
 /// @title ClaimManager
 /// @notice Owns the claim state machine:
-///         Submitted -> JuryPending -> Voting -> Approved -> Paid, or Voting -> Rejected,
+///         Submitted -> JuryPending -> Voting -> Offered -> Approved -> Paid, or Voting -> Rejected,
+///         or Offered -> Withdrawn when the claimant turns the jury's offer down,
 ///         or JuryPending -> Cancelled when randomness never arrives.
+/// @dev The jury votes an amount rather than yes/no. Its offer (the median juror amount, capped) is
+///      shown to the claimant with each juror's reasoning; the claimant accepts or withdraws within
+///      `responsePeriod`. Saying nothing counts as accepting, so a claim never waits on the claimant.
 /// @dev Holds no funds. Payouts are executed by the Pool on this contract's instruction.
 contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     enum State {
@@ -22,7 +26,9 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         Approved,
         Rejected,
         Paid,
-        Cancelled
+        Cancelled,
+        Offered,
+        Withdrawn
     }
 
     struct Claim {
@@ -35,13 +41,17 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         State state;
         uint256 submittedAt;
         uint256 paidAmount;
-        /// @dev Payout fixed when the jury approves: min(amount, coverage limit, pool cap at that moment).
+        /// @dev Payout fixed when the jury decides: min(jury offer, coverage limit, pool cap at that moment).
         uint256 approvedAmount;
+        /// @dev While Offered: when the claimant's time to accept or withdraw ends.
+        uint256 offerDeadline;
     }
 
     IPolicyRegistry public immutable registry;
     IPool public immutable pool;
     IJuryModule public immutable jury;
+    /// @notice How long a claimant has to accept or withdraw the jury's offer before it is accepted for them.
+    uint256 public immutable responsePeriod;
 
     uint256 public claimCount;
     mapping(uint256 => Claim) private _claims;
@@ -57,6 +67,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     );
     event ClaimStateChanged(uint256 indexed claimId, State from, State to);
     event ClaimPaid(uint256 indexed claimId, address indexed claimant, uint256 amount);
+    event OfferMade(uint256 indexed claimId, uint256 amount, uint256 deadline);
 
     error ZeroAddress();
     error NoActivePolicy();
@@ -68,14 +79,22 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     error NotJuryModule();
     error WrongState(State expected, State actual);
     error NothingToPay();
+    error NotClaimant();
+    error ResponseWindowOpen(uint256 deadline);
+    error ResponseWindowClosed(uint256 deadline);
+    error InvalidConfig();
 
-    constructor(IPolicyRegistry registry_, IPool pool_, IJuryModule jury_) Ownable(msg.sender) {
+    constructor(IPolicyRegistry registry_, IPool pool_, IJuryModule jury_, uint256 responsePeriod_)
+        Ownable(msg.sender)
+    {
         if (address(registry_) == address(0) || address(pool_) == address(0) || address(jury_) == address(0)) {
             revert ZeroAddress();
         }
+        if (responsePeriod_ == 0) revert InvalidConfig();
         registry = registry_;
         pool = pool_;
         jury = jury_;
+        responsePeriod = responsePeriod_;
     }
 
     // ---------------------------------------------------------------------
@@ -84,6 +103,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
 
     /// @notice File a claim against the caller's active policy and kick off jury selection.
     /// @param amount Requested payout, in token units. Must not exceed the policy's coverage limit.
+    ///        Jurors may vote any amount from 0 up to this.
     /// @param evidenceHash Content hash of the (encrypted) evidence bundle stored off-chain, e.g. on IPFS.
     function submitClaim(uint256 amount, bytes32 evidenceHash) external nonReentrant returns (uint256 claimId) {
         IPolicyRegistry.Policy memory policy = registry.getPolicy(msg.sender);
@@ -106,13 +126,37 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
             state: State.Submitted,
             submittedAt: block.timestamp,
             paidAmount: 0,
-            approvedAmount: 0
+            approvedAmount: 0,
+            offerDeadline: 0
         });
         openClaimOfPolicy[policy.id] = claimId;
         emit ClaimSubmitted(claimId, msg.sender, policy.id, amount, evidenceHash);
 
         _setState(claimId, State.JuryPending);
-        jury.requestJury(claimId, msg.sender);
+        jury.requestJury(claimId, msg.sender, amount);
+    }
+
+    /// @notice Take the jury's offer. The claimant can accept any time while it is open; after
+    ///         `offerDeadline` anyone can, so silence counts as accepting.
+    function acceptOffer(uint256 claimId) external nonReentrant {
+        _requireState(claimId, State.Offered);
+        Claim storage claim = _claims[claimId];
+        if (msg.sender != claim.claimant && block.timestamp <= claim.offerDeadline) {
+            revert ResponseWindowOpen(claim.offerDeadline);
+        }
+        _setState(claimId, State.Approved);
+    }
+
+    /// @notice Turn the jury's offer down and close the claim with no payout. Only the claimant,
+    ///         and only before `offerDeadline`.
+    function withdrawClaim(uint256 claimId) external nonReentrant {
+        _requireState(claimId, State.Offered);
+        Claim storage claim = _claims[claimId];
+        if (msg.sender != claim.claimant) revert NotClaimant();
+        if (block.timestamp > claim.offerDeadline) revert ResponseWindowClosed(claim.offerDeadline);
+        claim.approvedAmount = 0;
+        _setState(claimId, State.Withdrawn);
+        delete openClaimOfPolicy[claim.policyId];
     }
 
     // ---------------------------------------------------------------------
@@ -131,13 +175,17 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------
 
     /// @notice Close voting and record the verdict. Rejected claims are closed immediately.
-    ///         An approved claim's payout is fixed here, so later pool movements cannot change it.
+    ///         An approved claim becomes an offer to the claimant; its amount is fixed here, so later
+    ///         pool movements cannot change it.
     function finalize(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.Voting);
-        IJuryModule.Outcome outcome = jury.tally(claimId);
+        (IJuryModule.Outcome outcome, uint256 award) = jury.tally(claimId);
         if (outcome == IJuryModule.Outcome.Approved) {
-            _claims[claimId].approvedAmount = payoutAmount(claimId);
-            _setState(claimId, State.Approved);
+            Claim storage claim = _claims[claimId];
+            claim.approvedAmount = _capped(claim, award);
+            claim.offerDeadline = block.timestamp + responsePeriod;
+            _setState(claimId, State.Offered);
+            emit OfferMade(claimId, claim.approvedAmount, claim.offerDeadline);
         } else {
             _setState(claimId, State.Rejected);
             delete openClaimOfPolicy[_claims[claimId].policyId];
@@ -179,20 +227,26 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         return _claims[claimId];
     }
 
-    /// @notice What the claim pays: the fixed amount once approved, otherwise what approval would fix
-    ///         right now (min of claim amount, coverage limit, pool per-claim cap).
-    function payoutAmount(uint256 claimId) public view returns (uint256 amount) {
+    /// @notice What the claim pays: the fixed amount once the jury has made its offer, otherwise the
+    ///         most a full approval would fix right now (min of claim amount, coverage limit, pool cap).
+    function payoutAmount(uint256 claimId) public view returns (uint256) {
         Claim storage claim = _claims[claimId];
-        if (claim.state == State.Approved || claim.state == State.Paid) return claim.approvedAmount;
-        amount = claim.amount;
-        if (claim.coverageLimit < amount) amount = claim.coverageLimit;
-        uint256 cap = pool.maxPayout();
-        if (cap < amount) amount = cap;
+        State state = claim.state;
+        if (state == State.Offered || state == State.Approved || state == State.Paid || state == State.Withdrawn) {
+            return claim.approvedAmount;
+        }
+        return _capped(claim, claim.amount);
     }
 
     // ---------------------------------------------------------------------
     // Internals
     // ---------------------------------------------------------------------
+
+    function _capped(Claim storage claim, uint256 amount) private view returns (uint256) {
+        if (claim.coverageLimit < amount) amount = claim.coverageLimit;
+        uint256 cap = pool.maxPayout();
+        return cap < amount ? cap : amount;
+    }
 
     function _requireState(uint256 claimId, State expected) private view {
         State actual = _claims[claimId].state;

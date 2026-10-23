@@ -8,7 +8,7 @@ const { deployContracts, USDC } = require("./lib/deployContracts");
 
 const fmt = (amount) => `${ethers.formatUnits(amount, 6)} mUSDC`;
 const short = (addr) => `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-const STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid"];
+const STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled", "Offered", "Withdrawn"];
 let step = 0;
 const log = (msg) => console.log(`\n[${++step}] ${msg}`);
 
@@ -56,16 +56,26 @@ async function main() {
   console.log(`    Jurors: ${jurorAddrs.map(short).join(", ")}`);
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
 
-  // Last juror dissents, to show it's a real tally.
+  // Each juror votes what they would pay. Two think a screen repair costs less than asked, one rejects.
+  const votes = [
+    [USDC(250), ""],
+    [USDC(250), ""],
+    [USDC(180), "A screen-only repair is about 180 at most shops."],
+    [USDC(150), "Only the glass is cracked; the display works."],
+    [0n, "The photos don't show the IMEI or the capture code."],
+  ];
   const jurors = jurorAddrs.map((addr, i) => ({
     signer: signers.find((s) => s.address === addr),
-    approve: i !== jurorAddrs.length - 1,
+    amount: votes[i][0],
+    note: votes[i][1],
+    // The backend stores the note; only its hash is sealed into the vote.
+    noteHash: votes[i][1] ? ethers.keccak256(ethers.toUtf8Bytes(votes[i][1])) : ethers.ZeroHash,
     salt: ethers.hexlify(ethers.randomBytes(32)), // each juror keeps this secret until revealing
   }));
 
-  log("Jurors review the evidence and commit sealed votes");
+  log("Jurors review the evidence and seal the amount each would pay, with a note");
   for (const j of jurors) {
-    const commitment = await jury.computeCommitment(claimId, j.signer.address, j.approve, j.salt);
+    const commitment = await jury.computeCommitment(claimId, j.signer.address, j.amount, j.noteHash, j.salt);
     await (await jury.connect(j.signer).commitVote(claimId, commitment)).wait();
     console.log(`    ${short(j.signer.address)} commits ${commitment.slice(0, 14)}…`);
   }
@@ -73,12 +83,18 @@ async function main() {
 
   log("Everyone has committed, so jurors reveal");
   for (const j of jurors) {
-    await (await jury.connect(j.signer).revealVote(claimId, j.approve, j.salt)).wait();
-    console.log(`    ${short(j.signer.address)} reveals ${j.approve ? "APPROVE" : "REJECT"}`);
+    await (await jury.connect(j.signer).revealVote(claimId, j.amount, j.noteHash, j.salt)).wait();
+    const vote = j.amount === 0n ? "REJECT" : fmt(j.amount);
+    console.log(`    ${short(j.signer.address)} reveals ${vote}${j.note ? `: "${j.note}"` : ""}`);
   }
 
   log("Finalizing (all jurors revealed, so no need to wait for the deadline)");
   await (await claimManager.finalize(claimId)).wait();
+  console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
+  console.log(`    The jury's offer is the middle vote: ${fmt(await claimManager.payoutAmount(claimId))}`);
+
+  log("The claimant reads the jurors' reasoning and accepts the offer");
+  await (await claimManager.connect(claimant).acceptOffer(claimId)).wait();
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
 
   log("Executing payout");

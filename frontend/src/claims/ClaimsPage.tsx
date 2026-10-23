@@ -2,6 +2,7 @@ import { formatUnits, parseUnits } from "ethers";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ALLOWED_EVIDENCE_TYPES,
+  MAX_AMOUNT_REASON_LENGTH,
   getClaimsForMember,
   uploadEvidence,
   type CaptureCode,
@@ -40,6 +41,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   const [files, setFiles] = useState<File[]>([]);
   const [captureCode, setCaptureCode] = useState<CaptureCode | null>(null);
   const [deviceId, setDeviceId] = useState("");
+  const [amountReason, setAmountReason] = useState("");
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [loadingClaims, setLoadingClaims] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -83,6 +85,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     if (!overview.active) { setError("Buy device coverage before submitting a claim."); return; }
     if (!overview.pastWaitingPeriod) { setError("Your policy waiting period has not ended yet."); return; }
     if (overview.openClaimId) { setError(`Policy already has open claim #${overview.openClaimId}.`); return; }
+    if (!amountReason.trim()) { setError("Explain how you arrived at the amount, so jurors can judge it."); return; }
     try {
       const requested = parseUnits(amount, overview.tokenDecimals);
       const coverage = parseUnits(overview.coverage, overview.tokenDecimals);
@@ -99,7 +102,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     setError("");
     setFeedback("Preparing evidence for secure upload…");
     try {
-      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId);
+      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId, amountReason);
       onAuthenticated();
       setFeedback(`Evidence uploaded (${shortHash(evidence.evidenceHash)}).`);
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
@@ -109,6 +112,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       setFiles([]);
       setCaptureCode(null);
       setDeviceId("");
+      setAmountReason("");
       if (fileInput.current) fileInput.current.value = "";
       setClaimRefresh((value) => value + 1);
       onSubmitted();
@@ -122,7 +126,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
   }
 
   const canSubmit = Boolean(
-    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && amount && files.length && captureCode,
+    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && amount && amountReason.trim() && files.length && captureCode,
   );
   const accepted = ALLOWED_EVIDENCE_TYPES.join(",");
 
@@ -140,6 +144,10 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.coverage} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
       <small>Maximum: {overview?.active ? `${Number(overview.coverage).toLocaleString()} ${overview.tokenSymbol}` : "—"}</small>
 
+      <label htmlFor="claim-amount-reason">How did you arrive at this amount?</label>
+      <textarea id="claim-amount-reason" value={amountReason} onChange={(event) => setAmountReason(event.target.value)} placeholder="e.g. The repair shop quoted 280 for a new screen. Add the quote below if you have one." maxLength={MAX_AMOUNT_REASON_LENGTH} rows={3} required disabled={busy} />
+      <small>Jurors vote how much to pay, from nothing up to what you ask. A repair quote or price for a replacement helps them agree with your amount.</small>
+
       <label htmlFor="claim-description">What happened?</label>
       <textarea id="claim-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the damage, loss, and when it occurred." maxLength={2000} rows={5} disabled={busy} />
       <small>{description.length}/2,000 characters</small>
@@ -154,7 +162,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
         <small>Jurors compare these with the photos you took at signup, so show the whole device, the damage, and your code.</small>
         <div className="capture-buttons">
           <button className="primary" type="button" disabled={busy} onClick={() => cameraInput.current?.click()}>Take a photo</button>
-          <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>Add a file or receipt</button>
+          <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>Add a repair quote or receipt</button>
         </div>
         <input ref={cameraInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
         <input ref={fileInput} id="claim-files" className="visually-hidden" type="file" accept={accepted} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
@@ -168,14 +176,15 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     </form>
 
     {selectedClaimId && account ? <ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onAuthenticated={onAuthenticated} onClaimChanged={() => setClaimRefresh((value) => value + 1)} onBack={() => setSelectedClaimId(null)} /> : <section className="claims-panel" aria-label="My claims">
-      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><div className="claims-panel-actions"><label htmlFor="claim-state-filter">Status</label><select id="claim-state-filter" value={stateFilter} disabled={!ready || loadingClaims} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div></div>
+      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><div className="claims-panel-actions"><label htmlFor="claim-state-filter">Status</label><select id="claim-state-filter" value={stateFilter} disabled={!ready || loadingClaims} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div></div>
       {claimsError && <p className="notice warning" role="alert">{claimsError}</p>}
       {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
       {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No claims yet" : `No ${CLAIM_STATE_COPY[stateFilter].toLowerCase()} claims`}</strong><p>{stateFilter === "All" ? "Your submitted claims and their jury status will appear here." : "Choose another status to view the rest of your claim history."}</p></div>}
       <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>
         <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatUnits(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
-        <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Approved" || claim.state === "Paid" ? <div><dt>Payout</dt><dd>{formatUnits(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
-        <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>View details →</button>
+        <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Offered" || claim.state === "Approved" || claim.state === "Paid" ? <div><dt>{claim.state === "Offered" ? "Jury's offer" : "Payout"}</dt><dd>{formatUnits(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
+        {claim.state === "Offered" && <p className="notice">The jury made an offer. Open the claim to accept it or withdraw.</p>}
+        <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>{claim.state === "Offered" ? "Review offer →" : "View details →"}</button>
       </article>)}</div>
     </section>}
   </div>;

@@ -1,7 +1,8 @@
 // The claim workflow as the Claims and Jury pages run it, end to end through the real frontend
 // modules: sign in, upload evidence, file the claim, find it as a juror, verify the evidence against
-// the chain, commit and reveal sealed votes, then finalize and pay from the frontend's recovery
-// actions. The keeper only selects juries here, so every resolution step goes through the frontend.
+// the chain, seal and reveal amount votes with notes, finalize, read the jurors' reasoning, accept
+// the offer and pay. The keeper only selects juries here, so every resolution step goes through the
+// frontend.
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256 } from "ethers";
@@ -14,16 +15,26 @@ import {
   getDashboardOverview,
   getEvidence,
   getEvidenceResource,
+  getJuryVotes,
   readCachedWalletAuth,
   requestCaptureCode,
+  submitJuryNote,
   uploadEvidence,
   validateEvidenceFiles,
 } from "../src/api";
-import { cancelStalledClaim, executeClaimPayout, finalizeClaim, submitClaim } from "../src/contracts/claims";
+import {
+  acceptOffer,
+  cancelStalledClaim,
+  executeClaimPayout,
+  finalizeClaim,
+  submitClaim,
+  withdrawClaim,
+} from "../src/contracts/claims";
 import {
   commitJuryVote,
   computeVoteCommitment,
   deriveVoteSalt,
+  juryNoteHash,
   readVoteCommitment,
   revealJuryVote,
 } from "../src/contracts/jury";
@@ -31,6 +42,14 @@ import { USDC, increaseTime, pickedFile, progressLog, startStack, stopStack, tes
 
 const PHOTO_BYTES = new TextEncoder().encode("front of the phone, cracked from corner to corner");
 const ZERO_HASH = `0x${"0".repeat(64)}`;
+// What each juror votes on the 300 claim, and why. The offer is the middle amount: 200.
+const VOTES = [
+  { amount: 0n, note: "The claim photos show a different colour from signup." },
+  { amount: USDC(150), note: "Only the screen is cracked; a screen repair is about 150." },
+  { amount: USDC(200), note: "Screen plus labour, per the quote's line items." },
+  { amount: USDC(300), note: "" },
+  { amount: USDC(300), note: "" },
+];
 
 describe("frontend claim workflow", () => {
   let t: Stack;
@@ -72,8 +91,10 @@ describe("frontend claim workflow", () => {
       [pickedFile("front.jpg", "image/jpeg", PHOTO_BYTES), pickedFile("receipt.pdf", "application/pdf", "%PDF-1.4 receipt")],
       code,
       testImei(0),
+      "  The shop quoted 300 for the screen and battery.  ",
     );
     assert.equal(summary.capture?.code, code);
+    assert.equal(summary.amountReason, "The shop quoted 300 for the screen and battery.");
     assert.deepEqual(summary.device, { imei: testImei(0) });
     assert.match(summary.evidenceHash, /^0x[0-9a-f]{64}$/);
     assert.equal(summary.description, "Cracked screen after a drop");
@@ -184,14 +205,20 @@ describe("frontend claim workflow", () => {
     );
   });
 
-  it("commits sealed votes whose commitments match the contract's", async () => {
+  it("seals amount votes with notes whose commitments match the contract's", async () => {
+    await assert.rejects(submitJuryNote(claimant, "1", "I am not on the jury"), (e: unknown) => e instanceof ApiError && e.status === 403);
+    await assert.rejects(submitJuryNote(jurors[0], "1", "  "), /Write a note/);
+    assert.equal(juryNoteHash("   "), ZERO_HASH, "a blank note is no note");
+
     for (const [i, juror] of jurors.entries()) {
-      const approve = i !== 0;
+      const { amount, note } = VOTES[i];
+      const noteHash = note ? await submitJuryNote(juror, "1", note) : ZERO_HASH;
+      assert.equal(noteHash, juryNoteHash(note));
       const salt = await deriveVoteSalt(juror, "1");
       assert.equal(await deriveVoteSalt(juror, "1"), salt, "the salt can be re-derived to reveal later");
 
-      const commitment = computeVoteCommitment("1", juror, approve, salt);
-      assert.equal(commitment, await t.jury.computeCommitment(1, juror, approve, salt));
+      const commitment = computeVoteCommitment("1", juror, amount, noteHash, salt);
+      assert.equal(commitment, await t.jury.computeCommitment(1, juror, amount, noteHash, salt));
       assert.equal(await readVoteCommitment(juror, "1"), ZERO_HASH);
 
       const progress = progressLog();
@@ -211,39 +238,62 @@ describe("frontend claim workflow", () => {
 
   it("reveals the votes, refusing a reveal that does not match the commitment", async () => {
     const wrongSalt = keccak256(new TextEncoder().encode("not the salt"));
-    await assert.rejects(revealJuryVote(jurors[1], "1", true, wrongSalt, () => {}));
-    await assert.rejects(revealJuryVote(jurors[1], "1", false, await deriveVoteSalt(jurors[1], "1"), () => {}));
+    const salt1 = await deriveVoteSalt(jurors[1], "1");
+    const note1 = juryNoteHash(VOTES[1].note);
+    await assert.rejects(revealJuryVote(jurors[1], "1", USDC(150), note1, wrongSalt, () => {}));
+    await assert.rejects(revealJuryVote(jurors[1], "1", USDC(151), note1, salt1, () => {}), "a different amount");
+    await assert.rejects(revealJuryVote(jurors[1], "1", USDC(150), juryNoteHash("edited"), salt1, () => {}), "an edited note");
 
     for (const [i, juror] of jurors.entries()) {
-      await revealJuryVote(juror, "1", i !== 0, await deriveVoteSalt(juror, "1"), () => {});
+      const { amount, note } = VOTES[i];
+      await revealJuryVote(juror, "1", amount, juryNoteHash(note), await deriveVoteSalt(juror, "1"), () => {});
     }
     const claim = await getClaim("1");
     assert.equal(claim.jury?.approvals, 4);
     assert.equal(claim.jury?.rejections, 1);
+    assert.deepEqual(claim.jury?.jurors.map((j) => j.amount), VOTES.map((v) => v.amount.toString()));
     assert.equal(claim.jury?.canTally, true);
     assert.equal(claim.state, "Voting", "the keeper is not auto-resolving");
-    assert.equal(claim.payoutAmount, USDC(300).toString());
   });
 
-  it("finalizes and pays the claim from the frontend's recovery actions", async () => {
+  it("finalizes to the median offer, which the claimant reads, accepts and is paid", async () => {
     const before = await getDashboardOverview(claimant);
 
     const finalizeProgress = progressLog();
     await finalizeClaim(jurors[2], "1", finalizeProgress.report);
     assert.equal(finalizeProgress.messages[0], "Confirm finalizing the jury result in your wallet.");
     let claim = await getClaim("1");
-    assert.equal(claim.state, "Approved");
-    assert.equal(claim.jury?.outcomeReason, "majorityApproved");
+    assert.equal(claim.state, "Offered");
+    assert.equal(claim.jury?.award, USDC(200).toString());
+    assert.equal(claim.payoutAmount, USDC(200).toString());
+    assert.ok(claim.offerDeadline);
+    await assert.rejects(executeClaimPayout(claimant, "1", () => {}), "nothing is paid before the claimant answers");
+    await assert.rejects(withdrawClaim(jurors[0], "1", () => {}), "only the claimant can withdraw");
+
+    // The claimant sees each juror's amount and reasoning.
+    const votes = await getJuryVotes(claimant, "1");
+    assert.deepEqual(
+      votes.map((v) => [v.juror, v.amount, v.note]),
+      jurors.map((juror, i) => [juror, VOTES[i].amount.toString(), VOTES[i].note || null]),
+    );
+    const outsider = t.holders.find((h) => h.address !== claimant && !jurors.includes(h.address));
+    assert.ok(outsider);
+    await assert.rejects(getJuryVotes(outsider.address, "1"), (e: unknown) => e instanceof ApiError && e.status === 403);
+
+    const progress = progressLog();
+    await acceptOffer(claimant, "1", progress.report);
+    assert.equal(progress.messages[0], "Confirm accepting the jury's offer in your wallet.");
+    assert.equal((await getClaim("1")).state, "Approved");
 
     await executeClaimPayout(claimant, "1", () => {});
     claim = await getClaim("1");
     assert.equal(claim.state, "Paid");
-    assert.equal(claim.paidAmount, USDC(300).toString());
+    assert.equal(claim.paidAmount, USDC(200).toString());
     await assert.rejects(executeClaimPayout(claimant, "1", () => {}), "a claim is paid once");
 
     const after = await getDashboardOverview(claimant);
-    assert.equal(Number(after.balance) - Number(before.balance), 300);
-    assert.equal(Number(after.totalPaidOut) - Number(before.totalPaidOut), 300);
+    assert.equal(Number(after.balance) - Number(before.balance), 200);
+    assert.equal(Number(after.totalPaidOut) - Number(before.totalPaidOut), 200);
     assert.equal(after.openClaimId, null);
     assert.deepEqual(
       (await getClaimsForMember(claimant, "Paid")).map((c) => c.id),

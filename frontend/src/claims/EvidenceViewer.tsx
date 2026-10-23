@@ -39,6 +39,7 @@ interface StoredEvidenceBundle {
   version: number;
   kind?: EvidenceKind;
   description: string;
+  amountReason?: string;
   device?: DeviceDetails | null;
   capture?: CaptureStamp | null;
   files: StoredEvidenceFile[];
@@ -97,6 +98,7 @@ export function EvidenceViewer({ account, claim, source = "claim", onAuthenticat
   const evidenceHash = (source === "claim" ? claim.evidenceHash : claim.enrollmentHash) ?? "";
   const available = source === "claim" ? claim.evidence.available : claim.enrollment.available;
   const [description, setDescription] = useState("");
+  const [amountReason, setAmountReason] = useState("");
   const [device, setDevice] = useState<DeviceDetails | null>(null);
   const [capture, setCapture] = useState<CaptureStamp | null>(null);
   const [kindMismatch, setKindMismatch] = useState(false);
@@ -167,6 +169,7 @@ export function EvidenceViewer({ account, claim, source = "claim", onAuthenticat
       }
       objectUrls.current = createdUrls;
       setDescription(bundle.description);
+      setAmountReason(typeof bundle.amountReason === "string" ? bundle.amountReason : "");
       setDevice(bundle.device ?? null);
       setCapture(bundle.capture ?? null);
       // A claim filed with the signup bundle as its evidence shows no new photos at all.
@@ -200,6 +203,7 @@ export function EvidenceViewer({ account, claim, source = "claim", onAuthenticat
       {files.length > 0 && <>
         {kindMismatch && <p className="notice warning" role="alert">{source === "claim" ? "This claim was filed with the signup photos instead of new photos of the damage. Do not approve it." : "This is not an enrollment bundle."}</p>}
         {source === "claim" && <div className="evidence-description"><span>CLAIMANT STATEMENT</span><p>{description || "No written description was provided."}</p></div>}
+        {source === "claim" && <div className="evidence-description"><span>WHY THIS AMOUNT</span><p>{amountReason || "The claimant did not explain the amount."}</p></div>}
         {device && <dl className="detail-grid compact">{(["type", "make", "model", "color", "serial", "imei"] as const).filter((key) => device[key]).map((key) => <div key={key}><dt>{key === "imei" ? "IMEI" : key[0].toUpperCase() + key.slice(1)}</dt><dd>{device[key]}</dd></div>)}</dl>}
         {capture ? <p className="evidence-stamp">The first photo should show the code <code>{capture.code}</code>. Code issued {dateTime(capture.issuedAt)}, photos received {dateTime(capture.receivedAt)}.</p> : <p className="notice warning">These photos were uploaded without a capture code, so nothing shows when they were taken.</p>}
         {!verified && <p className="notice warning" role="alert">Do not vote on this evidence. Its content hash does not match the hash recorded on-chain.</p>}

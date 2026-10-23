@@ -89,14 +89,21 @@ commit/reveal status.
 
 The **Jury Queue** workspace queries assignments for the connected wallet, separates required commit
 or reveal actions from completed reviews, and opens the same claim detail view. A selected juror can
-open the private evidence, verify its exact raw bundle against the on-chain hash, and only then commit
-a sealed approve/reject vote. Evidence previews are created from those verified bytes rather than a
+open the private evidence, verify its exact raw bundle against the on-chain hash, and only then seal
+the amount they would pay (from 0, which rejects, up to the amount asked) with a short note. The note
+is required when paying less than asked. Evidence previews are created from those verified bytes rather than a
 second unverified file response. The vote salt is derived from a private, claim-specific wallet
 signature and is never displayed or sent to the backend. An exact recovery copy is encrypted with a
 non-exportable browser key so a wallet that produces a different signature later does not strand the
 vote; if that copy is unavailable, the wallet can still try to reproduce the salt. Recovery data is
-deleted after reveal. The frontend checks both possible commitments against the blockchain before
-submitting the matching reveal. Claim, jury, dashboard and pool state refresh automatically.
+deleted after reveal; without it, the juror re-enters the amount and note they sealed. The frontend
+checks the commitment against the blockchain before submitting the reveal. Claim, jury, dashboard and
+pool state refresh automatically.
+
+The claim form asks how the claimant arrived at the amount, and they can attach a repair quote. When
+voting ends the claim gets the jury's offer: the middle (median) of the revealed amounts. The claimant
+sees each juror's amount and note, then accepts the offer or withdraws the claim. There is no
+counteroffer. If they do neither within 2 days, the offer is accepted for them and paid.
 
 An active policy past its waiting period is required, and a policy may have only one open claim.
 Evidence may remain stored if the user rejects or the chain rejects the transaction after upload;
@@ -159,10 +166,12 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/pool` | Balance, per-claim cap, totals, policy and claim counts |
 | `GET /api/members/:address` | Wallet balance, contributions, policy, claim-eligible date, open claim |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
-| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, revealed tally, deadlines), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?) |
+| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?) |
+| `POST /api/claims/:id/notes` 🔒 | A juror's note `{ note }` (up to 500 characters), sent before sealing the vote; returns the `noteHash` to seal. Jurors of the claim only, while voting and before they commit |
+| `GET /api/claims/:id/votes` 🔒 | Each revealed juror's `amount` and `note`. Only the claimant and the claim's jurors |
 | `GET /api/auth/message?address=` | The message to sign with the wallet for the evidence routes |
 | `POST /api/capture/code` 🔒 | A one-time code (e.g. `TP-7K4Q2M`) to show in the photos about to be taken; valid 15 minutes, for one upload |
-| `POST /api/evidence` 🔒 | Upload `{ kind, captureCode, description, device, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. `kind: "enrollment"` (signup photos plus `device: { type, imei, serial, make, model, color }`, with `imei` required for a phone and absent or optional for other types) is open to any wallet and its hash goes to `buyPolicy`; `kind: "claim"` (default, optional `device: { imei }` or `{ serial }`) needs an active policy and its hash goes to `submitClaim` |
+| `POST /api/evidence` 🔒 | Upload `{ kind, captureCode, description, amountReason, device, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. `amountReason` (claims only) explains the amount asked for. `kind: "enrollment"` (signup photos plus `device: { type, imei, serial, make, model, color }`, with `imei` required for a phone and absent or optional for other types) is open to any wallet and its hash goes to `buyPolicy`; `kind: "claim"` (default, optional `device: { imei }` or `{ serial }`) needs an active policy and its hash goes to `submitClaim` |
 | `GET /api/evidence/:hash` 🔒 | Kind, description, device details, capture code and times, and file list |
 | `GET /api/evidence/:hash/raw` 🔒 | Exact stored bytes; `keccak256` of these equals the on-chain hash |
 | `GET /api/evidence/:hash/files/:index` 🔒 | One file, for display (fetch it, then show it from a blob URL) |
@@ -171,9 +180,11 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 `x-trustpool-signature`, the wallet's `personal_sign` of the message from `/api/auth/message`. A
 signature is valid for 10 minutes, so the frontend signs once, not per request.
 
-Claims can end `Paid`, `Rejected` (majority against, a tie, or fewer than 3 votes; the API's
-`jury.outcomeReason` says which) or `Cancelled` (randomness never arrived). An approved claim's payout
-is fixed when the jury approves.
+Claims can end `Paid`, `Rejected` (most jurors voted 0, a tie, or fewer than 3 votes; the API's
+`jury.outcomeReason` says which), `Withdrawn` (the claimant turned the offer down) or `Cancelled`
+(randomness never arrived). The offer is fixed when voting ends: the median juror amount, capped by
+the coverage limit and the pool's per-claim cap. The keeper accepts an offer the claimant has not
+answered once its deadline passes, then pays it.
 
 Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 
@@ -201,18 +212,23 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `MockStablecoin` | Demo ERC-20 standing in for USDC (6 decimals) | n/a |
 | `PolicyRegistry` | Sells policies, one per wallet and per device; tracks Active/Lapsed; lists eligible jurors | No |
 | `Pool` | Holds all funds; takes premiums and contributions; pays approved claims up to `maxPayoutBps` of its balance | **Yes** |
-| `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Approved/Rejected → Paid | No |
-| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal voting, tallies | No |
+| `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Offered/Rejected → Approved (or Withdrawn) → Paid | No |
+| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal amount voting, takes the median | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
 
-**Voting is commit-reveal.** A juror first calls `commitVote(claimId, commitment)` with
-`commitment = JuryModule.computeCommitment(claimId, juror, approve, salt)` for a secret 32-byte
-`salt`, then, once every juror has committed or the commit window ends, calls
-`revealVote(claimId, approve, salt)`. Only revealed votes count. The juror must keep the salt until
-revealing; a frontend can derive it from a wallet signature over the claim id so it can always be
-recomputed.
+**Voting is commit-reveal, on amounts.** Each juror votes the amount they think the claim should pay,
+from 0 (reject) up to the amount asked. A juror first calls `commitVote(claimId, commitment)` with
+`commitment = JuryModule.computeCommitment(claimId, juror, amount, noteHash, salt)`, where `noteHash`
+is `keccak256` of their note (or zero for none) and `salt` is a secret 32 bytes. Once every juror has
+committed or the commit window ends, they call `revealVote(claimId, amount, noteHash, salt)`. Only
+revealed votes count. The claim is approved when at least 3 votes are revealed and the median amount
+is above 0 (so strictly more jurors would pay than reject); the median, rounded down to the lower
+middle vote for an even count, is the offer. `ClaimManager.acceptOffer` or `withdrawClaim` is the
+claimant's answer; after `responsePeriod` anyone can call `acceptOffer`. The juror must keep the salt
+until revealing; a frontend can derive it from a wallet signature over the claim id so it can always
+be recomputed.
 
 Run the whole claim flow in one command (no node needed):
 

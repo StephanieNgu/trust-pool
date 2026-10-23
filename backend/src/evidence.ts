@@ -15,6 +15,10 @@
 // A "claim" bundle holds the damage photos. Both carry a capture stamp (see capture.ts) so jurors can
 // check the photos were taken just now, and jurors compare a claim's photos with the enrollment ones
 // to check it is the same phone.
+//
+// The store also keeps jurors' notes: the short reasoning a juror gives with the amount they vote.
+// Only the note's keccak256 goes into the sealed vote on-chain; the text is stored here, encrypted
+// like the bundles, and shown to the claimant and the other jurors once that juror reveals.
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -28,6 +32,22 @@ export const MAX_DEVICE_FIELD_LENGTH = 64;
 export const MAX_FILES = 10;
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_DESCRIPTION_LENGTH = 2_000;
+/** A claim's explanation of the amount asked for, e.g. "repair quote from the shop: 280". */
+export const MAX_AMOUNT_REASON_LENGTH = 1_000;
+export const MAX_NOTE_LENGTH = 500;
+
+/** The hash a juror seals into their vote for `note`. Must match the frontend's. */
+export function noteHash(note: string): string {
+  return keccak256(toUtf8Bytes(note));
+}
+
+/** A juror note must be non-empty, not just whitespace, and at most MAX_NOTE_LENGTH characters. */
+export function validateNote(note: unknown): string {
+  if (typeof note !== "string" || note.trim().length === 0 || note.length > MAX_NOTE_LENGTH) {
+    throw new EvidenceError(`note must be a non-empty string of at most ${MAX_NOTE_LENGTH} characters.`, 400);
+  }
+  return note;
+}
 export const ALLOWED_CONTENT_TYPES = [
   "image/jpeg",
   "image/png",
@@ -63,6 +83,8 @@ export interface DeviceDetails {
 export interface EvidenceUpload {
   kind?: BundleKind;
   description?: string;
+  /** Claims only: why the claimant asked for this amount. A repair quote can be one of the files. */
+  amountReason?: string;
   device?: DeviceDetails;
   files: EvidenceFileInput[];
 }
@@ -79,6 +101,7 @@ interface StoredBundle {
   version: number;
   kind?: BundleKind;
   description: string;
+  amountReason?: string;
   device?: DeviceDetails | null;
   capture?: CaptureStamp | null;
   files: StoredFile[];
@@ -95,6 +118,8 @@ export interface EvidenceSummary {
   evidenceHash: string;
   kind: BundleKind;
   description: string;
+  /** Claims: the claimant's explanation of the amount, or "" if they gave none. */
+  amountReason: string;
   device: DeviceDetails | null;
   capture: CaptureStamp | null;
   size: number;
@@ -213,13 +238,19 @@ export function sameDevice(claimed: DeviceDetails | null, enrolled: DeviceDetail
  */
 export function encodeBundle(upload: unknown, capture: CaptureStamp | null = null): Buffer {
   if (!upload || typeof upload !== "object") throw new EvidenceError("Body must be a JSON object.", 400);
-  const { kind = "claim", description = "", device, files } = upload as Partial<EvidenceUpload>;
+  const { kind = "claim", description = "", amountReason, device, files } = upload as Partial<EvidenceUpload>;
 
   if (!(BUNDLE_KINDS as readonly unknown[]).includes(kind)) {
     throw new EvidenceError(`kind must be one of ${BUNDLE_KINDS.join(", ")}.`, 400);
   }
   if (typeof description !== "string" || description.length > MAX_DESCRIPTION_LENGTH) {
     throw new EvidenceError(`description must be a string of at most ${MAX_DESCRIPTION_LENGTH} characters.`, 400);
+  }
+  if (amountReason !== undefined) {
+    if (kind !== "claim") throw new EvidenceError("amountReason is only for claim evidence.", 400);
+    if (typeof amountReason !== "string" || amountReason.length > MAX_AMOUNT_REASON_LENGTH) {
+      throw new EvidenceError(`amountReason must be a string of at most ${MAX_AMOUNT_REASON_LENGTH} characters.`, 400);
+    }
   }
   if (!Array.isArray(files) || files.length === 0 || files.length > MAX_FILES) {
     throw new EvidenceError(`files must be an array of 1 to ${MAX_FILES} files.`, 400);
@@ -248,6 +279,8 @@ export function encodeBundle(upload: unknown, capture: CaptureStamp | null = nul
     version: BUNDLE_VERSION,
     kind,
     description,
+    // Left out when absent, so bundles without one hash exactly as before.
+    ...(amountReason ? { amountReason } : {}),
     device: validateDevice(device, kind),
     capture,
     files: stored,
@@ -272,6 +305,7 @@ function summarize(evidenceHash: string, bytes: Buffer): EvidenceSummary {
     evidenceHash,
     kind: bundle.kind ?? "claim",
     description: bundle.description,
+    amountReason: bundle.amountReason ?? "",
     device: bundle.device ?? null,
     capture: bundle.capture ?? null,
     size: bytes.length,
@@ -438,6 +472,38 @@ export class LocalEvidenceStore {
       info: { index, name: file.name, contentType: file.contentType, size: file.size },
       data: Buffer.from(file.data, "base64"),
     };
+  }
+
+  private notePathFor(claimId: number, juror: string, hash: string): string {
+    return join(this.dir, "notes", `${claimId}.${juror.toLowerCase()}.${hash}.enc`);
+  }
+
+  /**
+   * Stores a juror's note for a claim and returns its hash, the value sealed into their vote. A juror
+   * may store several drafts; only the one whose hash they reveal is ever shown.
+   */
+  async putNote(claimId: number, juror: string, note: unknown): Promise<string> {
+    const text = validateNote(note);
+    const hash = noteHash(text);
+    const path = this.notePathFor(claimId, juror, hash);
+    await mkdir(dirname(path), { recursive: true });
+    await writeAtomic(path, encrypt(this.key, hash, Buffer.from(text, "utf8")));
+    return hash;
+  }
+
+  /** The note `juror` stored for `claimId` with this hash, or null if there is none. */
+  async getNote(claimId: number, juror: string, hash: string): Promise<string | null> {
+    if (!isEvidenceHash(hash)) return null;
+    let stored: Buffer;
+    try {
+      stored = await readFile(this.notePathFor(claimId, juror, hash));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+    const text = decrypt(this.key, hash, stored).toString("utf8");
+    if (noteHash(text) !== hash) throw new EvidenceError("Stored note does not match its hash.", 500);
+    return text;
   }
 
   private async read(evidenceHash: string): Promise<Buffer | null> {

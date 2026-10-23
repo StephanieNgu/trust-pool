@@ -15,6 +15,7 @@ import {
   MAX_FILE_BYTES,
   loadOrCreateKeyFile,
   parseEvidenceKey,
+  noteHash,
 } from "../src/evidence";
 
 const ALICE = "0x00000000000000000000000000000000000000A1";
@@ -118,6 +119,28 @@ describe("LocalEvidenceStore", async () => {
     await assert.rejects(store.put({ files: [file(Buffer.alloc(MAX_FILE_BYTES + 1))] }, ALICE), (err: unknown) => {
       return err instanceof EvidenceError && err.status === 413;
     });
+  });
+
+  it("keeps the claimant's amount explanation in claim bundles only", async () => {
+    const { evidenceHash, amountReason } = await store.put({ amountReason: "Quote: 280", files: [file("q")] }, ALICE);
+    assert.equal(amountReason, "Quote: 280");
+    assert.equal((await store.getSummary(evidenceHash))?.amountReason, "Quote: 280");
+    assert.throws(() => encodeBundle({ amountReason: 5, files: [file("q")] }), EvidenceError);
+    assert.throws(() => encodeBundle({ kind: "enrollment", amountReason: "x", files: [file("q")] }), EvidenceError);
+    // Bundles without one serialize exactly as before.
+    assert.ok(!encodeBundle({ files: [file("q")] }).toString().includes("amountReason"));
+  });
+
+  it("stores juror notes encrypted, under the hash sealed into the vote", async () => {
+    const hash = await store.putNote(7, BOB, "Only the screen is cracked.");
+    assert.equal(hash, noteHash("Only the screen is cracked."));
+    assert.equal(await store.getNote(7, BOB, hash), "Only the screen is cracked.");
+    assert.equal(await store.getNote(7, ALICE, hash), null, "notes are per juror");
+    assert.equal(await store.getNote(8, BOB, hash), null, "and per claim");
+    const notes = await readdir(join(dir, "notes"));
+    for (const name of notes) assert.ok(!(await readFile(join(dir, "notes", name))).includes("screen"));
+    await assert.rejects(store.putNote(7, BOB, "  "), EvidenceError);
+    await assert.rejects(store.putNote(7, BOB, "x".repeat(501)), EvidenceError);
   });
 
   it("returns null for unknown or malformed hashes", async () => {

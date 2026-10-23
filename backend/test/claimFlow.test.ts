@@ -1,8 +1,8 @@
 // End to end through the backend: upload evidence, file the claim on-chain with the returned hash,
-// let the keeper select the jury, vote, and let the keeper finalize and pay.
+// let the keeper select the jury, vote amounts with notes, accept the offer, and let the keeper pay.
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { keccak256 } from "ethers";
+import { keccak256, ZeroHash } from "ethers";
 import { Keeper } from "../src/keeper";
 import { PHOTO, USDC, commit, increaseTime, reveal, setup, signerFor, testImei } from "./helpers";
 
@@ -15,13 +15,14 @@ describe("claim flow through the backend", () => {
     await t.close();
   });
 
-  it("approves and pays a claim with jury selection and payout done by the keeper", async () => {
+  it("offers the median juror amount and pays it once the claimant accepts", async () => {
     const { claimant, claimManager, token, api, post, getAs, keeper, signers, jury } = t;
 
     // 1. Claimant uploads photos and gets the hash to put on-chain.
     //    The phone still turns on, so they include its IMEI from Settings > About.
     const upload = await post("/api/evidence", {
       description: "Cracked screen after a drop",
+      amountReason: "The shop quoted 300 for a new screen and battery.",
       device: { imei: testImei(0) },
       files: [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }],
     }, claimant);
@@ -77,10 +78,30 @@ describe("claim flow through the backend", () => {
     assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, outsider)).status, 403);
     assert.equal((await getAs(`/api/evidence/${enrollmentHash}`, outsider)).status, 403);
 
-    // Commit-reveal: 4 approve, 1 reject. While sealed, the API shows who committed but no tally.
+    // Only the jurors can leave notes, before sealing, and a note must say something.
+    assert.equal((await post("/api/claims/1/notes", { note: "Looks fine" }, outsider)).status, 403);
+    assert.equal((await post("/api/claims/1/notes", { note: "   " }, signerFor(signers, jurorAddrs[0]))).status, 400);
+
+    // Each juror seals an amount. Two think the screen alone (150 or 200) is what the drop broke,
+    // two give the full 300 and one rejects. Jurors who pay less explain why.
+    const amounts = [USDC(150), USDC(200), USDC(300), USDC(300), 0n];
+    const notes = ["Only the screen is damaged; the battery is wear.", "Screen plus labour is about 200.", "", "", "These photos do not match the signup ones."];
+    const noteHashes: string[] = [];
     for (const [i, addr] of jurorAddrs.entries()) {
-      await commit(jury, signerFor(signers, addr), 1, i !== 0);
+      const juror = signerFor(signers, addr);
+      let noteHash = ZeroHash;
+      if (notes[i]) {
+        const res = await post("/api/claims/1/notes", { note: notes[i] }, juror);
+        assert.equal(res.status, 201);
+        noteHash = res.body.noteHash;
+      }
+      noteHashes.push(noteHash);
+      await commit(jury, juror, 1, amounts[i], noteHash);
     }
+    // The note is sealed with the vote, so it cannot be changed afterwards.
+    assert.equal((await post("/api/claims/1/notes", { note: "changed my mind" }, signerFor(signers, jurorAddrs[0]))).status, 409);
+    // While sealed, the API shows who committed but no tally and no notes.
+    assert.deepEqual((await getAs("/api/claims/1/votes", claimant)).body.votes, []);
     claim = (await api("/api/claims/1")).body;
     assert.equal(claim.jury.commits, 5);
     assert.equal(claim.jury.approvals + claim.jury.rejections, 0);
@@ -88,33 +109,50 @@ describe("claim flow through the backend", () => {
     assert.ok(claim.jury.jurors.every((j: { committed: boolean; revealed: boolean }) => j.committed && !j.revealed));
 
     for (const [i, addr] of jurorAddrs.entries()) {
-      await reveal(jury, signerFor(signers, addr), 1, i !== 0);
+      await reveal(jury, signerFor(signers, addr), 1, amounts[i], noteHashes[i]);
       if (i < jurorAddrs.length - 1) assert.deepEqual(await keeper.tick(), []);
     }
     claim = (await api("/api/claims/1")).body;
     assert.equal(claim.jury.approvals, 4);
     assert.equal(claim.jury.rejections, 1);
-    assert.ok(claim.jury.jurors.every((j: { revealed: boolean }) => j.revealed));
-    assert.equal(claim.jury.canTally, true);
-    assert.equal(claim.payoutAmount, USDC(300).toString());
-
-    // 5. Keeper finalizes and pays in the same pass.
-    const before = await token.balanceOf(claimant.address);
-    const resolved = await keeper.tick();
     assert.deepEqual(
-      resolved.map((a) => [a.action, a.error]),
-      [
-        ["finalize", undefined],
-        ["executePayout", undefined],
-      ],
+      claim.jury.jurors.map((j: { amount: string }) => j.amount),
+      amounts.map(String),
     );
-    assert.equal((await token.balanceOf(claimant.address)) - before, USDC(300));
+    assert.equal(claim.jury.maxAmount, USDC(300).toString());
+    assert.equal(claim.jury.canTally, true);
+
+    // 5. Keeper finalizes. The offer is the median, 200, and waits for the claimant.
+    let resolved = await keeper.tick();
+    assert.deepEqual(resolved.map((a) => [a.action, a.error]), [["finalize", undefined]]);
+    claim = (await api("/api/claims/1")).body;
+    assert.equal(claim.state, "Offered");
+    assert.equal(claim.jury.outcomeReason, "majorityApproved");
+    assert.equal(claim.jury.award, USDC(200).toString());
+    assert.equal(claim.payoutAmount, USDC(200).toString());
+    assert.ok(claim.offerDeadline > claim.submittedAt);
+    assert.deepEqual(await keeper.tick(), [], "the keeper does not accept for the claimant early");
+
+    // The claimant reads every juror's amount and reasoning; so do the jurors. Nobody else can.
+    const votes = (await getAs("/api/claims/1/votes", claimant)).body.votes;
+    assert.deepEqual(
+      votes.map((v: { juror: string; amount: string; note: string | null }) => [v.juror, v.amount, v.note]),
+      jurorAddrs.map((addr, i) => [addr, amounts[i].toString(), notes[i] || null]),
+    );
+    assert.equal((await getAs("/api/claims/1/votes", signerFor(signers, jurorAddrs[2]))).status, 200);
+    assert.equal((await getAs("/api/claims/1/votes", outsider)).status, 403);
+
+    // 6. The claimant accepts; the keeper pays.
+    await (await claimManager.connect(claimant).acceptOffer(1)).wait();
+    const before = await token.balanceOf(claimant.address);
+    resolved = await keeper.tick();
+    assert.deepEqual(resolved.map((a) => [a.action, a.error]), [["executePayout", undefined]]);
+    assert.equal((await token.balanceOf(claimant.address)) - before, USDC(200));
 
     claim = (await api("/api/claims/1")).body;
     assert.equal(claim.state, "Paid");
     assert.equal(claim.jury.outcome, "Approved");
-    assert.equal(claim.jury.outcomeReason, "majorityApproved");
-    assert.equal(claim.paidAmount, USDC(300).toString());
+    assert.equal(claim.paidAmount, USDC(200).toString());
     assert.deepEqual(await keeper.tick(), []);
 
     // Jurors only see evidence while voting is open.
@@ -127,7 +165,7 @@ describe("claim flow through the backend", () => {
     assert.equal(member.policy.openClaimId, null);
 
     const pool = (await api("/api/pool")).body;
-    assert.equal(pool.totalPaidOut, USDC(300).toString());
+    assert.equal(pool.totalPaidOut, USDC(200).toString());
     assert.equal(pool.claimCount, 1);
   });
 
@@ -171,6 +209,49 @@ describe("claim flow through the backend", () => {
     );
     const rejected = (await api("/api/claims?state=Rejected")).body.claims;
     assert.equal(rejected.length, 1);
+  });
+
+  it("accepts an unanswered offer after the deadline, and lets a claimant withdraw instead", async () => {
+    const { holders, claimManager, api, post, keeper, signers, jury, params, token } = t;
+    const file = (owner: (typeof holders)[number]) =>
+      post("/api/evidence", { files: [{ name: "a.png", contentType: "image/png", data: PHOTO }] }, owner);
+
+    const fileAndApprove = async (owner: (typeof holders)[number]) => {
+      const { evidenceHash } = (await file(owner)).body;
+      await (await claimManager.connect(owner).submitClaim(USDC(100), evidenceHash)).wait();
+      const id = Number(await claimManager.claimCount());
+      await keeper.tick();
+      const jurors: string[] = (await api(`/api/claims/${id}`)).body.jury.jurors.map((j: { address: string }) => j.address);
+      for (const addr of jurors) await commit(jury, signerFor(signers, addr), id, true);
+      for (const addr of jurors) await reveal(jury, signerFor(signers, addr), id, true);
+      await keeper.tick();
+      assert.equal((await api(`/api/claims/${id}`)).body.state, "Offered");
+      return id;
+    };
+
+    // Withdrawn: nothing is paid and the policy is free for a new claim.
+    const withdrawn = await fileAndApprove(holders[3]);
+    await (await claimManager.connect(holders[3]).withdrawClaim(withdrawn)).wait();
+    let claim = (await api(`/api/claims/${withdrawn}`)).body;
+    assert.equal(claim.state, "Withdrawn");
+    assert.equal(claim.payoutAmount, "0");
+    assert.equal((await api(`/api/members/${holders[3].address}`)).body.policy.openClaimId, null);
+
+    // Silence: once the response window passes, the keeper accepts and pays in one pass.
+    const silent = await fileAndApprove(holders[4]);
+    await increaseTime(Number(params.responsePeriod) + 1);
+    const before = await token.balanceOf(holders[4].address);
+    const actions = await keeper.tick();
+    assert.deepEqual(
+      actions.map((a) => [a.claimId, a.action, a.error]),
+      [
+        [silent, "acceptOffer", undefined],
+        [silent, "executePayout", undefined],
+      ],
+    );
+    assert.equal((await token.balanceOf(holders[4].address)) - before, USDC(100));
+    claim = (await api(`/api/claims/${silent}`)).body;
+    assert.equal(claim.state, "Paid");
   });
 
   it("cancels a claim whose randomness never arrives", async () => {

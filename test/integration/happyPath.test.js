@@ -12,10 +12,11 @@ const {
   COVERAGE,
   EVIDENCE,
   ClaimState,
+  noteHashFor,
 } = require("../helpers");
 
 describe("Integration: happy path", function () {
-  it("join -> contribute -> submit -> jury -> vote -> finalize -> payout", async function () {
+  it("join -> contribute -> submit -> jury -> vote amounts -> offer -> accept -> payout", async function () {
     const ctx = await loadFixture(deployFixture);
     const { token, pool, registry, randomness, jury, claimManager, deployer, signers, params } = ctx;
     const [claimant, ...others] = signers.slice(1, 8);
@@ -55,34 +56,43 @@ describe("Integration: happy path", function () {
     expect(jurorAddrs).to.not.include(claimant.address);
     expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Voting);
 
-    // 5. Vote with commit-reveal: 4 approve, 1 rejects. Commits reveal nothing about the votes.
+    // 5. Vote with commit-reveal: each juror seals the amount they would pay. One rejects, one thinks
+    //    150 covers the repair, one says 200, two give the full 300. Commits reveal nothing.
+    const amounts = [0n, USDC(150), USDC(200), USDC(300), USDC(300)];
     const jurors = jurorAddrs.map((a) => signers.find((s) => s.address === a));
     for (const [i, j] of jurors.entries()) {
-      await expect(commitVote(ctx, claimId, j, i !== 0)).to.emit(jury, "VoteCommitted").withArgs(claimId, j.address);
+      await expect(commitVote(ctx, claimId, j, amounts[i])).to.emit(jury, "VoteCommitted").withArgs(claimId, j.address);
     }
     expect((await jury.getJury(claimId)).approvals).to.equal(0n);
     // Everyone committed, so reveals open without waiting for the commit deadline.
     for (const [i, j] of jurors.entries()) {
-      await expect(revealVote(ctx, claimId, j, i !== 0))
+      await expect(revealVote(ctx, claimId, j, amounts[i]))
         .to.emit(jury, "VoteRevealed")
-        .withArgs(claimId, j.address, i !== 0);
+        .withArgs(claimId, j.address, amounts[i], noteHashFor(claimId, j, amounts[i]));
     }
 
-    // 6. Finalize: all jurors revealed, so no need to wait for the deadline.
-    await expect(claimManager.finalize(claimId)).to.emit(jury, "Tallied");
+    // 6. Finalize: all jurors revealed, so no need to wait for the deadline. The offer is the median, 200.
+    await expect(claimManager.finalize(claimId))
+      .to.emit(jury, "Tallied")
+      .and.to.emit(claimManager, "OfferMade");
+    expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Offered);
+    expect(await claimManager.payoutAmount(claimId)).to.equal(USDC(200));
+
+    // 7. The claimant reads the jurors' reasoning and accepts.
+    await claimManager.connect(claimant).acceptOffer(claimId);
     expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Approved);
 
-    // 7. Payout.
+    // 8. Payout.
     const before = await token.balanceOf(claimant.address);
     await expect(claimManager.executePayout(claimId))
       .to.emit(claimManager, "ClaimPaid")
-      .withArgs(claimId, claimant.address, USDC(300))
+      .withArgs(claimId, claimant.address, USDC(200))
       .and.to.emit(pool, "PaidOut");
-    expect(await token.balanceOf(claimant.address)).to.equal(before + USDC(300));
+    expect(await token.balanceOf(claimant.address)).to.equal(before + USDC(200));
 
     const claim = await claimManager.getClaim(claimId);
     expect(claim.state).to.equal(ClaimState.Paid);
-    expect(claim.paidAmount).to.equal(USDC(300));
+    expect(claim.paidAmount).to.equal(USDC(200));
     expect(await claimManager.openClaimOfPolicy(claim.policyId)).to.equal(0n);
 
     // Only the Pool ever holds tokens.
