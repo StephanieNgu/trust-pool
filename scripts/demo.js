@@ -50,6 +50,7 @@ async function main() {
   await (await claimManager.connect(claimant).submitClaim(USDC(250), evidenceHash)).wait();
   const claimId = await claimManager.claimCount();
   console.log(`    Claim #${claimId}, evidence ${evidenceHash.slice(0, 18)}…`);
+  console.log(`    Bond posted: ${fmt((await claimManager.getClaim(claimId)).bond)} (back at the verdict, less the share the jury cuts)`);
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
 
   log("Randomness provider responds (MOCK: not secure randomness)");
@@ -99,6 +100,8 @@ async function main() {
     const reward = await jury.rewardOf(claimId, j.signer.address);
     console.log(`      ${short(j.signer.address)} ${reward > 0n ? `earned ${fmt(reward)}` : "earned nothing (outside the band)"}`);
   }
+  const { bond, bondForfeited } = await claimManager.getClaim(claimId);
+  console.log(`    Bond: ${fmt(bond - bondForfeited)} returned, ${fmt(bondForfeited)} kept by the pool for the share cut`);
 
   log("The claimant reads the jurors' reasoning and accepts the offer");
   await (await claimManager.connect(claimant).acceptOffer(claimId)).wait();

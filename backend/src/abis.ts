@@ -20,6 +20,8 @@ export const poolAbi = [
   "function totalStaked() view returns (uint256)",
   "function totalJurorFees() view returns (uint256)",
   "function totalPenalties() view returns (uint256)",
+  "function totalBonded() view returns (uint256)",
+  "function totalBondsForfeited() view returns (uint256)",
 ] as const;
 
 export const registryAbi = [
@@ -36,7 +38,7 @@ export const registryAbi = [
 
 export const claimManagerAbi = [
   "function claimCount() view returns (uint256)",
-  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount, uint256 approvedAmount, uint256 offerDeadline))",
+  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount, uint256 approvedAmount, uint256 offerDeadline, uint256 bond, uint256 bondForfeited))",
   "function payoutAmount(uint256 claimId) view returns (uint256)",
   "function openClaimOfPolicy(uint256 policyId) view returns (uint256)",
   "function finalize(uint256 claimId)",
@@ -45,6 +47,9 @@ export const claimManagerAbi = [
   "function acceptOffer(uint256 claimId)",
   "function withdrawClaim(uint256 claimId)",
   "function responsePeriod() view returns (uint256)",
+  "function bondBps() view returns (uint256)",
+  "function minBond() view returns (uint256)",
+  "function bondFor(uint256 amount) view returns (uint256)",
   "error WrongState(uint8 expected, uint8 actual)",
   "error NothingToPay()",
 ] as const;

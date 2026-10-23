@@ -11,8 +11,9 @@ import {IPool} from "./interfaces/IPool.sol";
 /// @notice The only contract in the protocol that holds funds. Accepts contributions and premiums,
 ///         and pays out approved claims on instruction from the ClaimManager. It also holds jurors'
 ///         stakes: members lock a stake to be picked for juries, and the JuryModule pays fees from the
-///         reserve and moves no-show penalties out of stakes. Stakes are not part of the reserve:
-///         `balance()` and the per-claim cap leave them out.
+///         reserve and moves no-show penalties out of stakes. It also holds claimants' bonds while their
+///         claims are decided. Stakes and bonds are not part of the reserve: `balance()` and the
+///         per-claim cap leave them out.
 contract Pool is IPool, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -39,6 +40,10 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     uint256 public totalJurorFees;
     uint256 public totalPenalties;
 
+    /// @notice Bonds held for claims still being decided, and the part of settled bonds kept by the pool.
+    uint256 public totalBonded;
+    uint256 public totalBondsForfeited;
+
     event RegistrySet(address indexed registry);
     event ClaimManagerSet(address indexed claimManager);
     event Contributed(address indexed from, uint256 amount);
@@ -48,6 +53,8 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     event Unstaked(address indexed juror, uint256 amount);
     event JurorFeePaid(address indexed juror, uint256 amount);
     event StakePenalized(address indexed juror, uint256 amount);
+    event BondPosted(address indexed claimant, uint256 amount);
+    event BondSettled(address indexed claimant, uint256 returned, uint256 forfeited);
 
     error ZeroAddress();
     error AlreadySet();
@@ -59,6 +66,7 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     error NotJury();
     error StakeLocked(uint256 activeJuries);
     error InsufficientStake(uint256 amount, uint256 staked);
+    error InvalidBond();
 
     modifier onlyRegistry() {
         if (msg.sender != registry) revert NotRegistry();
@@ -188,6 +196,30 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     }
 
     // ---------------------------------------------------------------------
+    // Claim bonds
+    // ---------------------------------------------------------------------
+
+    /// @notice Pulls a claimant's bond when they file. Only the ClaimManager; the claimant must approve
+    ///         this contract first.
+    function postBond(address from, uint256 amount) external onlyClaimManager nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        totalBonded += amount;
+        emit BondPosted(from, amount);
+        token.safeTransferFrom(from, address(this), amount);
+    }
+
+    /// @notice Releases a bond once its claim is decided: `forfeit` of it joins the reserve and the rest
+    ///         goes back to the claimant.
+    function settleBond(address to, uint256 amount, uint256 forfeit) external onlyClaimManager nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        if (forfeit > amount || amount > totalBonded) revert InvalidBond();
+        totalBonded -= amount;
+        totalBondsForfeited += forfeit;
+        emit BondSettled(to, amount - forfeit, forfeit);
+        if (amount > forfeit) token.safeTransfer(to, amount - forfeit);
+    }
+
+    // ---------------------------------------------------------------------
     // Money out
     // ---------------------------------------------------------------------
 
@@ -207,9 +239,9 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     // Views
     // ---------------------------------------------------------------------
 
-    /// @notice The reserve that pays claims: everything held except jurors' stakes.
+    /// @notice The reserve that pays claims: everything held except jurors' stakes and open claims' bonds.
     function balance() public view returns (uint256) {
-        return token.balanceOf(address(this)) - totalStaked;
+        return token.balanceOf(address(this)) - totalStaked - totalBonded;
     }
 
     /// @notice Current per-claim payout cap: `maxPayoutBps` of the pool balance.

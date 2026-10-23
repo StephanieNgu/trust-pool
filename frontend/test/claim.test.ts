@@ -30,6 +30,7 @@ import {
   submitClaim,
   withdrawClaim,
 } from "../src/contracts/claims";
+import { claimBond } from "../src/claims/bond";
 import {
   commitJuryVote,
   computeVoteCommitment,
@@ -121,6 +122,8 @@ describe("frontend claim workflow", () => {
     await assert.rejects(submitClaim(claimant, "0", 6, evidenceHash, () => {}), /greater than zero/);
 
     const progress = progressLog();
+    const before = await getDashboardOverview(claimant);
+    assert.equal(claimBond(USDC(300), before.claimBondBps, USDC(Number(before.minClaimBond))), USDC(15));
     const txHash = await submitClaim(claimant, "300", 6, evidenceHash, progress.report);
     assert.match(txHash, /^0x[0-9a-f]{64}$/);
     assert.deepEqual(progress.messages, ["Confirm your claim in MetaMask.", "Your claim transaction is confirming…"]);
@@ -132,6 +135,8 @@ describe("frontend claim workflow", () => {
     );
     const detail = await getClaim("1");
     assert.deepEqual(detail.evidence, { available: true, url: `/api/evidence/${evidenceHash}` });
+    assert.deepEqual(detail.bond, { amount: USDC(15).toString(), returned: null, forfeited: null });
+    assert.equal(Number(before.balance) - Number((await getDashboardOverview(claimant)).balance), 15, "the bond was taken");
     assert.equal(detail.jury?.phase, "AwaitingRandomness");
     assert.equal((await getDashboardOverview(claimant)).openClaimId, "1");
 
@@ -266,6 +271,8 @@ describe("frontend claim workflow", () => {
     assert.equal(claim.state, "Offered");
     assert.equal(claim.jury?.award, USDC(200).toString());
     assert.equal(claim.payoutAmount, USDC(200).toString());
+    // The bond was 5% of the 300 asked. The jury cut a third, so 10 of its 15 came back.
+    assert.deepEqual(claim.bond, { amount: USDC(15).toString(), returned: USDC(10).toString(), forfeited: USDC(5).toString() });
     assert.ok(claim.offerDeadline);
     await assert.rejects(executeClaimPayout(claimant, "1", () => {}), "nothing is paid before the claimant answers");
     await assert.rejects(withdrawClaim(jurors[0], "1", () => {}), "only the claimant can withdraw");
@@ -292,7 +299,7 @@ describe("frontend claim workflow", () => {
     await assert.rejects(executeClaimPayout(claimant, "1", () => {}), "a claim is paid once");
 
     const after = await getDashboardOverview(claimant);
-    assert.equal(Number(after.balance) - Number(before.balance), 200);
+    assert.equal(Number(after.balance) - Number(before.balance), 200 + 10, "the payout and the bond's remainder");
     assert.equal(Number(after.totalPaidOut) - Number(before.totalPaidOut), 200);
     assert.equal(after.openClaimId, null);
     assert.deepEqual(

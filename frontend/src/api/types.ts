@@ -34,6 +34,22 @@ export interface PoolView {
   totalStaked: string;
   totalJurorFees: string;
   totalPenalties: string;
+  /** Claimants' bonds, held outside `balance` until their claims are decided. */
+  totalBonded: string;
+  totalBondsForfeited: string;
+  /** A claim's bond is `claimBondBps` of the amount asked, but at least `minClaimBond`. */
+  claimBondBps: number;
+  minClaimBond: string;
+}
+
+/**
+ * A claim's bond. Once the jury decides, `returned` went back to the claimant and `forfeited` (the
+ * bond times the share of the ask the jury cut) joined the reserve; both are null until then.
+ */
+export interface ClaimBond {
+  amount: string;
+  returned: string | null;
+  forfeited: string | null;
 }
 
 /** A member's jury duty: their stake, and whether it is enough to be picked. */
@@ -130,6 +146,7 @@ export interface ClaimView {
   offerDeadline: number | null;
   paidAmount: string;
   payoutAmount: string;
+  bond: ClaimBond;
   jury: ClaimJury | null;
 }
 

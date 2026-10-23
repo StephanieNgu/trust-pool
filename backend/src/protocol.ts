@@ -75,8 +75,17 @@ export interface ClaimView {
    * Cancelled and Withdrawn claims.
    */
   payoutAmount: string;
+  /**
+   * Posted when the claim was filed. Once the jury decides, `returned` went back to the claimant and
+   * `forfeited` (the bond times the share of the ask the jury cut) joined the reserve; both are null
+   * while the claim is still being decided.
+   */
+  bond: { amount: string; returned: string | null; forfeited: string | null };
   jury: JuryView | null;
 }
+
+/** States in which the claim's bond is still held by the pool. */
+const BOND_HELD_STATES: readonly ClaimState[] = ["Submitted", "JuryPending", "Voting"];
 
 export interface ClaimFilter {
   claimant?: string;
@@ -115,6 +124,13 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
     offerDeadline: state === "Offered" ? Number(claim.offerDeadline) : null,
     paidAmount: claim.paidAmount.toString(),
     payoutAmount: state === "Rejected" || state === "Cancelled" || state === "Withdrawn" ? "0" : payoutAmount.toString(),
+    bond: BOND_HELD_STATES.includes(state)
+      ? { amount: claim.bond.toString(), returned: null, forfeited: null }
+      : {
+          amount: claim.bond.toString(),
+          returned: (claim.bond - claim.bondForfeited).toString(),
+          forfeited: claim.bondForfeited.toString(),
+        },
     jury,
   };
 }
@@ -198,7 +214,7 @@ export async function listClaims(c: ProtocolContracts, filter: ClaimFilter = {})
 }
 
 export async function getPoolView(c: ProtocolContracts) {
-  const [balance, maxPayout, maxPayoutBps, totalContributed, totalPaidOut, policyCount, holderCount, claims, totalStaked, totalJurorFees, totalPenalties] =
+  const [balance, maxPayout, maxPayoutBps, totalContributed, totalPaidOut, policyCount, holderCount, claims, totalStaked, totalJurorFees, totalPenalties, totalBonded, totalBondsForfeited, claimBondBps, minClaimBond] =
     await Promise.all([
       c.pool.balance(),
       c.pool.maxPayout(),
@@ -211,12 +227,22 @@ export async function getPoolView(c: ProtocolContracts) {
       c.pool.totalStaked(),
       c.pool.totalJurorFees(),
       c.pool.totalPenalties(),
+      c.pool.totalBonded(),
+      c.pool.totalBondsForfeited(),
+      c.claimManager.bondBps(),
+      c.claimManager.minBond(),
     ]);
   return {
     /** Jurors' stakes are held by the pool but are not part of `balance`, the reserve that pays claims. */
     totalStaked: totalStaked.toString(),
     totalJurorFees: totalJurorFees.toString(),
     totalPenalties: totalPenalties.toString(),
+    /** Claimants' bonds, likewise held outside the reserve until their claims are decided. */
+    totalBonded: totalBonded.toString(),
+    totalBondsForfeited: totalBondsForfeited.toString(),
+    /** A claim's bond is `claimBondBps` of the amount asked, but at least `minClaimBond`. */
+    claimBondBps: Number(claimBondBps),
+    minClaimBond: minClaimBond.toString(),
     balance: balance.toString(),
     maxPayout: maxPayout.toString(),
     maxPayoutBps: Number(maxPayoutBps),

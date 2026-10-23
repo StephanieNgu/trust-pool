@@ -11,4 +11,5 @@ interface IJuryModule {
     function requestJury(uint256 claimId, address claimant, uint256 maxAmount) external;
     function tally(uint256 claimId) external returns (Outcome outcome, uint256 award);
     function cancel(uint256 claimId) external;
+    function quorate(uint256 claimId) external view returns (bool);
 }

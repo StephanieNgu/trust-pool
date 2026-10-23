@@ -396,7 +396,10 @@ describe("JuryModule", function () {
         expect(await jury.penaltyOf(claimId, j.address)).to.equal(0n);
         expect(await pool.stakeOf(j.address)).to.equal(USDC(20), "disagreeing is not penalized");
       }
-      expect(reserve - (await pool.balance())).to.equal(share * 3n);
+      // The claimant's bond lost 5% (the jury cut 20 of 400), which joins the reserve.
+      const { bondForfeited } = await ctx.claimManager.getClaim(claimId);
+      expect(bondForfeited).to.equal(USDC(1));
+      expect(reserve - (await pool.balance())).to.equal(share * 3n - bondForfeited);
     });
 
     it("pays the jurors who rejected when the claim is rejected", async function () {

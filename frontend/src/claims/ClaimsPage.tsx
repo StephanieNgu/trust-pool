@@ -12,6 +12,7 @@ import {
 } from "../api";
 import { CaptureCodePanel } from "../capture/CapturePanel";
 import { submitClaim } from "../contracts/claims";
+import { claimBond } from "./bond";
 import { ClaimDetail } from "./ClaimDetail";
 import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
 
@@ -33,6 +34,18 @@ function message(error: unknown): string {
 
 function fileSize(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** The bond for the amount typed, formatted, or null while the amount is not a valid number. */
+function bondPreview(amount: string, overview: DashboardOverview | null): string | null {
+  if (!overview || !amount) return null;
+  try {
+    const units = parseUnits(amount, overview.tokenDecimals);
+    if (units <= 0n) return null;
+    return formatUnits(claimBond(units, overview.claimBondBps, parseUnits(overview.minClaimBond, overview.tokenDecimals)), overview.tokenDecimals);
+  } catch {
+    return null;
+  }
 }
 
 export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmitted }: ClaimsPageProps) {
@@ -125,6 +138,7 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     }
   }
 
+  const bond = bondPreview(amount, overview);
   const canSubmit = Boolean(
     ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && amount && amountReason.trim() && files.length && captureCode,
   );
@@ -143,6 +157,10 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
       <label htmlFor="claim-amount">Requested payout</label>
       <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.coverage} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
       <small>Maximum: {overview?.active ? `${Number(overview.coverage).toLocaleString()} ${overview.tokenSymbol}` : "—"}</small>
+      {overview && <p className="claim-bond-note">
+        <strong>Claim bond: {bond ?? `${overview.claimBondBps / 100}% of your claim, at least ${Number(overview.minClaimBond).toLocaleString()}`} {overview.tokenSymbol}</strong>
+        You get it back when the jury decides, less the share of your ask they cut. Paid in full, you get it all back; paid half, half; rejected, none.
+      </p>}
 
       <label htmlFor="claim-amount-reason">How did you arrive at this amount?</label>
       <textarea id="claim-amount-reason" value={amountReason} onChange={(event) => setAmountReason(event.target.value)} placeholder="e.g. The repair shop quoted 280 for a new screen. Add the quote below if you have one." maxLength={MAX_AMOUNT_REASON_LENGTH} rows={3} required disabled={busy} />
