@@ -10,10 +10,15 @@ import {IRandomnessProvider, IRandomnessConsumer} from "./interfaces/IRandomness
 /// @title JuryModule
 /// @notice Requests randomness, selects a jury from eligible policyholders, runs commit-reveal voting
 ///         and tallies the revealed votes.
-/// @dev Holds no funds. Voting has two windows so no juror can see another's vote before choosing:
-///      1. Commit: each juror submits keccak256(abi.encode(claimId, juror, approve, salt)).
+/// @dev Holds no funds. Each juror votes the amount they think the claim should pay, from 0 (reject)
+///      up to the amount requested, plus the hash of a short note explaining it (the note itself is
+///      kept off-chain). The jury's offer is the median of the revealed amounts, so one juror voting
+///      very high or very low cannot move it far. Voting has two windows so no juror can see another's
+///      vote before choosing:
+///      1. Commit: each juror submits keccak256(abi.encode(claimId, juror, amount, noteHash, salt)).
 ///      2. Reveal: opens when the commit window ends or every juror has committed; each juror reveals
-///         (approve, salt) and only revealed votes count. A commit never revealed counts as no vote.
+///         (amount, noteHash, salt) and only revealed votes count. A commit never revealed counts as
+///         no vote.
 contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     enum Phase {
         None,
@@ -33,7 +38,12 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         uint8 approvals;
         uint8 rejections;
         Outcome outcome;
+        /// @dev The most a juror can vote: the claim amount, capped by the coverage limit.
+        uint256 maxAmount;
+        /// @dev Median of the revealed amounts, set by `tally`; 0 when rejected.
+        uint256 award;
         address[] jurors;
+        uint256[] amounts;
     }
 
     IPolicyRegistry public immutable registry;
@@ -55,6 +65,10 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     /// @notice Each juror's sealed vote, or zero if they have not committed.
     mapping(uint256 => mapping(address => bytes32)) public commitmentOf;
     mapping(uint256 => mapping(address => bool)) public hasRevealed;
+    /// @notice A revealed juror's amount (0 means reject).
+    mapping(uint256 => mapping(address => uint256)) public amountOf;
+    /// @notice A revealed juror's note hash: keccak256 of the note text, or zero for no note.
+    mapping(uint256 => mapping(address => bytes32)) public noteHashOf;
 
     event ClaimManagerSet(address indexed claimManager);
     event JuryRequested(uint256 indexed claimId, address indexed claimant);
@@ -66,8 +80,8 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         uint64 revealDeadline
     );
     event VoteCommitted(uint256 indexed claimId, address indexed juror);
-    event VoteRevealed(uint256 indexed claimId, address indexed juror, bool approve);
-    event Tallied(uint256 indexed claimId, Outcome outcome, uint8 approvals, uint8 rejections);
+    event VoteRevealed(uint256 indexed claimId, address indexed juror, uint256 amount, bytes32 noteHash);
+    event Tallied(uint256 indexed claimId, Outcome outcome, uint8 approvals, uint8 rejections, uint256 award);
     event JuryCancelled(uint256 indexed claimId);
 
     error ZeroAddress();
@@ -88,6 +102,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     error CommitmentMismatch();
     error VotingStillOpen();
     error RandomnessNotTimedOut();
+    error AmountTooHigh(uint256 amount, uint256 maxAmount);
 
     modifier onlyClaimManager() {
         if (msg.sender != claimManager) revert NotClaimManager();
@@ -135,7 +150,8 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     // ---------------------------------------------------------------------
 
     /// @notice Starts jury selection for a claim. Fails fast if there are not enough eligible jurors.
-    function requestJury(uint256 claimId, address claimant) external onlyClaimManager {
+    /// @param maxAmount The most any juror may vote for this claim.
+    function requestJury(uint256 claimId, address claimant, uint256 maxAmount) external onlyClaimManager {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.None) revert WrongPhase(Phase.None, jury.phase);
 
@@ -144,6 +160,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
 
         jury.phase = Phase.AwaitingRandomness;
         jury.claimant = claimant;
+        jury.maxAmount = maxAmount;
         jury.requestedAt = uint64(block.timestamp);
         emit JuryRequested(claimId, claimant);
         randomness.requestRandomness(claimId);
@@ -190,12 +207,14 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
 
     /// @notice The sealed vote a juror commits. Binding the claim and juror stops a commitment from
     ///         being copied to another claim or by another juror. Keep `salt` secret until revealing.
-    function computeCommitment(uint256 claimId, address juror, bool approve, bytes32 salt)
+    /// @param amount What the juror thinks the claim should pay; 0 rejects it.
+    /// @param noteHash keccak256 of the juror's note, so the note cannot be changed after seeing others.
+    function computeCommitment(uint256 claimId, address juror, uint256 amount, bytes32 noteHash, bytes32 salt)
         public
         pure
         returns (bytes32)
     {
-        return keccak256(abi.encode(claimId, juror, approve, salt));
+        return keccak256(abi.encode(claimId, juror, amount, noteHash, salt));
     }
 
     /// @notice Submit a sealed vote during the commit window. Each juror commits once.
@@ -213,7 +232,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     }
 
     /// @notice Open a sealed vote during the reveal window. Only revealed votes are counted.
-    function revealVote(uint256 claimId, bool approve, bytes32 salt) external {
+    function revealVote(uint256 claimId, uint256 amount, bytes32 noteHash, bytes32 salt) external {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.Voting) revert WrongPhase(Phase.Voting, jury.phase);
         bytes32 commitment = commitmentOf[claimId][msg.sender];
@@ -221,31 +240,38 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (hasRevealed[claimId][msg.sender]) revert AlreadyRevealed();
         if (!revealOpen(claimId)) revert RevealNotOpen();
         if (block.timestamp > jury.revealDeadline) revert RevealClosed();
-        if (computeCommitment(claimId, msg.sender, approve, salt) != commitment) revert CommitmentMismatch();
+        if (computeCommitment(claimId, msg.sender, amount, noteHash, salt) != commitment) revert CommitmentMismatch();
+        if (amount > jury.maxAmount) revert AmountTooHigh(amount, jury.maxAmount);
 
         hasRevealed[claimId][msg.sender] = true;
-        if (approve) {
+        amountOf[claimId][msg.sender] = amount;
+        noteHashOf[claimId][msg.sender] = noteHash;
+        jury.amounts.push(amount);
+        if (amount > 0) {
             jury.approvals++;
         } else {
             jury.rejections++;
         }
-        emit VoteRevealed(claimId, msg.sender, approve);
+        emit VoteRevealed(claimId, msg.sender, amount, noteHash);
     }
 
-    /// @notice Closes voting and returns the verdict. Allowed once the reveal window has ended, or once
-    ///         every juror has committed and revealed.
-    /// @dev Approved iff at least `quorum` votes were revealed and approvals strictly outnumber rejections.
-    function tally(uint256 claimId) external onlyClaimManager returns (Outcome outcome) {
+    /// @notice Closes voting and returns the verdict and the jury's offer. Allowed once the reveal window
+    ///         has ended, or once every juror has committed and revealed.
+    /// @dev The offer is the median revealed amount (the lower middle one for an even count, so a split
+    ///      jury errs towards paying less). Approved iff at least `quorum` votes were revealed and the
+    ///      median is above zero, which means strictly more jurors voted to pay than to reject.
+    function tally(uint256 claimId) external onlyClaimManager returns (Outcome outcome, uint256 award) {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.Voting) revert WrongPhase(Phase.Voting, jury.phase);
         if (!canTally(claimId)) revert VotingStillOpen();
 
-        uint256 votes = uint256(jury.approvals) + jury.rejections;
-        outcome = (votes >= quorum && jury.approvals > jury.rejections) ? Outcome.Approved : Outcome.Rejected;
+        if (jury.amounts.length >= quorum) award = medianAmount(claimId);
+        outcome = award > 0 ? Outcome.Approved : Outcome.Rejected;
 
         jury.phase = Phase.Tallied;
         jury.outcome = outcome;
-        emit Tallied(claimId, outcome, jury.approvals, jury.rejections);
+        jury.award = award;
+        emit Tallied(claimId, outcome, jury.approvals, jury.rejections, award);
     }
 
     // ---------------------------------------------------------------------
@@ -277,6 +303,30 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.AwaitingRandomness) return 0;
         return uint256(jury.requestedAt) + randomnessTimeout;
+    }
+
+    /// @notice The lower median of the amounts revealed so far, or 0 if none are.
+    function medianAmount(uint256 claimId) public view returns (uint256) {
+        uint256[] memory amounts = _juries[claimId].amounts;
+        uint256 n = amounts.length;
+        if (n == 0) return 0;
+        // Insertion sort: a jury is a handful of votes.
+        for (uint256 i = 1; i < n; i++) {
+            uint256 value = amounts[i];
+            uint256 j = i;
+            while (j > 0 && amounts[j - 1] > value) {
+                amounts[j] = amounts[j - 1];
+                j--;
+            }
+            amounts[j] = value;
+        }
+        return amounts[(n - 1) / 2];
+    }
+
+    /// @notice The jury's offer once tallied (0 when rejected), and the most a juror may vote.
+    function getAward(uint256 claimId) external view returns (uint256 award, uint256 maxAmount) {
+        Jury storage jury = _juries[claimId];
+        return (jury.award, jury.maxAmount);
     }
 
     function getJurors(uint256 claimId) external view returns (address[] memory) {

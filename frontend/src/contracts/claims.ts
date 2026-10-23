@@ -7,6 +7,8 @@ const CLAIM_MANAGER_ABI = [
   "function finalize(uint256 claimId)",
   "function executePayout(uint256 claimId)",
   "function cancelStalledClaim(uint256 claimId)",
+  "function acceptOffer(uint256 claimId)",
+  "function withdrawClaim(uint256 claimId)",
 ] as const;
 
 function claimNumber(claimId: string): bigint {
@@ -27,16 +29,16 @@ async function claimManagerFor(account: string) {
 async function runResolution(
   account: string,
   claimId: string,
-  method: "finalize" | "executePayout" | "cancelStalledClaim",
+  method: "finalize" | "executePayout" | "cancelStalledClaim" | "acceptOffer" | "withdrawClaim",
   pendingMessage: string,
   progress: (message: string) => void,
 ): Promise<string> {
   const manager = await claimManagerFor(account);
   progress(pendingMessage);
   const transaction = await manager[method](claimNumber(claimId));
-  progress("Waiting for the recovery transaction to confirm…");
+  progress("Waiting for the transaction to confirm…");
   const receipt = await transaction.wait();
-  if (!receipt || receipt.status !== 1) throw new Error("The recovery transaction did not succeed.");
+  if (!receipt || receipt.status !== 1) throw new Error("The transaction did not succeed.");
   return transaction.hash as string;
 }
 
@@ -50,6 +52,16 @@ export function executeClaimPayout(account: string, claimId: string, progress: (
 
 export function cancelStalledClaim(account: string, claimId: string, progress: (message: string) => void) {
   return runResolution(account, claimId, "cancelStalledClaim", "Confirm cancelling the stalled jury request in your wallet.", progress);
+}
+
+/** Take the jury's offer. The payout follows automatically. */
+export function acceptOffer(account: string, claimId: string, progress: (message: string) => void) {
+  return runResolution(account, claimId, "acceptOffer", "Confirm accepting the jury's offer in your wallet.", progress);
+}
+
+/** Turn the jury's offer down. Nothing is paid and the claim closes. */
+export function withdrawClaim(account: string, claimId: string, progress: (message: string) => void) {
+  return runResolution(account, claimId, "withdrawClaim", "Confirm withdrawing your claim in your wallet.", progress);
 }
 
 export async function submitClaim(

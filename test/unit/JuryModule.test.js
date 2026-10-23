@@ -13,6 +13,7 @@ const {
   JuryPhase,
   Outcome,
   ClaimState,
+  USDC,
 } = require("../helpers");
 
 async function awaitingRandomnessFixture() {
@@ -54,7 +55,7 @@ describe("JuryModule", function () {
   describe("selection", function () {
     it("only accepts jury requests from the claim manager", async function () {
       const { jury, claimant } = await loadFixture(activePoolFixture);
-      await expect(jury.requestJury(99, claimant.address)).to.be.revertedWithCustomError(jury, "NotClaimManager");
+      await expect(jury.requestJury(99, claimant.address, USDC(1))).to.be.revertedWithCustomError(jury, "NotClaimManager");
     });
 
     it("only accepts the randomness callback from the provider", async function () {
@@ -157,7 +158,8 @@ describe("JuryModule", function () {
       expect(await jury.revealOpen(claimId)).to.equal(true);
       await expect(revealVote(ctx, claimId, jurors[0], true))
         .to.emit(jury, "VoteRevealed")
-        .withArgs(claimId, jurors[0].address, true);
+        .withArgs(claimId, jurors[0].address, USDC(400), ethers.ZeroHash);
+      expect(await jury.amountOf(claimId, jurors[0].address)).to.equal(USDC(400));
       expect(await jury.hasRevealed(claimId, jurors[0].address)).to.equal(true);
       expect((await jury.getJury(claimId)).approvals).to.equal(1n);
     });
@@ -167,15 +169,19 @@ describe("JuryModule", function () {
       const { jury, jurors, claimId } = ctx;
       await commitVote(ctx, claimId, jurors[0], true);
       await time.increase(ctx.params.commitPeriod + 1);
-      // Flipping the vote, or using another salt, does not match.
-      await expect(revealVote(ctx, claimId, jurors[0], false)).to.be.revertedWithCustomError(
+      // Changing the amount, the note or the salt does not match.
+      const salt = saltFor(claimId, jurors[0]);
+      const note = ethers.keccak256(ethers.toUtf8Bytes("a different note"));
+      await expect(revealVote(ctx, claimId, jurors[0], USDC(399))).to.be.revertedWithCustomError(
         jury,
         "CommitmentMismatch",
       );
-      await expect(jury.connect(jurors[0]).revealVote(claimId, true, ethers.ZeroHash)).to.be.revertedWithCustomError(
-        jury,
-        "CommitmentMismatch",
-      );
+      await expect(
+        jury.connect(jurors[0]).revealVote(claimId, USDC(400), note, salt),
+      ).to.be.revertedWithCustomError(jury, "CommitmentMismatch");
+      await expect(
+        jury.connect(jurors[0]).revealVote(claimId, USDC(400), ethers.ZeroHash, ethers.ZeroHash),
+      ).to.be.revertedWithCustomError(jury, "CommitmentMismatch");
     });
 
     it("binds a commitment to its juror, so copying another juror's commitment fails on reveal", async function () {
@@ -186,8 +192,18 @@ describe("JuryModule", function () {
       await jury.connect(jurors[1]).commitVote(claimId, copied);
       await time.increase(ctx.params.commitPeriod + 1);
       await expect(
-        jury.connect(jurors[1]).revealVote(claimId, true, saltFor(claimId, jurors[0])),
+        jury.connect(jurors[1]).revealVote(claimId, USDC(400), ethers.ZeroHash, saltFor(claimId, jurors[0])),
       ).to.be.revertedWithCustomError(jury, "CommitmentMismatch");
+    });
+
+    it("rejects a revealed amount above the claim", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      await commitVote(ctx, claimId, jurors[0], USDC(401));
+      await time.increase(ctx.params.commitPeriod + 1);
+      await expect(revealVote(ctx, claimId, jurors[0], USDC(401)))
+        .to.be.revertedWithCustomError(jury, "AmountTooHigh")
+        .withArgs(USDC(401), USDC(400));
     });
 
     it("rejects double commits and double reveals", async function () {
@@ -259,7 +275,7 @@ describe("JuryModule", function () {
       await time.increase(votingPeriod(ctx.params) + 1);
       await expect(ctx.claimManager.finalize(ctx.claimId))
         .to.emit(ctx.jury, "Tallied")
-        .withArgs(ctx.claimId, Outcome.Approved, 2n, 1n);
+        .withArgs(ctx.claimId, Outcome.Approved, 2n, 1n, USDC(400));
     });
 
     it("rejects on a majority against", async function () {
@@ -284,7 +300,7 @@ describe("JuryModule", function () {
       await time.increase(votingPeriod(ctx.params) + 1);
       await expect(ctx.claimManager.finalize(ctx.claimId))
         .to.emit(ctx.jury, "Tallied")
-        .withArgs(ctx.claimId, Outcome.Rejected, 2n, 0n);
+        .withArgs(ctx.claimId, Outcome.Rejected, 2n, 0n, 0n);
     });
 
     it("ignores commits that are never revealed", async function () {
@@ -296,7 +312,33 @@ describe("JuryModule", function () {
       await time.increase(ctx.params.revealPeriod);
       await expect(ctx.claimManager.finalize(ctx.claimId))
         .to.emit(ctx.jury, "Tallied")
-        .withArgs(ctx.claimId, Outcome.Rejected, 2n, 0n);
+        .withArgs(ctx.claimId, Outcome.Rejected, 2n, 0n, 0n);
+    });
+
+    it("offers the median amount, so one extreme juror cannot move it far", async function () {
+      const ctx = await loadFixture(votingFixture);
+      await vote(ctx, [USDC(400), USDC(1), USDC(150), USDC(250), USDC(300)]);
+      await expect(ctx.claimManager.finalize(ctx.claimId))
+        .to.emit(ctx.jury, "Tallied")
+        .withArgs(ctx.claimId, Outcome.Approved, 5n, 0n, USDC(250));
+      expect((await ctx.jury.getAward(ctx.claimId)).award).to.equal(USDC(250));
+      expect((await ctx.claimManager.getClaim(ctx.claimId)).approvedAmount).to.equal(USDC(250));
+    });
+
+    it("takes the lower middle amount when an even number of jurors reveal", async function () {
+      const ctx = await loadFixture(votingFixture);
+      await vote(ctx, [USDC(400), USDC(100), USDC(200), USDC(300)]);
+      await time.increase(votingPeriod(ctx.params) + 1);
+      await ctx.claimManager.finalize(ctx.claimId);
+      expect((await ctx.jury.getAward(ctx.claimId)).award).to.equal(USDC(200));
+    });
+
+    it("rejects when the median is zero, even if some jurors would pay", async function () {
+      const ctx = await loadFixture(votingFixture);
+      await vote(ctx, [USDC(400), USDC(400), 0n, 0n, 0n]);
+      await ctx.claimManager.finalize(ctx.claimId);
+      expect((await ctx.jury.getJury(ctx.claimId)).outcome).to.equal(Outcome.Rejected);
+      expect((await ctx.jury.getAward(ctx.claimId)).award).to.equal(0n);
     });
   });
 });

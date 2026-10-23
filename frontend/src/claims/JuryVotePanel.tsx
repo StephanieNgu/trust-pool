@@ -1,13 +1,17 @@
+import { formatUnits, parseUnits } from "ethers";
 import { useEffect, useState } from "react";
-import type { ClaimDetailView } from "../api";
-import { commitJuryVote, computeVoteCommitment, deriveVoteSalt, readVoteCommitment, revealJuryVote } from "../contracts/jury";
-import { loadLegacyVoteSecret, loadVoteSecret, removeLegacyVoteSecret, removeVoteSecret, saveVoteSecret, type VoteSecret } from "./voteSecret";
+import { MAX_JURY_NOTE_LENGTH, submitJuryNote, type ClaimDetailView } from "../api";
+import { commitJuryVote, computeVoteCommitment, deriveVoteSalt, juryNoteHash, readVoteCommitment, revealJuryVote } from "../contracts/jury";
+import { loadVoteSecret, removeVoteSecret, saveVoteSecret, type VoteSecret } from "./voteSecret";
 
 interface JuryVotePanelProps {
   claim: ClaimDetailView;
   account: string;
   chainTimestamp: number | null;
   evidenceVerified: boolean;
+  tokenDecimals: number;
+  tokenSymbol: string;
+  onAuthenticated?(): void;
   onChanged(): void;
 }
 
@@ -27,51 +31,78 @@ function remaining(deadline: number | null, chainTimestamp: number | null) {
   return hours > 0 ? `${hours}h ${minutes}m remaining` : `${minutes}m remaining`;
 }
 
-export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified, onChanged }: JuryVotePanelProps) {
+/**
+ * A juror votes the amount they think the claim should pay: anything from 0 (reject) up to what was
+ * asked. Paying less than asked needs a short note saying why, which the claimant will read. The
+ * amount and the note's hash are sealed together, so neither can change after seeing other votes.
+ */
+export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified, tokenDecimals, tokenSymbol, onAuthenticated, onChanged }: JuryVotePanelProps) {
   const juror = claim.jury?.jurors.find((item) => item.address.toLowerCase() === account.toLowerCase());
-  const [choice, setChoice] = useState<boolean | null>(null);
+  const maxAmount = BigInt(claim.jury?.maxAmount ?? claim.amount);
+  const requested = formatUnits(maxAmount, tokenDecimals);
+  const [amount, setAmount] = useState(requested);
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
-  const [legacySecret, setLegacySecret] = useState<VoteSecret | null>(null);
   const [storedSecret, setStoredSecret] = useState<VoteSecret | null>(null);
 
   useEffect(() => {
     let active = true;
-    setLegacySecret(loadLegacyVoteSecret(account, claim.id));
     setStoredSecret(null);
     void loadVoteSecret(account, claim.id).then((secret) => { if (active) setStoredSecret(secret); });
-    setChoice(null);
+    setAmount(requested);
+    setNote("");
     setFeedback("");
     setError("");
     return () => { active = false; };
-  }, [account, claim.id]);
+  }, [account, claim.id, requested]);
 
   useEffect(() => {
     if (!juror?.revealed) return;
     removeVoteSecret(account, claim.id);
-    removeLegacyVoteSecret(account, claim.id);
     setStoredSecret(null);
-    setLegacySecret(null);
   }, [account, claim.id, juror?.revealed]);
 
   if (!juror) return null;
 
+  /** The amount typed, in base units, or an error message. */
+  function parsedAmount(): bigint | string {
+    try {
+      const units = parseUnits(amount.trim() || "0", tokenDecimals);
+      if (units < 0n || units > maxAmount) return `Enter an amount from 0 to ${requested} ${tokenSymbol}.`;
+      return units;
+    } catch {
+      return `Enter an amount with no more than ${tokenDecimals} decimal places.`;
+    }
+  }
+
+  const units = parsedAmount();
+  const paysLess = typeof units === "bigint" && units < maxAmount;
+  const noteMissing = paysLess && !note.trim();
+
   async function commit() {
-    if (choice === null) { setError("Choose Approve or Reject before committing."); return; }
-    if (!evidenceVerified) { setError("Open and verify the evidence before committing a vote."); return; }
+    if (typeof units === "string") { setError(units); return; }
+    if (noteMissing) { setError("Add a short note saying why you would pay less than asked."); return; }
+    if (!evidenceVerified) { setError("Open and verify the evidence before voting."); return; }
     try {
       setBusy(true);
       setError("");
+      let noteHash = juryNoteHash("");
+      if (note.trim()) {
+        setFeedback("Saving your note privately. It is shown only after you reveal.");
+        noteHash = await submitJuryNote(account, claim.id, note);
+        onAuthenticated?.();
+        if (noteHash.toLowerCase() !== juryNoteHash(note).toLowerCase()) throw new Error("The backend stored a different note.");
+      }
       setFeedback("Sign the private salt message. This does not reveal or cast your vote.");
       const salt = await deriveVoteSalt(account, claim.id);
-      const commitment = computeVoteCommitment(claim.id, account, choice, salt);
-      await saveVoteSecret(account, claim.id, { approve: choice, salt, commitment });
+      const commitment = computeVoteCommitment(claim.id, account, units, noteHash, salt);
+      const secret: VoteSecret = { amount: units.toString(), noteHash, note: note.trim() ? note : "", salt, commitment };
+      await saveVoteSecret(account, claim.id, secret);
       await commitJuryVote(account, claim.id, commitment, setFeedback);
-      removeLegacyVoteSecret(account, claim.id);
-      setLegacySecret(null);
-      setStoredSecret({ approve: choice, salt, commitment });
-      setFeedback("Vote committed. An encrypted recovery copy is saved in this browser.");
+      setStoredSecret(secret);
+      setFeedback("Vote sealed. An encrypted copy is saved in this browser for the reveal.");
       onChanged();
     } catch (cause) {
       setError(errorText(cause));
@@ -84,41 +115,28 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
     setBusy(true);
     setError("");
     try {
-      const onChain = await readVoteCommitment(account, claim.id);
-      const storedMatches = storedSecret !== null
-        && onChain.toLowerCase() === storedSecret.commitment.toLowerCase()
-        && computeVoteCommitment(claim.id, account, storedSecret.approve, storedSecret.salt).toLowerCase() === onChain.toLowerCase();
-      const legacyMatches = legacySecret !== null
-        && onChain.toLowerCase() === legacySecret.commitment.toLowerCase()
-        && computeVoteCommitment(claim.id, account, legacySecret.approve, legacySecret.salt).toLowerCase() === onChain.toLowerCase();
-      let salt: string;
-      let approve: boolean | null;
-      if (storedMatches) {
-        salt = storedSecret.salt;
-        approve = storedSecret.approve;
-        setFeedback("Recovered the encrypted vote secret from this browser.");
-      } else if (legacyMatches) {
-        salt = legacySecret.salt;
-        approve = legacySecret.approve;
-        setFeedback("Recovered the earlier browser-stored commitment. It will be deleted after reveal.");
+      const onChain = (await readVoteCommitment(account, claim.id)).toLowerCase();
+      let vote: { amount: bigint; noteHash: string; salt: string } | null = null;
+      if (storedSecret && storedSecret.commitment.toLowerCase() === onChain) {
+        vote = { amount: BigInt(storedSecret.amount), noteHash: storedSecret.noteHash, salt: storedSecret.salt };
+        setFeedback("Recovered your sealed vote from this browser.");
       } else {
+        // No copy in this browser: re-derive the salt and try the amount and note typed in the form.
+        if (typeof units === "string") throw new Error(units);
         setFeedback("Sign the same private message to recover your reveal secret.");
-        salt = await deriveVoteSalt(account, claim.id);
-        const approveCommitment = computeVoteCommitment(claim.id, account, true, salt);
-        const rejectCommitment = computeVoteCommitment(claim.id, account, false, salt);
-        approve = onChain.toLowerCase() === approveCommitment.toLowerCase()
-          ? true
-          : onChain.toLowerCase() === rejectCommitment.toLowerCase()
-            ? false
-            : null;
+        const salt = await deriveVoteSalt(account, claim.id);
+        const noteHash = juryNoteHash(note);
+        if (computeVoteCommitment(claim.id, account, units, noteHash, salt).toLowerCase() === onChain) {
+          vote = { amount: units, noteHash, salt };
+        }
       }
-      if (approve === null) throw new Error("This wallet could not reproduce the secret used for the on-chain commitment.");
-      await revealJuryVote(account, claim.id, approve, salt, setFeedback);
+      if (!vote) {
+        throw new Error("This browser has no copy of your sealed vote. Enter exactly the amount and note you sealed, then reveal again.");
+      }
+      await revealJuryVote(account, claim.id, vote.amount, vote.noteHash, vote.salt, setFeedback);
       removeVoteSecret(account, claim.id);
-      removeLegacyVoteSecret(account, claim.id);
       setStoredSecret(null);
-      setLegacySecret(null);
-      setFeedback("Vote revealed successfully.");
+      setFeedback("Vote revealed.");
       onChanged();
     } catch (cause) {
       setError(errorText(cause));
@@ -128,29 +146,44 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
   }
 
   if (juror.revealed) {
-    return <section className="vote-panel complete"><span className="eyebrow">YOUR JURY VOTE</span><h3>Vote revealed</h3><p>Your revealed vote is included in the jury tally.</p></section>;
+    return <section className="vote-panel complete"><span className="eyebrow">YOUR JURY VOTE</span><h3>Vote revealed</h3><p>You voted {formatUnits(juror.amount ?? "0", tokenDecimals)} {tokenSymbol}. The offer is the middle amount of all revealed votes.</p></section>;
   }
 
   const isVoting = claim.state === "Voting" && claim.jury?.phase === "Voting";
   const commitOpen = Boolean(isVoting && chainTimestamp !== null && (!claim.jury?.commitDeadline || chainTimestamp <= claim.jury.commitDeadline));
   const revealOpen = Boolean(claim.jury?.revealOpen && chainTimestamp !== null && (!claim.jury.revealDeadline || chainTimestamp <= claim.jury.revealDeadline));
   const deadlineCopy = remaining(juror.committed ? claim.jury?.revealDeadline ?? null : claim.jury?.commitDeadline ?? null, chainTimestamp);
+  const disabled = !commitOpen || busy;
   return <section className="vote-panel">
     <div className="vote-panel-heading"><span className="eyebrow">YOUR JURY VOTE</span>{deadlineCopy && <span>{deadlineCopy}</span>}</div>
     {!juror.committed ? <>
-      <h3>Commit a sealed vote</h3>
-      <p>Review the verified evidence, then choose privately. Only the commitment is published until reveal.</p>
-      <div className="vote-choices"><button type="button" className={choice === true ? "selected approve" : ""} disabled={!commitOpen || busy} onClick={() => setChoice(true)}>Approve claim</button><button type="button" className={choice === false ? "selected reject" : ""} disabled={!commitOpen || busy} onClick={() => setChoice(false)}>Reject claim</button></div>
+      <h3>How much should this claim pay?</h3>
+      <p>The claimant asked for {requested} {tokenSymbol}. Pay it all, part of it, or 0 to reject. The claim gets the middle amount of the jury's votes.</p>
+      <div className="vote-choices">
+        <button type="button" className={units === maxAmount ? "selected approve" : ""} disabled={disabled} onClick={() => setAmount(requested)}>Pay in full</button>
+        <button type="button" className={units === 0n ? "selected reject" : ""} disabled={disabled} onClick={() => setAmount("0")}>Reject (0)</button>
+      </div>
+      <label htmlFor="vote-amount">Amount to pay</label>
+      <div className="amount-input"><input id="vote-amount" type="number" min="0" max={requested} step="any" value={amount} disabled={disabled} onChange={(event) => setAmount(event.target.value)} /><span>{tokenSymbol}</span></div>
+      <label htmlFor="vote-note">Why? {paysLess ? <span className="muted">(required when paying less than asked)</span> : <span className="muted">(optional)</span>}</label>
+      <textarea id="vote-note" rows={3} maxLength={MAX_JURY_NOTE_LENGTH} value={note} disabled={disabled} placeholder={units === 0n ? "e.g. The claim photos show a different phone from signup." : "e.g. Only the screen is damaged; a screen repair costs about 150."} onChange={(event) => setNote(event.target.value)} />
+      <small>The claimant and the other jurors read this once votes are revealed.</small>
       {!evidenceVerified && <p className="notice warning">Open the evidence above and verify its on-chain hash to unlock voting.</p>}
-      <button className="primary full" type="button" disabled={!commitOpen || !evidenceVerified || busy || choice === null} onClick={() => void commit()}>{busy ? "Committing…" : "Commit sealed vote"}</button>
+      <button className="primary full" type="button" disabled={disabled || !evidenceVerified || typeof units === "string" || noteMissing} onClick={() => void commit()}>{busy ? "Sealing…" : "Seal my vote"}</button>
+      {typeof units === "string" && amount !== "" && <p className="notice warning">{units}</p>}
       {chainTimestamp === null && <p className="notice warning">Synchronizing the latest blockchain time…</p>}
-      {!commitOpen && <p className="notice warning">The commit window is closed.</p>}
+      {!commitOpen && <p className="notice warning">The voting window is closed.</p>}
     </> : <>
-      <h3>{revealOpen ? "Reveal your vote" : "Vote committed"}</h3>
-      <p>This browser keeps an encrypted recovery copy. If it is unavailable, your wallet will try to reproduce the secret by signing the same private message.</p>
-      {storedSecret && <p className="notice">Encrypted recovery is available in this browser and will be deleted after reveal.</p>}
-      {legacySecret && <p className="notice">An earlier browser-stored commitment is available for one-time reveal and will be deleted afterward.</p>}
-      {revealOpen ? <button className="primary full" type="button" disabled={busy} onClick={() => void reveal()}>{busy ? "Recovering & revealing…" : "Recover secret & reveal vote"}</button> : <p className="notice">Reveal opens after all jurors commit or the commit deadline passes.</p>}
+      <h3>{revealOpen ? "Reveal your vote" : "Vote sealed"}</h3>
+      {storedSecret ? <p>You sealed {formatUnits(storedSecret.amount, tokenDecimals)} {tokenSymbol}{storedSecret.note ? <> with the note “{storedSecret.note}”</> : null}. This browser keeps an encrypted copy for the reveal.</p>
+        : <>
+          <p>This browser has no copy of your vote. Enter the amount and note you sealed, and your wallet will re-create the secret.</p>
+          <label htmlFor="vote-amount">Amount you sealed</label>
+          <div className="amount-input"><input id="vote-amount" type="number" min="0" step="any" value={amount} disabled={busy} onChange={(event) => setAmount(event.target.value)} /><span>{tokenSymbol}</span></div>
+          <label htmlFor="vote-note">Note you sealed</label>
+          <textarea id="vote-note" rows={3} maxLength={MAX_JURY_NOTE_LENGTH} value={note} disabled={busy} onChange={(event) => setNote(event.target.value)} />
+        </>}
+      {revealOpen ? <button className="primary full" type="button" disabled={busy} onClick={() => void reveal()}>{busy ? "Revealing…" : "Reveal my vote"}</button> : <p className="notice">Reveal opens once every juror has voted or the voting deadline passes.</p>}
     </>}
     {feedback && <p className="notice" role="status">{feedback}</p>}
     {error && <p className="notice warning" role="alert">{error}</p>}

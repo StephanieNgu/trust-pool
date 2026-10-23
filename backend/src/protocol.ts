@@ -11,11 +11,16 @@ export interface JurorView {
   committed: boolean;
   /** Has opened it; only revealed votes count. */
   revealed: boolean;
+  /** The amount this juror voted to pay, once revealed ("0" rejects); null while sealed. */
+  amount: string | null;
+  /** keccak256 of the juror's note once revealed, or null if sealed or the juror left no note. */
+  noteHash: string | null;
 }
 
 /**
  * Why a tallied jury reached its outcome. Anything but "majorityApproved" rejects the claim:
- * a tie is not a majority, and fewer than `quorum` votes counts as no decision.
+ * a tie is not a majority, and fewer than `quorum` votes counts as no decision. A juror who votes
+ * any amount above 0 counts as approving.
  */
 export type OutcomeReason = "majorityApproved" | "majorityRejected" | "tie" | "noQuorum";
 
@@ -31,6 +36,10 @@ export interface JuryView {
   /** Revealed votes only, so both stay 0 while votes are sealed. */
   approvals: number;
   rejections: number;
+  /** The most a juror may vote: the amount the claimant asked for. */
+  maxAmount: string;
+  /** Once tallied: the median juror amount, which becomes the offer (before the pool cap). */
+  award: string | null;
   quorum: number;
   outcome: (typeof OUTCOMES)[number];
   outcomeReason: OutcomeReason | null;
@@ -51,10 +60,13 @@ export interface ClaimView {
   enrollmentHash: string | null;
   state: ClaimState;
   submittedAt: number;
+  /** While Offered: when the claimant's time to accept or withdraw ends; silence then accepts. */
+  offerDeadline: number | null;
   paidAmount: string;
   /**
-   * Fixed when the jury approves: min(amount, coverage limit, 20% pool cap at that moment). Before
-   * approval it is what approval would fix right now; "0" for Rejected and Cancelled claims.
+   * Fixed when the jury decides: min(jury's median amount, coverage limit, 20% pool cap at that
+   * moment). Before that it is what a full approval would fix right now; "0" for Rejected,
+   * Cancelled and Withdrawn claims.
    */
   payoutAmount: string;
   jury: JuryView | null;
@@ -94,8 +106,9 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
     enrollmentHash,
     state,
     submittedAt: Number(claim.submittedAt),
+    offerDeadline: state === "Offered" ? Number(claim.offerDeadline) : null,
     paidAmount: claim.paidAmount.toString(),
-    payoutAmount: state === "Rejected" || state === "Cancelled" ? "0" : payoutAmount.toString(),
+    payoutAmount: state === "Rejected" || state === "Cancelled" || state === "Withdrawn" ? "0" : payoutAmount.toString(),
     jury,
   };
 }
@@ -106,13 +119,16 @@ async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryV
   if (JURY_PHASES[Number(phase)] === "None") return null;
 
   const addresses = [...(jurors as string[])];
-  const [committed, revealed, canTally, revealOpen, quorum, cancelAt] = await Promise.all([
+  const [committed, revealed, amounts, noteHashes, canTally, revealOpen, quorum, cancelAt, [award, maxAmount]] = await Promise.all([
     Promise.all(addresses.map(async (a) => (await c.jury.commitmentOf(claimId, a)) !== ZERO_HASH)),
     Promise.all(addresses.map((a) => c.jury.hasRevealed(claimId, a) as Promise<boolean>)),
+    Promise.all(addresses.map((a) => c.jury.amountOf(claimId, a) as Promise<bigint>)),
+    Promise.all(addresses.map((a) => c.jury.noteHashOf(claimId, a) as Promise<string>)),
     c.jury.canTally(claimId) as Promise<boolean>,
     c.jury.revealOpen(claimId) as Promise<boolean>,
     c.jury.quorum(),
     c.jury.cancelAvailableAt(claimId),
+    c.jury.getAward(claimId) as Promise<[bigint, bigint]>,
   ]);
   const yes = Number(approvals);
   const no = Number(rejections);
@@ -125,16 +141,27 @@ async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryV
     commits: Number(commits),
     approvals: yes,
     rejections: no,
+    maxAmount: maxAmount.toString(),
+    award: tallied ? award.toString() : null,
     quorum: Number(quorum),
     outcome: OUTCOMES[Number(outcome)],
     outcomeReason: tallied ? outcomeReason(yes, no, Number(quorum)) : null,
-    jurors: addresses.map((address, i) => ({ address, committed: committed[i], revealed: revealed[i] })),
+    jurors: addresses.map((address, i) => ({
+      address,
+      committed: committed[i],
+      revealed: revealed[i],
+      amount: revealed[i] ? amounts[i].toString() : null,
+      noteHash: revealed[i] && noteHashes[i] !== ZERO_HASH ? noteHashes[i] : null,
+    })),
     canTally,
     cancelAvailableAt: Number(cancelAt) || null,
   };
 }
 
-/** Mirrors JuryModule.tally: approved only with quorum and strictly more approvals than rejections. */
+/**
+ * Mirrors JuryModule.tally: approved only with quorum and a median amount above 0, which is the same
+ * as strictly more jurors voting to pay than to reject.
+ */
 export function outcomeReason(approvals: number, rejections: number, quorum: number): OutcomeReason {
   if (approvals + rejections < quorum) return "noQuorum";
   if (approvals === rejections) return "tie";

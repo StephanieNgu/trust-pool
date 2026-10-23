@@ -1,16 +1,19 @@
-const LEGACY_PREFIX = "trustpool:jury-vote:";
-const RECOVERY_PREFIX = "trustpool:jury-recovery:v2:";
+const RECOVERY_PREFIX = "trustpool:jury-recovery:v3:";
 const DATABASE_NAME = "trustpool-jury-secrets";
 const KEY_STORE = "keys";
 const KEY_ID = "vote-recovery-v1";
 
-export interface LegacyVoteSecret {
-  approve: boolean;
+/** What a juror needs to reveal their sealed vote. */
+export interface VoteSecret {
+  /** The amount voted, in token base units, as a decimal string. */
+  amount: string;
+  /** keccak256 of the juror's note, or the zero hash for no note. */
+  noteHash: string;
+  /** The juror's note, so it can be shown back to them before reveal. */
+  note: string;
   salt: string;
   commitment: string;
 }
-
-export type VoteSecret = LegacyVoteSecret;
 
 interface EncryptedRecord {
   version: 2;
@@ -70,7 +73,12 @@ async function browserKey(): Promise<CryptoKey> {
 function validSecret(value: unknown): value is VoteSecret {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return typeof record.approve === "boolean" && isBytes32(record.salt) && isBytes32(record.commitment);
+  return typeof record.amount === "string"
+    && /^\d+$/.test(record.amount)
+    && typeof record.note === "string"
+    && isBytes32(record.noteHash)
+    && isBytes32(record.salt)
+    && isBytes32(record.commitment);
 }
 
 /** Persist an exact recovery copy encrypted by a non-exportable browser key. */
@@ -116,47 +124,4 @@ export function removeVoteSecret(account: string, claimId: string): void {
 
 function isBytes32(value: unknown): value is string {
   return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
-}
-
-/**
- * Reads only an existing pre-migration secret. New votes never write secrets to
- * browser storage; this bridge keeps an already committed vote revealable once.
- */
-export function loadLegacyVoteSecret(account: string, claimId: string): LegacyVoteSecret | null {
-  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
-    const key = localStorage.key(index);
-    if (!key?.startsWith(LEGACY_PREFIX)) continue;
-    try {
-      const record = JSON.parse(localStorage.getItem(key) ?? "null") as Record<string, unknown> | null;
-      if (
-        record?.version === 1
-        && String(record.claimId) === claimId
-        && typeof record.juror === "string"
-        && record.juror.toLowerCase() === account.toLowerCase()
-        && typeof record.approve === "boolean"
-        && isBytes32(record.salt)
-        && isBytes32(record.commitment)
-      ) {
-        return { approve: record.approve, salt: record.salt, commitment: record.commitment };
-      }
-    } catch {
-      // Ignore malformed records; they cannot safely be used to reveal a vote.
-    }
-  }
-  return null;
-}
-
-export function removeLegacyVoteSecret(account: string, claimId: string): void {
-  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
-    const key = localStorage.key(index);
-    if (!key?.startsWith(LEGACY_PREFIX)) continue;
-    try {
-      const record = JSON.parse(localStorage.getItem(key) ?? "null") as Record<string, unknown> | null;
-      if (String(record?.claimId) === claimId && typeof record?.juror === "string" && record.juror.toLowerCase() === account.toLowerCase()) {
-        localStorage.removeItem(key);
-      }
-    } catch {
-      // Leave unrelated malformed storage untouched.
-    }
-  }
 }

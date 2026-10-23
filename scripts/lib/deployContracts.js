@@ -14,6 +14,7 @@ const DEFAULT_PARAMS = {
   commitPeriod: 2 * DAY, // jurors submit sealed votes
   revealPeriod: 1 * DAY, // then open them; 3 days of voting in total
   randomnessTimeout: 1 * DAY, // a claim whose jury randomness is this late can be cancelled
+  responsePeriod: 2 * DAY, // the claimant accepts or withdraws the jury's offer; silence accepts
 };
 
 /**
@@ -48,6 +49,7 @@ async function deployContracts(overrides = {}) {
     await registry.getAddress(),
     await pool.getAddress(),
     await jury.getAddress(),
+    params.responsePeriod,
   ]);
 
   await (await pool.setRegistry(await registry.getAddress())).wait();

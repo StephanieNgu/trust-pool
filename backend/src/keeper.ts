@@ -4,9 +4,10 @@
 //                   MockRandomness owner key; production swaps this for Chainlink VRF). If the
 //                   randomness is still missing after the timeout, cancels the claim instead.
 //   Voting       -> calls finalize once the voting window has closed or every juror has voted
+//   Offered      -> calls acceptOffer once the claimant's response window has passed without an answer
 //   Approved     -> calls executePayout, so approved claims are paid automatically
 //
-// finalize, executePayout and cancelStalledClaim are permissionless on-chain, so the keeper only saves users a
+// finalize, acceptOffer (after the deadline), executePayout and cancelStalledClaim are permissionless on-chain, so the keeper only saves users a
 // transaction; it cannot change an outcome.
 import { randomBytes } from "node:crypto";
 import type { Signer } from "ethers";
@@ -30,7 +31,7 @@ export interface KeeperOptions {
 
 export interface KeeperAction {
   claimId: number;
-  action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "executePayout";
+  action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "acceptOffer" | "executePayout";
   txHash?: string;
   error?: string;
 }
@@ -45,7 +46,7 @@ export interface KeeperStatus {
 }
 
 const silent: Logger = { info: () => {}, warn: () => {} };
-const TERMINAL: string[] = ["Rejected", "Paid", "Cancelled"];
+const TERMINAL: string[] = ["Rejected", "Paid", "Cancelled", "Withdrawn"];
 
 export class Keeper {
   private readonly logger: Logger;
@@ -158,6 +159,17 @@ export class Keeper {
         }
       }
 
+      // The claimant has until offerDeadline to accept or withdraw; after it, silence accepts.
+      if (
+        state === "Offered" &&
+        this.options.autoResolve &&
+        (await this.chainTime()) > Number((await claimManager.getClaim(id)).offerDeadline)
+      ) {
+        if (await this.attempt(actions, id, "acceptOffer", () => claimManager.acceptOffer(id))) {
+          state = "Approved";
+        }
+      }
+
       if (state === "Approved" && this.options.autoResolve) {
         if (await this.attempt(actions, id, "executePayout", () => claimManager.executePayout(id))) {
           state = "Paid";
@@ -170,6 +182,11 @@ export class Keeper {
     this.lastTickAt = Date.now();
     this.lastError = null;
     return actions;
+  }
+
+  private async chainTime(): Promise<number> {
+    const block = await this.contracts.claimManager.runner?.provider?.getBlock("latest");
+    return block?.timestamp ?? Math.floor(Date.now() / 1000);
   }
 
   /** Sends one transaction and waits for it. Failures are recorded and retried on the next tick. */

@@ -4,6 +4,7 @@ import { getClaim, type ClaimDetailView, type ClaimJury } from "../api";
 import { readChainTimestamp } from "../contracts/jury";
 import { cancelStalledClaim, executeClaimPayout, finalizeClaim } from "../contracts/claims";
 import { JuryVotePanel } from "./JuryVotePanel";
+import { JuryReasoning, OfferPanel } from "./OfferPanel";
 import { EvidenceViewer } from "./EvidenceViewer";
 import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
 
@@ -23,7 +24,7 @@ function errorText(error: unknown) {
 }
 
 function outcomeCopy(reason: ClaimJury["outcomeReason"]) {
-  if (reason === "majorityApproved") return "Majority approved";
+  if (reason === "majorityApproved") return "Majority would pay";
   if (reason === "majorityRejected") return "Majority rejected";
   if (reason === "noQuorum") return "Rejected: quorum not met";
   if (reason === "tie") return "Rejected: tied vote";
@@ -112,11 +113,14 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
       <div><dt>Policy</dt><dd>#{claim.policyId}</dd></div>
       <div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div>
       <div><dt>Coverage limit</dt><dd>{formatUnits(claim.coverageLimit, tokenDecimals)} {tokenSymbol}</dd></div>
-      <div><dt>Current payout</dt><dd>{formatUnits(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
+      <div><dt>{claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatUnits(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
+      {claim.offerDeadline && <div><dt>Claimant responds by</dt><dd>{dateTime(claim.offerDeadline)}</dd></div>}
       <div className="detail-wide"><dt>Evidence hash</dt><dd title={claim.evidenceHash}>{claim.evidenceHash}</dd></div>
       <div><dt>Evidence stored</dt><dd>{claim.evidence.available ? "Available to authorized wallets" : "Not found in backend"}</dd></div>
       <div><dt>Your role</dt><dd>{claim.claimant.toLowerCase() === account.toLowerCase() ? "Claimant" : currentJuror ? "Selected juror" : "Observer"}</dd></div>
     </dl>
+
+    <OfferPanel claim={claim} account={account} chainTimestamp={chainTimestamp} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />
 
     <div className="detail-section-heading"><div><span className="eyebrow">SAME DEVICE?</span><h3>Signup photos and claim photos</h3></div></div>
     <p className="muted">Check that the claim photos show the device registered at signup (same model, colour and marks), that the damage is real, and that the first claim photo shows its capture code.</p>
@@ -128,10 +132,11 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
 
     <div className="detail-section-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h3>Jury</h3></div>{jury && <span>{jury.commits} committed · {jury.approvals + jury.rejections} revealed</span>}</div>
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>
-      <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Quorum</dt><dd>{jury.approvals + jury.rejections} / {jury.quorum} revealed</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} approve · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
+      <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Quorum</dt><dd>{jury.approvals + jury.rejections} / {jury.quorum} revealed</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} would pay · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
       {chainTimeError && <p className="notice warning">Could not synchronize blockchain time: {chainTimeError}</p>}
-      <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? "Revealed" : juror.committed ? "Committed" : "Waiting"}</span></div>)}</div>
-      {enableJurorActions && <JuryVotePanel claim={claim} account={account} chainTimestamp={chainTimestamp} evidenceVerified={evidenceVerified} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />}
+      <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? (juror.amount === "0" ? "Rejects" : `Pays ${formatUnits(juror.amount ?? "0", tokenDecimals)}`) : juror.committed ? "Sealed" : "Waiting"}</span></div>)}</div>
+      {enableJurorActions && <JuryVotePanel claim={claim} account={account} chainTimestamp={chainTimestamp} evidenceVerified={evidenceVerified} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />}
+      {claim.state !== "Offered" && <JuryReasoning claim={claim} account={account} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />}
     </>}
     {(canFinalize || canExecutePayout || canCancelStalled) && <section className="recovery-panel"><span className="eyebrow">PERMISSIONLESS RECOVERY</span><h3>Keeper fallback</h3><p>Anyone may submit this transaction if the automatic keeper has not moved the claim forward.</p>{canFinalize && <button className="primary" type="button" disabled={resolutionBusy} onClick={() => void resolve("finalize")}>Finalize jury result</button>}{canExecutePayout && <button className="primary" type="button" disabled={resolutionBusy} onClick={() => void resolve("payout")}>Execute approved payout</button>}{canCancelStalled && <button className="danger-button" type="button" disabled={resolutionBusy} onClick={() => void resolve("cancel")}>Cancel stalled claim</button>}{resolutionFeedback && <p className="notice" role="status">{resolutionFeedback}</p>}{resolutionError && <p className="notice warning" role="alert">{resolutionError}</p>}</section>}
   </section>;

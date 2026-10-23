@@ -31,12 +31,15 @@ export const registryAbi = [
 
 export const claimManagerAbi = [
   "function claimCount() view returns (uint256)",
-  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount, uint256 approvedAmount))",
+  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount, uint256 approvedAmount, uint256 offerDeadline))",
   "function payoutAmount(uint256 claimId) view returns (uint256)",
   "function openClaimOfPolicy(uint256 policyId) view returns (uint256)",
   "function finalize(uint256 claimId)",
   "function executePayout(uint256 claimId)",
   "function cancelStalledClaim(uint256 claimId)",
+  "function acceptOffer(uint256 claimId)",
+  "function withdrawClaim(uint256 claimId)",
+  "function responsePeriod() view returns (uint256)",
   "error WrongState(uint8 expected, uint8 actual)",
   "error NothingToPay()",
 ] as const;
@@ -46,7 +49,10 @@ export const juryAbi = [
   "function commitmentOf(uint256 claimId, address juror) view returns (bytes32)",
   "function hasRevealed(uint256 claimId, address juror) view returns (bool)",
   "function revealOpen(uint256 claimId) view returns (bool)",
-  "function computeCommitment(uint256 claimId, address juror, bool approve, bytes32 salt) pure returns (bytes32)",
+  "function computeCommitment(uint256 claimId, address juror, uint256 amount, bytes32 noteHash, bytes32 salt) pure returns (bytes32)",
+  "function amountOf(uint256 claimId, address juror) view returns (uint256)",
+  "function noteHashOf(uint256 claimId, address juror) view returns (bytes32)",
+  "function getAward(uint256 claimId) view returns (uint256 award, uint256 maxAmount)",
   "function canTally(uint256 claimId) view returns (bool)",
   "function canCancel(uint256 claimId) view returns (bool)",
   "function cancelAvailableAt(uint256 claimId) view returns (uint256)",
@@ -66,7 +72,7 @@ export const randomnessAbi = [
 ] as const;
 
 /** Mirrors of the Solidity enums, indexed by their numeric value. */
-export const CLAIM_STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled"] as const;
+export const CLAIM_STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled", "Offered", "Withdrawn"] as const;
 export const JURY_PHASES = ["None", "AwaitingRandomness", "Voting", "Tallied", "Cancelled"] as const;
 export const OUTCOMES = ["None", "Approved", "Rejected"] as const;
 export const POLICY_STATUSES = ["None", "Active", "Lapsed"] as const;

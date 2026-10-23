@@ -102,7 +102,10 @@ classDiagram
         +uint256 claimCount
         +submitClaim(amount, evidenceHash) uint256
         +startVoting(claimId)
+        +uint256 responsePeriod
         +finalize(claimId)
+        +acceptOffer(claimId)
+        +withdrawClaim(claimId)
         +executePayout(claimId)
     }
 
@@ -113,6 +116,8 @@ classDiagram
         +bytes32 evidenceHash
         +State state
         +uint256 submittedAt
+        +uint256 approvedAmount
+        +uint256 offerDeadline
     }
 
     class JuryModule {
@@ -122,8 +127,9 @@ classDiagram
         +requestJury(claimId)
         +fulfillRandomness(claimId, seed)
         +commitVote(claimId, commitment)
-        +revealVote(claimId, approve, salt)
-        +tally(claimId) Outcome
+        +revealVote(claimId, amount, noteHash, salt)
+        +tally(claimId) (Outcome, award)
+        +medianAmount(claimId) uint256
     }
 
     class IRandomnessProvider {
@@ -153,11 +159,14 @@ stateDiagram-v2
     [*] --> Submitted : submitClaim
     Submitted --> JuryPending : requestJury
     JuryPending --> Voting : randomness fulfilled, jurors selected
-    Voting --> Approved : majority approve
+    Voting --> Offered : median juror amount above 0
     JuryPending --> Cancelled : randomness missing after 1 day (cancelStalledClaim)
-    Voting --> Rejected : majority reject, tie, or quorum not met
+    Voting --> Rejected : median 0 (most reject), tie, or quorum not met
+    Offered --> Approved : claimant accepts, or 2 days pass with no answer
+    Offered --> Withdrawn : claimant withdraws
     Approved --> Paid : executePayout
     Rejected --> [*]
+    Withdrawn --> [*]
     Paid --> [*]
     Cancelled --> [*]
 ```
@@ -170,10 +179,11 @@ stateDiagram-v2
 | Submitted to JuryPending | Called by ClaimManager after submission |
 | JuryPending to Voting | Only the randomness provider can call the fulfill callback, and only the first callback seats a jury |
 | JuryPending to Cancelled | Anyone, once randomness has been pending longer than `randomnessTimeout` (1 day). The policy is freed so the holder can file again, and a late callback reverts |
-| Commit | Caller is a selected juror, has not committed, commit window (2 days from selection) still open. The commitment is `keccak256(abi.encode(claimId, juror, approve, salt))`, so it reveals nothing and cannot be reused by another juror or claim |
-| Reveal | Caller committed and has not revealed; the commit window has ended or every juror has committed; reveal window (1 day after the commit window) still open; `(approve, salt)` matches the commitment |
-| Finalize | Reveal window ended or every juror revealed. Only revealed votes count; a commit that is never revealed counts as no vote. Approved only if at least 3 votes were revealed and approvals strictly outnumber rejections. A tie (for example 2-2) and fewer than 3 votes both end in Rejected; nothing is retried |
-| Approved | The payout is fixed here: the minimum of the claim amount, the coverage limit, and the per-claim cap (`maxPayoutBps`, 20% of the pool balance at this moment). Later pool movements do not change it |
+| Commit | Caller is a selected juror, has not committed, commit window (2 days from selection) still open. The commitment is `keccak256(abi.encode(claimId, juror, amount, noteHash, salt))`, so it reveals nothing and cannot be reused by another juror or claim. `amount` is what the juror would pay (0 rejects); `noteHash` is the hash of their written reasoning, kept by the backend |
+| Reveal | Caller committed and has not revealed; the commit window has ended or every juror has committed; reveal window (1 day after the commit window) still open; `(amount, noteHash, salt)` matches the commitment; `amount` is at most the amount asked |
+| Finalize | Reveal window ended or every juror revealed. Only revealed votes count; a commit that is never revealed counts as no vote. The offer is the median revealed amount (the lower middle one for an even count). Approved only if at least 3 votes were revealed and the median is above 0, which is the same as strictly more jurors paying than rejecting. A tie (for example 2-2) and fewer than 3 votes both end in Rejected; nothing is retried |
+| Offered | The offer is fixed here: the minimum of the median, the coverage limit, and the per-claim cap (`maxPayoutBps`, 20% of the pool balance at this moment). Later pool movements do not change it. The claimant sees every juror's amount and note |
+| Accept / Withdraw | The claimant accepts (to Approved) or withdraws (to Withdrawn, nothing paid, policy freed) within `responsePeriod` (2 days). After it, anyone may accept; the keeper does. There is no counteroffer |
 | Paid | Pays the fixed amount. If the pool holds less than that, the call reverts and the claim stays Approved until funds arrive; approved claims are paid first come, first served (no pro-rata) |
 
 ## 6. Main Flow
@@ -200,13 +210,16 @@ sequenceDiagram
     JM->>JM: select 5 jurors excluding claimant
     JM-->>CM: state = Voting
     J->>UI: Fetch evidence by hash, verify integrity
-    J->>JM: commitVote(claimId, hash(claimId, juror, approve, salt))
+    J->>UI: Note on why (stored privately, hash returned)
+    J->>JM: commitVote(claimId, hash(claimId, juror, amount, noteHash, salt))
     JM->>JM: record sealed vote, emit VoteCommitted
-    J->>JM: revealVote(claimId, approve, salt) once commits close
-    JM->>JM: check against commitment, count vote, emit VoteRevealed
+    J->>JM: revealVote(claimId, amount, noteHash, salt) once commits close
+    JM->>JM: check against commitment, record amount, emit VoteRevealed
     CM->>JM: tally(claimId) at end of window
-    JM-->>CM: Approved
-    CM->>P: payout(claimant, amount)
+    JM-->>CM: Approved, median amount
+    CM-->>C: Offer (median), with every juror's amount and note
+    C->>CM: acceptOffer(claimId)
+    CM->>P: payout(claimant, offer)
     P-->>C: stablecoin transfer
     CM->>CM: state = Paid, emit ClaimPaid
 ```
@@ -275,7 +288,9 @@ sequenceDiagram
 | Jury selection | Fisher-Yates style sampling on the eligible list, seeded by the randomness output | Simple and auditable; fine for a small demo pool | Off-chain selection: cheaper but requires trusting the selector |
 | Voting | Commit-reveal: sealed votes for 2 days, then 1 day to reveal | No juror can see or copy another's vote before committing, which removes herding | Plain on-chain vote: one transaction per juror, but later jurors see earlier votes |
 | Commit-reveal salt | Chosen by the juror's wallet; the frontend should derive it from a wallet signature over the claim id so it can be recovered | A lost salt means a vote cannot be revealed; deriving it avoids storing secrets | Backend stores salts: convenient, but the backend could then read every vote early |
-| Payout cap timing | Fixed when the jury approves | The claimant's payout cannot move after the verdict | At payout time: simpler, but other claims or contributions could change the amount |
+| What jurors decide | An amount from 0 up to the claim, plus a short note; the offer is the median | The professor's "negotiation" suggestion: jurors can say "you only need 150" against a 300 claim. The median ignores one extreme juror in either direction, so a lone colluder or troll cannot move the payout far. Sealing the note's hash with the amount stops jurors editing their reasoning after seeing others' | Yes/no votes: simpler but all-or-nothing. Mean of amounts: one juror can drag it. Live chat or counteroffers: slower, more steps for jurors, and it reopens herding |
+| Claimant's answer | Accept or withdraw within 2 days; silence accepts; no counteroffer | One decision for the claimant and none for jurors, so the jury is not called back. Withdrawing frees the policy to refile with better evidence or a repair quote | A counter round paid to jurors: considered for later if claimants often withdraw |
+| Payout cap timing | Fixed when the jury decides | The claimant's payout cannot move after the verdict | At payout time: simpler, but other claims or contributions could change the amount |
 | Stalled randomness | Cancel after 1 day, policy freed to refile | Claims never get stuck; a late callback cannot seat a second jury | Retry the request: keeps the claim alive but needs the provider to accept duplicates |
 | Evidence access | Uploader plus that claim's jurors, wallet-signed requests | Jurors can review without making personal media public | Public IPFS: simpler but exposes photos to everyone |
 | Evidence | Hash on-chain, file on IPFS | Cheap, tamper-evident, privacy-friendlier | Full on-chain storage: expensive and permanently public |
