@@ -21,6 +21,9 @@ const DEFAULT_PARAMS = {
   agreementBandBps: 1_000, // within 10% of the request from the median counts as agreeing
   noShowPenalty: USDC(5), // taken from the stake of a juror who never reveals
   responsePeriod: 2 * DAY, // the claimant accepts or withdraws the jury's offer; silence accepts
+  // Claimant bond: posted when filing, returned minus the share of the ask the jury cut.
+  claimBondBps: 500, // 5% of the amount asked...
+  minClaimBond: USDC(5), // ...but at least 5 mUSDC
 };
 
 /**
@@ -64,6 +67,8 @@ async function deployContracts(overrides = {}) {
     await pool.getAddress(),
     await jury.getAddress(),
     params.responsePeriod,
+    params.claimBondBps,
+    params.minClaimBond,
   ]);
 
   await (await pool.setRegistry(await registry.getAddress())).wait();

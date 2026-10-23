@@ -243,7 +243,7 @@ describe("ClaimManager", function () {
       const { registry, pool, jury } = await loadFixture(deployFixture);
       const CM = await ethers.getContractFactory("ClaimManager");
       await expect(
-        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 0),
+        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 0, 500, USDC(5)),
       ).to.be.revertedWithCustomError(CM, "InvalidConfig");
     });
   });
@@ -270,7 +270,7 @@ describe("ClaimManager", function () {
       const ctx = await loadFixture(deployFixture);
       const holders = ctx.signers.slice(1, 8);
       for (const [i, h] of holders.entries()) {
-        await ctx.token.mint(h.address, USDC(100));
+        await ctx.token.mint(h.address, USDC(200)); // premium, stake and claim bond
         await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
         await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
         await stakeAsJuror(ctx, h);
@@ -309,7 +309,7 @@ describe("ClaimManager", function () {
       const ctx = await loadFixture(deployFixture);
       const holders = ctx.signers.slice(1, 9);
       for (const [i, h] of holders.entries()) {
-        await ctx.token.mint(h.address, USDC(100));
+        await ctx.token.mint(h.address, USDC(200)); // premium, stake and claim bond
         await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
         await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
         await stakeAsJuror(ctx, h);
@@ -369,6 +369,128 @@ describe("ClaimManager", function () {
       await expect(ctx.claimManager.cancelStalledClaim(ctx.claimId))
         .to.be.revertedWithCustomError(ctx.claimManager, "WrongState")
         .withArgs(ClaimState.JuryPending, ClaimState.Voting);
+    });
+  });
+
+  describe("claim bond", function () {
+    // 5% of the 400 asked.
+    const BOND = USDC(20);
+
+    it("takes the bond when the claim is filed and keeps it out of the reserve", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { claimManager, pool, token, claimant } = ctx;
+      const reserve = await pool.balance();
+      const tx = claimManager.connect(claimant).submitClaim(USDC(400), EVIDENCE);
+      await expect(tx)
+        .to.emit(pool, "BondPosted")
+        .withArgs(claimant.address, BOND);
+      await expect(tx).to.changeTokenBalances(token, [claimant, pool], [-BOND, BOND]);
+      expect((await claimManager.getClaim(1n)).bond).to.equal(BOND);
+      expect(await pool.totalBonded()).to.equal(BOND);
+      expect(await pool.balance()).to.equal(reserve);
+    });
+
+    it("charges at least the minimum bond on small claims", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      expect(await ctx.claimManager.bondFor(USDC(40))).to.equal(USDC(5));
+      expect(await ctx.claimManager.bondFor(USDC(1_000))).to.equal(USDC(50));
+    });
+
+    it("refuses a claim the claimant cannot bond", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { claimManager, pool, token, claimant } = ctx;
+      await token.connect(claimant).approve(await pool.getAddress(), 0n);
+      await expect(claimManager.connect(claimant).submitClaim(USDC(400), EVIDENCE)).to.be.revertedWithCustomError(
+        token,
+        "ERC20InsufficientAllowance",
+      );
+    });
+
+    it("returns the whole bond when the jury pays in full", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { claimManager, pool, token, claimant } = ctx;
+      const claimId = await submitClaim(ctx, claimant, USDC(400));
+      await castAll(ctx, claimId, await selectJury(ctx, claimId), true);
+      const tx = claimManager.finalize(claimId);
+      await expect(tx)
+        .to.emit(claimManager, "BondSettled")
+        .withArgs(claimId, BOND, 0n);
+      await expect(tx).to.changeTokenBalance(token, claimant, BOND);
+      expect(await pool.totalBonded()).to.equal(0n);
+    });
+
+    it("keeps the share of the bond the jury cut, for the reserve", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { claimManager, pool, token, claimant } = ctx;
+      const claimId = await submitClaim(ctx, claimant, USDC(400));
+      // Median 150 of the 400 asked: 62.5% was cut, so 12.5 of the 20 bond is kept.
+      await castVotes(ctx, claimId, await selectJury(ctx, claimId), [USDC(150), USDC(150), USDC(200), USDC(400), 0n]);
+      const fee = await ctx.jury.feeFor(claimId);
+      const reserve = await pool.balance();
+      const tx = claimManager.finalize(claimId);
+      await expect(tx)
+        .to.emit(pool, "BondSettled")
+        .withArgs(claimant.address, USDC(7.5), USDC(12.5));
+      await expect(tx).to.changeTokenBalance(token, claimant, USDC(7.5));
+      expect((await claimManager.getClaim(claimId)).bondForfeited).to.equal(USDC(12.5));
+      expect(await pool.totalBondsForfeited()).to.equal(USDC(12.5));
+      // Withdrawing afterwards does not change the bond.
+      await expect(claimManager.connect(claimant).withdrawClaim(claimId)).to.not.emit(pool, "BondSettled");
+      expect((await pool.balance()) - reserve).to.equal(USDC(12.5) - fee);
+    });
+
+    it("keeps the whole bond when the jury rejects the claim", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { claimManager, token, claimant } = ctx;
+      const claimId = await submitClaim(ctx, claimant, USDC(400));
+      await castAll(ctx, claimId, await selectJury(ctx, claimId), false);
+      const tx = claimManager.finalize(claimId);
+      await expect(tx)
+        .to.emit(claimManager, "BondSettled")
+        .withArgs(claimId, 0n, BOND);
+      await expect(tx).to.changeTokenBalance(token, claimant, 0n);
+    });
+
+    it("returns the whole bond when the jury misses quorum", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { claimManager, token, claimant, params } = ctx;
+      const claimId = await submitClaim(ctx, claimant, USDC(400));
+      const jurors = await selectJury(ctx, claimId);
+      await castVotes(ctx, claimId, jurors.slice(0, 2), [false, false]);
+      await time.increase(votingPeriod(params) + 1);
+      const tx = claimManager.finalize(claimId);
+      await expect(tx)
+        .to.emit(claimManager, "BondSettled")
+        .withArgs(claimId, BOND, 0n);
+      await expect(tx).to.changeTokenBalance(token, claimant, BOND);
+      expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Rejected);
+    });
+
+    it("returns the whole bond when a stalled claim is cancelled", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { claimManager, jury, token, claimant } = ctx;
+      const claimId = await submitClaim(ctx, claimant, USDC(400));
+      await time.increase((await jury.randomnessTimeout()) + 1n);
+      const tx = claimManager.cancelStalledClaim(claimId);
+      await expect(tx)
+        .to.emit(claimManager, "BondSettled")
+        .withArgs(claimId, BOND, 0n);
+      await expect(tx).to.changeTokenBalance(token, claimant, BOND);
+    });
+
+    it("only the claim manager moves bonds", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { pool, claimant } = ctx;
+      await expect(pool.postBond(claimant.address, BOND)).to.be.revertedWithCustomError(pool, "NotClaimManager");
+      await expect(pool.settleBond(claimant.address, BOND, 0n)).to.be.revertedWithCustomError(pool, "NotClaimManager");
+    });
+
+    it("rejects a bond rate above 100%", async function () {
+      const { registry, pool, jury } = await loadFixture(deployFixture);
+      const CM = await ethers.getContractFactory("ClaimManager");
+      await expect(
+        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 1n, 10_001, USDC(5)),
+      ).to.be.revertedWithCustomError(CM, "InvalidConfig");
     });
   });
 });

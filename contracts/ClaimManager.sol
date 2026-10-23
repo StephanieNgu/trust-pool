@@ -16,6 +16,11 @@ import {IPool} from "./interfaces/IPool.sol";
 /// @dev The jury votes an amount rather than yes/no. Its offer (the median juror amount, capped) is
 ///      shown to the claimant with each juror's reasoning; the claimant accepts or withdraws within
 ///      `responsePeriod`. Saying nothing counts as accepting, so a claim never waits on the claimant.
+/// @dev Filing a claim posts a bond (`bondBps` of the amount asked, at least `minBond`), held by the Pool.
+///      When the jury decides, the claimant gets the bond back minus the share of the ask the jury cut:
+///      a claim paid in full loses nothing, one cut to half loses half the bond, and a rejected claim
+///      loses all of it. The forfeited part joins the reserve. A jury without quorum or a stalled
+///      claim refunds the bond in full, since nobody judged the claim.
 /// @dev Holds no funds. Payouts are executed by the Pool on this contract's instruction.
 contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     enum State {
@@ -45,6 +50,9 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         uint256 approvedAmount;
         /// @dev While Offered: when the claimant's time to accept or withdraw ends.
         uint256 offerDeadline;
+        /// @dev Posted when the claim is filed and settled when the jury decides (or the claim is cancelled).
+        uint256 bond;
+        uint256 bondForfeited;
     }
 
     IPolicyRegistry public immutable registry;
@@ -52,6 +60,11 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     IJuryModule public immutable jury;
     /// @notice How long a claimant has to accept or withdraw the jury's offer before it is accepted for them.
     uint256 public immutable responsePeriod;
+    /// @notice The claimant's bond: `bondBps` of the amount asked, but at least `minBond`.
+    uint256 public immutable bondBps;
+    uint256 public immutable minBond;
+
+    uint256 public constant BPS_DENOMINATOR = 10_000;
 
     uint256 public claimCount;
     mapping(uint256 => Claim) private _claims;
@@ -68,6 +81,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     event ClaimStateChanged(uint256 indexed claimId, State from, State to);
     event ClaimPaid(uint256 indexed claimId, address indexed claimant, uint256 amount);
     event OfferMade(uint256 indexed claimId, uint256 amount, uint256 deadline);
+    event BondSettled(uint256 indexed claimId, uint256 returned, uint256 forfeited);
 
     error ZeroAddress();
     error NoActivePolicy();
@@ -84,17 +98,24 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     error ResponseWindowClosed(uint256 deadline);
     error InvalidConfig();
 
-    constructor(IPolicyRegistry registry_, IPool pool_, IJuryModule jury_, uint256 responsePeriod_)
-        Ownable(msg.sender)
-    {
+    constructor(
+        IPolicyRegistry registry_,
+        IPool pool_,
+        IJuryModule jury_,
+        uint256 responsePeriod_,
+        uint256 bondBps_,
+        uint256 minBond_
+    ) Ownable(msg.sender) {
         if (address(registry_) == address(0) || address(pool_) == address(0) || address(jury_) == address(0)) {
             revert ZeroAddress();
         }
-        if (responsePeriod_ == 0) revert InvalidConfig();
+        if (responsePeriod_ == 0 || bondBps_ > BPS_DENOMINATOR) revert InvalidConfig();
         registry = registry_;
         pool = pool_;
         jury = jury_;
         responsePeriod = responsePeriod_;
+        bondBps = bondBps_;
+        minBond = minBond_;
     }
 
     // ---------------------------------------------------------------------
@@ -105,6 +126,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     /// @param amount Requested payout, in token units. Must not exceed the policy's coverage limit.
     ///        Jurors may vote any amount from 0 up to this.
     /// @param evidenceHash Content hash of the (encrypted) evidence bundle stored off-chain, e.g. on IPFS.
+    /// @dev Pulls `bondFor(amount)` from the caller, who must approve the Pool first.
     function submitClaim(uint256 amount, bytes32 evidenceHash) external nonReentrant returns (uint256 claimId) {
         IPolicyRegistry.Policy memory policy = registry.getPolicy(msg.sender);
         if (policy.status != IPolicyRegistry.Status.Active) revert NoActivePolicy();
@@ -116,6 +138,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (existing != 0) revert OpenClaimExists(existing);
 
         claimId = ++claimCount;
+        uint256 bond = bondFor(amount);
         _claims[claimId] = Claim({
             id: claimId,
             claimant: msg.sender,
@@ -127,10 +150,13 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
             submittedAt: block.timestamp,
             paidAmount: 0,
             approvedAmount: 0,
-            offerDeadline: 0
+            offerDeadline: 0,
+            bond: bond,
+            bondForfeited: 0
         });
         openClaimOfPolicy[policy.id] = claimId;
         emit ClaimSubmitted(claimId, msg.sender, policy.id, amount, evidenceHash);
+        if (bond > 0) pool.postBond(msg.sender, bond);
 
         _setState(claimId, State.JuryPending);
         jury.requestJury(claimId, msg.sender, amount);
@@ -177,19 +203,21 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     /// @notice Close voting and record the verdict. Rejected claims are closed immediately.
     ///         An approved claim becomes an offer to the claimant; its amount is fixed here, so later
     ///         pool movements cannot change it.
+    ///         The bond is settled here too, against the jury's own figure (before any pool cap).
     function finalize(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.Voting);
+        Claim storage claim = _claims[claimId];
         (IJuryModule.Outcome outcome, uint256 award) = jury.tally(claimId);
         if (outcome == IJuryModule.Outcome.Approved) {
-            Claim storage claim = _claims[claimId];
             claim.approvedAmount = _capped(claim, award);
             claim.offerDeadline = block.timestamp + responsePeriod;
             _setState(claimId, State.Offered);
             emit OfferMade(claimId, claim.approvedAmount, claim.offerDeadline);
         } else {
             _setState(claimId, State.Rejected);
-            delete openClaimOfPolicy[_claims[claimId].policyId];
+            delete openClaimOfPolicy[claim.policyId];
         }
+        _settleBond(claimId, jury.quorate(claimId) ? bondForfeit(claim.bond, claim.amount, award) : 0);
     }
 
     /// @notice Pay an approved claim the amount fixed at approval. If the pool cannot cover it right
@@ -217,11 +245,25 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         jury.cancel(claimId);
         _setState(claimId, State.Cancelled);
         delete openClaimOfPolicy[_claims[claimId].policyId];
+        _settleBond(claimId, 0);
     }
 
     // ---------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------
+
+    /// @notice The bond for a claim asking `amount`.
+    function bondFor(uint256 amount) public view returns (uint256) {
+        uint256 bond = (amount * bondBps) / BPS_DENOMINATOR;
+        return bond < minBond ? minBond : bond;
+    }
+
+    /// @notice How much of `bond` is kept when a claim asking `amount` is awarded `award`: the bond times
+    ///         the share of the ask the jury cut. Rounds in the claimant's favour.
+    function bondForfeit(uint256 bond, uint256 amount, uint256 award) public pure returns (uint256) {
+        if (amount == 0 || award >= amount) return 0;
+        return (bond * (amount - award)) / amount;
+    }
 
     function getClaim(uint256 claimId) external view returns (Claim memory) {
         return _claims[claimId];
@@ -246,6 +288,14 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (claim.coverageLimit < amount) amount = claim.coverageLimit;
         uint256 cap = pool.maxPayout();
         return cap < amount ? cap : amount;
+    }
+
+    function _settleBond(uint256 claimId, uint256 forfeit) private {
+        Claim storage claim = _claims[claimId];
+        if (claim.bond == 0) return;
+        claim.bondForfeited = forfeit;
+        emit BondSettled(claimId, claim.bond - forfeit, forfeit);
+        pool.settleBond(claim.claimant, claim.bond, forfeit);
     }
 
     function _requireState(uint256 claimId, State expected) private view {

@@ -1,6 +1,6 @@
 import { Contract, parseUnits } from "ethers";
 import { getBrowserProvider } from "../wallet";
-import { loadLocalDeployment } from "./deployments";
+import { loadContracts } from "./contracts";
 
 const CLAIM_MANAGER_ABI = [
   "function submitClaim(uint256 amount, bytes32 evidenceHash) returns (uint256 claimId)",
@@ -9,6 +9,7 @@ const CLAIM_MANAGER_ABI = [
   "function cancelStalledClaim(uint256 claimId)",
   "function acceptOffer(uint256 claimId)",
   "function withdrawClaim(uint256 claimId)",
+  "function bondFor(uint256 amount) view returns (uint256)",
 ] as const;
 
 function claimNumber(claimId: string): bigint {
@@ -19,7 +20,7 @@ function claimNumber(claimId: string): bigint {
 async function claimManagerFor(account: string) {
   const provider = getBrowserProvider();
   if ((await provider.getNetwork()).chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
-  const deployment = await loadLocalDeployment();
+  const { deployment } = await loadContracts(provider);
   if (await provider.getCode(deployment.addresses.claimManager) === "0x") {
     throw new Error("ClaimManager is unavailable. Deploy the contracts and refresh.");
   }
@@ -77,13 +78,24 @@ export async function submitClaim(
 
   const provider = getBrowserProvider();
   if ((await provider.getNetwork()).chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
-  const deployment = await loadLocalDeployment();
+  const signer = await provider.getSigner(account);
+  const { deployment, token } = await loadContracts(signer);
   if (await provider.getCode(deployment.addresses.claimManager) === "0x") {
     throw new Error("ClaimManager is unavailable. Deploy the contracts and refresh.");
   }
-
-  const signer = await provider.getSigner(account);
   const claimManager = new Contract(deployment.addresses.claimManager, CLAIM_MANAGER_ABI, signer);
+
+  // The bond is held by the pool until the jury decides, so the pool must be allowed to take it.
+  const bond: bigint = await claimManager.bondFor(units);
+  if (await token.balanceOf(account) < bond) throw new Error("Your wallet does not have enough mUSDC for the claim bond.");
+  if (bond > 0n && await token.allowance(account, deployment.addresses.pool) < bond) {
+    progress("Approve the mUSDC claim bond in your wallet.");
+    const approval = await token.approve(deployment.addresses.pool, bond);
+    progress("Waiting for the token approval to confirm…");
+    const approvalReceipt = await approval.wait();
+    if (!approvalReceipt || approvalReceipt.status !== 1) throw new Error("The token approval did not succeed.");
+  }
+
   progress("Confirm your claim in MetaMask.");
   const transaction = await claimManager.submitClaim(units, evidenceHash);
   progress("Your claim transaction is confirming…");

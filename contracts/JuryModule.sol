@@ -313,7 +313,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (jury.phase != Phase.Voting) revert WrongPhase(Phase.Voting, jury.phase);
         if (!canTally(claimId)) revert VotingStillOpen();
 
-        if (jury.amounts.length >= quorum) award = medianAmount(claimId);
+        if (quorate(claimId)) award = medianAmount(claimId);
         outcome = award > 0 ? Outcome.Approved : Outcome.Rejected;
 
         jury.phase = Phase.Tallied;
@@ -326,7 +326,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     /// @dev Penalizes no-shows, pays agreeing jurors and unlocks everyone's stake. Runs once, at tally.
     function _settle(uint256 claimId, Jury storage jury) private {
         address[] memory jurors = jury.jurors;
-        bool quorate = jury.amounts.length >= quorum;
+        bool hasQuorum = quorate(claimId);
         uint256 agreeing;
         uint256 penalties;
         for (uint256 i = 0; i < jurors.length; i++) {
@@ -335,7 +335,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
                 uint256 taken = pool.penalize(juror, noShowPenalty);
                 penaltyOf[claimId][juror] = taken;
                 penalties += taken;
-            } else if (quorate && agrees(claimId, amountOf[claimId][juror])) {
+            } else if (hasQuorum && agrees(claimId, amountOf[claimId][juror])) {
                 agreeing++;
             }
             pool.unlockStake(juror);
@@ -414,6 +414,11 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (amount == 0) return false;
         uint256 band = (jury.maxAmount * agreementBandBps) / BPS_DENOMINATOR;
         return amount > award ? amount - award <= band : award - amount <= band;
+    }
+
+    /// @notice Whether at least `quorum` votes have been revealed. A jury without quorum decides nothing.
+    function quorate(uint256 claimId) public view returns (bool) {
+        return _juries[claimId].amounts.length >= quorum;
     }
 
     /// @notice The lower median of the amounts revealed so far, or 0 if none are.

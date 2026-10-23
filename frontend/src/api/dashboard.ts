@@ -20,6 +20,9 @@ export interface DashboardOverview {
   jurorStaked: boolean;
   totalStaked: string;
   totalJurorFees: string;
+  /** A claim's bond: `claimBondBps` of the amount asked, but at least `minClaimBond`. */
+  claimBondBps: number;
+  minClaimBond: string;
   coverage: string;
   active: boolean;
   policyId: string;
@@ -86,6 +89,8 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     jurorStaked: member.juror.staked,
     totalStaked: formatUnits(pool.totalStaked, decimals),
     totalJurorFees: formatUnits(pool.totalJurorFees, decimals),
+    claimBondBps: pool.claimBondBps,
+    minClaimBond: formatUnits(pool.minClaimBond, decimals),
     coverage: formatUnits(policy?.coverageLimit ?? "0", decimals),
     active: policy?.status === "Active",
     policyId: policy?.id ?? "0",

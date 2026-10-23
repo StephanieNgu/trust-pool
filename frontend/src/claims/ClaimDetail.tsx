@@ -40,6 +40,16 @@ function DeviceCheck({ check }: { check: ClaimDetailView["deviceCheck"] }) {
   </div>;
 }
 
+/** The bond's state: held while the jury decides, then what came back and what the pool kept. */
+function bondText(claim: ClaimDetailView, decimals: number, symbol: string) {
+  const money = (value: string) => `${formatUnits(value, decimals)} ${symbol}`;
+  const { amount, returned, forfeited } = claim.bond;
+  if (returned === null || forfeited === null) return `${money(amount)}, held until the jury decides`;
+  if (forfeited === "0") return `${money(amount)}, returned in full`;
+  if (returned === "0") return `${money(amount)}, kept by the pool`;
+  return `${money(returned)} of ${money(amount)} returned, ${money(forfeited)} kept by the pool`;
+}
+
 export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enableJurorActions = false, onAuthenticated, onClaimChanged, onBack }: ClaimDetailProps) {
   const [claim, setClaim] = useState<ClaimDetailView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -114,6 +124,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
       <div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div>
       <div><dt>Coverage limit</dt><dd>{formatUnits(claim.coverageLimit, tokenDecimals)} {tokenSymbol}</dd></div>
       <div><dt>{claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatUnits(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
+      <div><dt>Claim bond</dt><dd>{bondText(claim, tokenDecimals, tokenSymbol)}</dd></div>
       {claim.offerDeadline && <div><dt>Claimant responds by</dt><dd>{dateTime(claim.offerDeadline)}</dd></div>}
       <div className="detail-wide"><dt>Evidence hash</dt><dd title={claim.evidenceHash}>{claim.evidenceHash}</dd></div>
       <div><dt>Evidence stored</dt><dd>{claim.evidence.available ? "Available to authorized wallets" : "Not found in backend"}</dd></div>

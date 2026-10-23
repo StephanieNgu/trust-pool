@@ -111,7 +111,8 @@ export function OfferPanel({ claim, account, chainTimestamp, tokenDecimals, toke
     <h3>{offer}{claim.payoutAmount !== claim.amount && <small> of the {asked} you asked for</small>}</h3>
     <p>{capped
       ? <>The middle amount of the jurors' votes was {formatUnits(award, tokenDecimals)} {tokenSymbol}, but one claim can take at most a fifth of the pool, so the offer is {offer}.</>
-      : <>This is the middle amount of the jurors' votes.</>} Read their reasoning below, then accept it or withdraw your claim. {claim.offerDeadline && <>If you do nothing, it is accepted for you after {dateTime(claim.offerDeadline)}.</>}</p>
+      : <>This is the middle amount of the jurors' votes.</>} Read their reasoning below, then accept it or withdraw your claim. {claim.offerDeadline && <>If you do nothing, it is accepted for you after {dateTime(claim.offerDeadline)}.</>}
+      {claim.bond.returned !== null && claim.bond.returned !== "0" && <> {formatUnits(claim.bond.returned, tokenDecimals)} {tokenSymbol} of your bond is already back in your wallet, whichever you choose.</>}</p>
     <JuryReasoning claim={claim} account={account} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />
     {open ? <div className="offer-actions">
       <button className="primary" type="button" disabled={busy} onClick={() => void respond("accept")}>Accept {offer}</button>

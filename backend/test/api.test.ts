@@ -34,6 +34,9 @@ describe("API", () => {
     // Seven jurors' stakes of 40 are held by the pool but are not part of the reserve above.
     assert.equal(pool.totalStaked, USDC(280).toString());
     assert.equal(pool.totalJurorFees, "0");
+    assert.equal(pool.totalBonded, "0");
+    assert.equal(pool.claimBondBps, 500);
+    assert.equal(pool.minClaimBond, USDC(5).toString());
   });
 
   it("describes a member and their policy", async () => {

@@ -118,6 +118,8 @@ classDiagram
         +uint256 submittedAt
         +uint256 approvedAmount
         +uint256 offerDeadline
+        +uint256 bond
+        +uint256 bondForfeited
     }
 
     class JuryModule {
@@ -175,13 +177,13 @@ stateDiagram-v2
 
 | Transition | Guard |
 |---|---|
-| Submit | Policy is Active, waiting period elapsed, amount at most the coverage limit, no other open claim on this policy |
+| Submit | Policy is Active, waiting period elapsed, amount at most the coverage limit, no other open claim on this policy. The claimant posts a bond (5% of the amount, at least 5 mUSDC), held by the Pool outside the reserve |
 | Submitted to JuryPending | Called by ClaimManager after submission |
 | JuryPending to Voting | Only the randomness provider can call the fulfill callback, and only the first callback seats a jury |
-| JuryPending to Cancelled | Anyone, once randomness has been pending longer than `randomnessTimeout` (1 day). The policy is freed so the holder can file again, and a late callback reverts |
+| JuryPending to Cancelled | Anyone, once randomness has been pending longer than `randomnessTimeout` (1 day). The policy is freed so the holder can file again, a late callback reverts, and the bond is returned in full |
 | Commit | Caller is a selected juror, has not committed, commit window (2 days from selection) still open. The commitment is `keccak256(abi.encode(claimId, juror, amount, noteHash, salt))`, so it reveals nothing and cannot be reused by another juror or claim. `amount` is what the juror would pay (0 rejects); `noteHash` is the hash of their written reasoning, kept by the backend |
 | Reveal | Caller committed and has not revealed; the commit window has ended or every juror has committed; reveal window (1 day after the commit window) still open; `(amount, noteHash, salt)` matches the commitment; `amount` is at most the amount asked |
-| Finalize | Reveal window ended or every juror revealed. Only revealed votes count; a commit that is never revealed counts as no vote. The offer is the median revealed amount (the lower middle one for an even count). Approved only if at least 3 votes were revealed and the median is above 0, which is the same as strictly more jurors paying than rejecting. A tie (for example 2-2) and fewer than 3 votes both end in Rejected; nothing is retried |
+| Finalize | Reveal window ended or every juror revealed. Only revealed votes count; a commit that is never revealed counts as no vote. The offer is the median revealed amount (the lower middle one for an even count). Approved only if at least 3 votes were revealed and the median is above 0, which is the same as strictly more jurors paying than rejecting. A tie (for example 2-2) and fewer than 3 votes both end in Rejected; nothing is retried. The bond is settled here: the claimant gets it back minus the share of the ask the jury cut (bond × (asked − median) / asked), measured against the median before any pool cap. Without quorum the whole bond is returned |
 | Offered | The offer is fixed here: the minimum of the median, the coverage limit, and the per-claim cap (`maxPayoutBps`, 20% of the pool balance at this moment). Later pool movements do not change it. The claimant sees every juror's amount and note |
 | Accept / Withdraw | The claimant accepts (to Approved) or withdraws (to Withdrawn, nothing paid, policy freed) within `responsePeriod` (2 days). After it, anyone may accept; the keeper does. There is no counteroffer |
 | Paid | Pays the fixed amount. If the pool holds less than that, the call reverts and the claim stays Approved until funds arrive; approved claims are paid first come, first served (no pro-rata) |
@@ -291,6 +293,7 @@ sequenceDiagram
 | What jurors decide | An amount from 0 up to the claim, plus a short note; the offer is the median | The professor's "negotiation" suggestion: jurors can say "you only need 150" against a 300 claim. The median ignores one extreme juror in either direction, so a lone colluder or troll cannot move the payout far. Sealing the note's hash with the amount stops jurors editing their reasoning after seeing others' | Yes/no votes: simpler but all-or-nothing. Mean of amounts: one juror can drag it. Live chat or counteroffers: slower, more steps for jurors, and it reopens herding |
 | Juror incentives | Opt-in stake (20); agreeing jurors share a fee (2% of the claim); no-shows lose 5 of their stake; disagreeing costs nothing | Gives jurors a reason to vote at all (the fee) and to show up once picked (the penalty). Paying for agreement rewards matching the shared evidence, a Schelling point, while sealed votes stop jurors copying each other. Not punishing disagreement keeps an honest minority view safe, so jurors are not pushed to guess the crowd | Kleros-style slashing of every minority vote: stronger push to coherence but punishes honest dissent and makes careful jurors avoid hard cases. No stake: anyone could be picked and ignore the claim for free |
 | Agreement band | Within 10% of the requested amount from the median; voting 0 agrees only with a rejection | Measured against the request so the band is the same width whatever the median; a small median would otherwise leave almost no room | Exact median only: too strict for amounts; % of the median: shrinks to nothing on small offers |
+| Claimant bond | 5% of the ask (at least 5), returned at the verdict minus the share of the ask the jury cut; the rest joins the reserve. Returned in full if the jury misses quorum or the claim is cancelled | A fake claim now has a price: one the jury rejects loses the whole bond. Scaling the loss with the cut also makes padding the ask cost something, where before asking 300 for 150 of damage was free (the jury paid 150 either way). An honest claimant the jury pays in full loses nothing, and the bond is small next to the claim. Measured against the median rather than the capped offer, so a thin pool never costs the claimant | Forfeit only on rejection: simpler, but padding stays free. A fixed fee per claim: taxes honest claims as much as fake ones. Paying the forfeit to jurors: would give jurors a reason to cut claims |
 | Claimant's answer | Accept or withdraw within 2 days; silence accepts; no counteroffer | One decision for the claimant and none for jurors, so the jury is not called back. Withdrawing frees the policy to refile with better evidence or a repair quote | A counter round paid to jurors: considered for later if claimants often withdraw |
 | Payout cap timing | Fixed when the jury decides | The claimant's payout cannot move after the verdict | At payout time: simpler, but other claims or contributions could change the amount |
 | Stalled randomness | Cancel after 1 day, policy freed to refile | Claims never get stuck; a late callback cannot seat a second jury | Retry the request: keeps the claim alive but needs the provider to accept duplicates |
@@ -317,6 +320,7 @@ sequenceDiagram
 | Evidence leaks to other members | Backend serves it only to the uploader and, during voting, that claim's jurors | Encrypt to juror keys |
 | Evidence disk or backup is copied | AES-256-GCM encryption at rest | Key management service, key rotation |
 | Device ID guessed from its hash | None: `keccak256(IMEI)` can be brute-forced for known IMEI ranges | Salt the device hash per policy |
+| Fake or padded claims | Bond: a rejected claim loses all of it, and a cut claim loses the same share of it as the jury cut | Bond size by claim history |
 | Jurors don't care | Fee for agreeing with the outcome, penalty for not revealing | Tune fee and penalty from real participation data |
 | Jurors collude | Random selection from staked members and sealed votes make coordination hard; the median limits what a minority can move | Larger juries, appeals |
 
@@ -333,10 +337,10 @@ These are known gaps, deliberately left out of the prototype.
 
 1. **Bribery resistance** beyond commit-reveal (which is built): votes become public on reveal, so a briber can still check them afterwards
 2. **Appeals** with escalating jury sizes
-3. **Juror incentives:** fees, coherence rewards, and penalties for non-voters
+3. **Juror incentive tuning:** the fee, band and penalty (built) are demo values; tune them from real participation data
 4. **Real randomness** via Chainlink VRF or drand
 5. **Sybil resistance:** identity checks or device attestation (IMEI, Apple and Google attestation)
-6. **Claimant bond** forfeited on fraudulent claims
+6. **Claimant bond sizing:** the bond (built) is a flat 5%; it could grow for members with rejected claims
 7. **Solvency modeling:** reserve ratios, pro-rata payouts on shortfall, withdrawal lockups
 8. **Gas-efficient jury selection** for large pools (off-chain selection with on-chain proof)
 9. **End-to-end evidence encryption** to each juror's key, so even the backend cannot read evidence (encryption at rest and juror-only access are built)

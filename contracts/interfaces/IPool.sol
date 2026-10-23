@@ -12,4 +12,6 @@ interface IPool {
     function unlockStake(address juror) external;
     function penalize(address juror, uint256 amount) external returns (uint256);
     function payJurorFee(address juror, uint256 amount) external returns (uint256);
+    function postBond(address from, uint256 amount) external;
+    function settleBond(address to, uint256 amount, uint256 forfeit) external;
 }

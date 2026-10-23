@@ -34,6 +34,8 @@ describe("claim flow through the backend", () => {
     let claim = (await api("/api/claims/1")).body;
     assert.equal(claim.state, "JuryPending");
     assert.equal(claim.jury.phase, "AwaitingRandomness");
+    // The bond is 5% of the 300 asked, held until the jury decides.
+    assert.deepEqual(claim.bond, { amount: USDC(15).toString(), returned: null, forfeited: null });
     assert.deepEqual(claim.evidence, { available: true, url: `/api/evidence/${evidenceHash}` });
     const { enrollmentHash } = claim;
     assert.equal(enrollmentHash, (await t.registry.getPolicy(claimant.address)).enrollmentHash);
@@ -137,6 +139,8 @@ describe("claim flow through the backend", () => {
       amounts.map((a) => [a === USDC(200) ? USDC(6).toString() : "0", "0"]),
     );
     assert.equal(claim.payoutAmount, USDC(200).toString());
+    // The jury cut a third of the ask, so a third of the 15 bond is kept and 10 goes back.
+    assert.deepEqual(claim.bond, { amount: USDC(15).toString(), returned: USDC(10).toString(), forfeited: USDC(5).toString() });
     assert.ok(claim.offerDeadline > claim.submittedAt);
     assert.deepEqual(await keeper.tick(), [], "the keeper does not accept for the claimant early");
 
@@ -212,6 +216,8 @@ describe("claim flow through the backend", () => {
       jurors.map((_, i) => ["0", i < 2 ? "0" : USDC(5).toString()]),
     );
     assert.equal((await api(`/api/members/${jurors[2]}`)).body.juror.stake, USDC(35).toString());
+    // Nobody judged the claim, so the whole bond goes back.
+    assert.equal(claim.bond.forfeited, "0");
     assert.equal(claim.paidAmount, "0");
     assert.equal(claim.payoutAmount, "0");
 
@@ -293,6 +299,7 @@ describe("claim flow through the backend", () => {
     assert.equal(claim.state, "Cancelled");
     assert.equal(claim.jury.phase, "Cancelled");
     assert.equal(claim.payoutAmount, "0");
+    assert.equal(claim.bond.returned, claim.bond.amount);
     assert.equal((await api(`/api/members/${claimant.address}`)).body.policy.openClaimId, null);
 
     // The randomness-owning keeper leaves the cancelled claim alone.

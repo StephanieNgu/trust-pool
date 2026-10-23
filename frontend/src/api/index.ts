@@ -47,6 +47,7 @@ export type {
   DeviceDetails,
   DeviceType,
   EvidenceKind,
+  ClaimBond,
   ClaimDetailView,
   ClaimJury,
   ClaimState,
