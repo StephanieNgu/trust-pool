@@ -5,16 +5,17 @@ const { USDC } = require("../helpers");
 
 // The Pool is tested in isolation: plain signers stand in for the registry and claim manager.
 async function poolFixture() {
-  const [owner, registry, claimManager, alice, bob] = await ethers.getSigners();
+  const [owner, registry, claimManager, alice, bob, jury] = await ethers.getSigners();
   const token = await ethers.deployContract("MockStablecoin");
   const pool = await ethers.deployContract("Pool", [await token.getAddress(), 2_000]);
   await pool.setRegistry(registry.address);
   await pool.setClaimManager(claimManager.address);
+  await pool.setJury(jury.address);
   for (const s of [alice, bob]) {
     await token.mint(s.address, USDC(10_000));
     await token.connect(s).approve(await pool.getAddress(), ethers.MaxUint256);
   }
-  return { token, pool, owner, registry, claimManager, alice, bob };
+  return { token, pool, owner, registry, claimManager, alice, bob, jury };
 }
 
 describe("Pool", function () {
@@ -115,6 +116,59 @@ describe("Pool", function () {
         pool,
         "ZeroAddress",
       );
+    });
+  });
+
+  describe("juror stakes", function () {
+    it("holds stakes outside the reserve that pays claims", async function () {
+      const { pool, token, alice, bob } = await loadFixture(poolFixture);
+      await pool.connect(alice).contribute(USDC(1_000));
+      await expect(pool.connect(bob).stake(USDC(20))).to.emit(pool, "Staked").withArgs(bob.address, USDC(20));
+      expect(await token.balanceOf(await pool.getAddress())).to.equal(USDC(1_020));
+      expect(await pool.balance()).to.equal(USDC(1_000));
+      expect(await pool.maxPayout()).to.equal(USDC(200));
+      expect(await pool.stakeOf(bob.address)).to.equal(USDC(20));
+      await expect(pool.connect(bob).stake(0)).to.be.revertedWithCustomError(pool, "ZeroAmount");
+    });
+
+    it("locks a stake while its juror sits on a jury", async function () {
+      const { pool, token, bob, jury } = await loadFixture(poolFixture);
+      await pool.connect(bob).stake(USDC(20));
+      await pool.connect(jury).lockStake(bob.address);
+      await expect(pool.connect(bob).unstake(USDC(20)))
+        .to.be.revertedWithCustomError(pool, "StakeLocked")
+        .withArgs(1n);
+      await pool.connect(jury).unlockStake(bob.address);
+      await expect(pool.connect(bob).unstake(USDC(21)))
+        .to.be.revertedWithCustomError(pool, "InsufficientStake")
+        .withArgs(USDC(21), USDC(20));
+      await expect(pool.connect(bob).unstake(USDC(20))).to.changeTokenBalance(token, bob, USDC(20));
+      expect(await pool.totalStaked()).to.equal(0n);
+    });
+
+    it("moves penalties into the reserve and pays fees out of it, at most what is there", async function () {
+      const { pool, token, alice, bob, jury } = await loadFixture(poolFixture);
+      await pool.connect(bob).stake(USDC(20));
+      await pool.connect(jury).penalize(bob.address, USDC(5));
+      expect(await pool.stakeOf(bob.address)).to.equal(USDC(15));
+      expect(await pool.balance()).to.equal(USDC(5));
+      // A penalty never takes more than the stake.
+      await pool.connect(jury).penalize(bob.address, USDC(50));
+      expect(await pool.stakeOf(bob.address)).to.equal(0n);
+      expect(await pool.totalPenalties()).to.equal(USDC(20));
+
+      await expect(pool.connect(jury).payJurorFee(alice.address, USDC(30))).to.changeTokenBalance(token, alice, USDC(20));
+      expect(await pool.totalJurorFees()).to.equal(USDC(20));
+      expect(await pool.balance()).to.equal(0n);
+    });
+
+    it("lets only the jury module lock, penalize and pay fees", async function () {
+      const { pool, alice, bob } = await loadFixture(poolFixture);
+      await expect(pool.connect(alice).lockStake(bob.address)).to.be.revertedWithCustomError(pool, "NotJury");
+      await expect(pool.connect(alice).unlockStake(bob.address)).to.be.revertedWithCustomError(pool, "NotJury");
+      await expect(pool.connect(alice).penalize(bob.address, 1)).to.be.revertedWithCustomError(pool, "NotJury");
+      await expect(pool.connect(alice).payJurorFee(alice.address, 1)).to.be.revertedWithCustomError(pool, "NotJury");
+      await expect(pool.setJury(alice.address)).to.be.revertedWithCustomError(pool, "AlreadySet");
     });
   });
 });

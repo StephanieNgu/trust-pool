@@ -5,6 +5,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IJuryModule} from "./interfaces/IJuryModule.sol";
 import {IClaimManager} from "./interfaces/IClaimManager.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
+import {IPool} from "./interfaces/IPool.sol";
 import {IRandomnessProvider, IRandomnessConsumer} from "./interfaces/IRandomnessProvider.sol";
 
 /// @title JuryModule
@@ -19,6 +20,15 @@ import {IRandomnessProvider, IRandomnessConsumer} from "./interfaces/IRandomness
 ///      2. Reveal: opens when the commit window ends or every juror has committed; each juror reveals
 ///         (amount, noteHash, salt) and only revealed votes count. A commit never revealed counts as
 ///         no vote.
+///
+///      Incentives. Only members with at least `minStake` locked in the Pool are picked, and the stake
+///      stays locked while they sit on a jury. When the jury is tallied:
+///      - Jurors whose amount agrees with the outcome share a fee from the pool reserve. Agreeing
+///        means: if the claim is rejected (median 0), voting 0; otherwise voting above 0 and within
+///        `agreementBandBps` of the requested amount from the median. No fee is paid without quorum.
+///      - Jurors who never revealed lose `noShowPenalty` of their stake, which is added to the fee.
+///      - Jurors who voted but disagreed get nothing and lose nothing, so an honest minority view is
+///        never punished.
 contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     enum Phase {
         None,
@@ -27,6 +37,19 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         Tallied,
         Cancelled
     }
+
+    /// @notice Stake, fee and penalty settings; amounts in token units, rates in basis points.
+    struct Incentives {
+        uint256 minStake;
+        /// @dev Fee per claim, as a share of the requested amount, but at least `minFee`.
+        uint256 feeBps;
+        uint256 minFee;
+        /// @dev How far from the median an amount may be and still agree, as a share of the request.
+        uint256 agreementBandBps;
+        uint256 noShowPenalty;
+    }
+
+    uint256 public constant BPS_DENOMINATOR = 10_000;
 
     struct Jury {
         Phase phase;
@@ -48,6 +71,12 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
 
     IPolicyRegistry public immutable registry;
     IRandomnessProvider public immutable randomness;
+    IPool public immutable pool;
+    uint256 public immutable minStake;
+    uint256 public immutable feeBps;
+    uint256 public immutable minFee;
+    uint256 public immutable agreementBandBps;
+    uint256 public immutable noShowPenalty;
     uint8 public immutable jurySize;
     /// @notice Minimum number of revealed votes for a verdict to count; otherwise the claim is rejected.
     uint8 public immutable quorum;
@@ -69,6 +98,9 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     mapping(uint256 => mapping(address => uint256)) public amountOf;
     /// @notice A revealed juror's note hash: keccak256 of the note text, or zero for no note.
     mapping(uint256 => mapping(address => bytes32)) public noteHashOf;
+    /// @notice Set at tally: what each juror was paid, and what was taken from their stake.
+    mapping(uint256 => mapping(address => uint256)) public rewardOf;
+    mapping(uint256 => mapping(address => uint256)) public penaltyOf;
 
     event ClaimManagerSet(address indexed claimManager);
     event JuryRequested(uint256 indexed claimId, address indexed claimant);
@@ -83,6 +115,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     event VoteRevealed(uint256 indexed claimId, address indexed juror, uint256 amount, bytes32 noteHash);
     event Tallied(uint256 indexed claimId, Outcome outcome, uint8 approvals, uint8 rejections, uint256 award);
     event JuryCancelled(uint256 indexed claimId);
+    event JurySettled(uint256 indexed claimId, uint256 agreeing, uint256 feePerJuror, uint256 penalties);
 
     error ZeroAddress();
     error AlreadySet();
@@ -112,25 +145,39 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     constructor(
         IPolicyRegistry registry_,
         IRandomnessProvider randomness_,
+        IPool pool_,
         uint8 jurySize_,
         uint8 quorum_,
         uint256 commitPeriod_,
         uint256 revealPeriod_,
-        uint256 randomnessTimeout_
+        uint256 randomnessTimeout_,
+        Incentives memory incentives_
     ) Ownable(msg.sender) {
-        if (address(registry_) == address(0) || address(randomness_) == address(0)) revert ZeroAddress();
+        if (address(registry_) == address(0) || address(randomness_) == address(0) || address(pool_) == address(0)) {
+            revert ZeroAddress();
+        }
         if (
             jurySize_ == 0 ||
             quorum_ == 0 ||
             quorum_ > jurySize_ ||
             commitPeriod_ == 0 ||
             revealPeriod_ == 0 ||
-            randomnessTimeout_ == 0
+            randomnessTimeout_ == 0 ||
+            incentives_.minStake == 0 ||
+            incentives_.noShowPenalty > incentives_.minStake ||
+            incentives_.feeBps > BPS_DENOMINATOR ||
+            incentives_.agreementBandBps > BPS_DENOMINATOR
         ) {
             revert InvalidConfig();
         }
         registry = registry_;
         randomness = randomness_;
+        pool = pool_;
+        minStake = incentives_.minStake;
+        feeBps = incentives_.feeBps;
+        minFee = incentives_.minFee;
+        agreementBandBps = incentives_.agreementBandBps;
+        noShowPenalty = incentives_.noShowPenalty;
         jurySize = jurySize_;
         quorum = quorum_;
         commitPeriod = commitPeriod_;
@@ -155,7 +202,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.None) revert WrongPhase(Phase.None, jury.phase);
 
-        uint256 available = registry.eligibleJurors(claimant).length;
+        uint256 available = eligibleJurors(claimant).length;
         if (available < jurySize) revert NotEnoughEligibleJurors(available, jurySize);
 
         jury.phase = Phase.AwaitingRandomness;
@@ -181,16 +228,17 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.AwaitingRandomness) revert WrongPhase(Phase.AwaitingRandomness, jury.phase);
 
-        // Eligibility is re-read at fulfilment time: policies may have lapsed since the request.
-        address[] memory pool = registry.eligibleJurors(jury.claimant);
-        uint256 n = pool.length;
+        // Eligibility is re-read at fulfilment time: policies may have lapsed or stakes been withdrawn.
+        address[] memory candidates = eligibleJurors(jury.claimant);
+        uint256 n = candidates.length;
         uint256 k = n < jurySize ? n : jurySize;
 
         for (uint256 i = 0; i < k; i++) {
             uint256 j = i + (uint256(keccak256(abi.encode(seed, i))) % (n - i));
-            (pool[i], pool[j]) = (pool[j], pool[i]);
-            jury.jurors.push(pool[i]);
-            isJuror[claimId][pool[i]] = true;
+            (candidates[i], candidates[j]) = (candidates[j], candidates[i]);
+            jury.jurors.push(candidates[i]);
+            isJuror[claimId][candidates[i]] = true;
+            pool.lockStake(candidates[i]);
         }
 
         jury.phase = Phase.Voting;
@@ -272,6 +320,37 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         jury.outcome = outcome;
         jury.award = award;
         emit Tallied(claimId, outcome, jury.approvals, jury.rejections, award);
+        _settle(claimId, jury);
+    }
+
+    /// @dev Penalizes no-shows, pays agreeing jurors and unlocks everyone's stake. Runs once, at tally.
+    function _settle(uint256 claimId, Jury storage jury) private {
+        address[] memory jurors = jury.jurors;
+        bool quorate = jury.amounts.length >= quorum;
+        uint256 agreeing;
+        uint256 penalties;
+        for (uint256 i = 0; i < jurors.length; i++) {
+            address juror = jurors[i];
+            if (!hasRevealed[claimId][juror]) {
+                uint256 taken = pool.penalize(juror, noShowPenalty);
+                penaltyOf[claimId][juror] = taken;
+                penalties += taken;
+            } else if (quorate && agrees(claimId, amountOf[claimId][juror])) {
+                agreeing++;
+            }
+            pool.unlockStake(juror);
+        }
+        uint256 share;
+        if (agreeing > 0) {
+            share = (feeFor(claimId) + penalties) / agreeing;
+            for (uint256 i = 0; i < jurors.length; i++) {
+                address juror = jurors[i];
+                if (hasRevealed[claimId][juror] && agrees(claimId, amountOf[claimId][juror])) {
+                    rewardOf[claimId][juror] = pool.payJurorFee(juror, share);
+                }
+            }
+        }
+        emit JurySettled(claimId, agreeing, share, penalties);
     }
 
     // ---------------------------------------------------------------------
@@ -303,6 +382,38 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.AwaitingRandomness) return 0;
         return uint256(jury.requestedAt) + randomnessTimeout;
+    }
+
+    /// @notice Policyholders who may be picked for a jury on `claimant`'s claim: past their waiting
+    ///         period, not the claimant, and with at least `minStake` locked in the Pool.
+    function eligibleJurors(address claimant) public view returns (address[] memory) {
+        address[] memory holders = registry.eligibleJurors(claimant);
+        uint256 count;
+        for (uint256 i = 0; i < holders.length; i++) {
+            if (pool.stakeOf(holders[i]) >= minStake) holders[count++] = holders[i];
+        }
+        address[] memory staked = new address[](count);
+        for (uint256 i = 0; i < count; i++) {
+            staked[i] = holders[i];
+        }
+        return staked;
+    }
+
+    /// @notice The fee shared by agreeing jurors (before penalties are added): `feeBps` of the amount
+    ///         requested, but at least `minFee`.
+    function feeFor(uint256 claimId) public view returns (uint256) {
+        uint256 fee = (_juries[claimId].maxAmount * feeBps) / BPS_DENOMINATOR;
+        return fee < minFee ? minFee : fee;
+    }
+
+    /// @notice Whether `amount` agrees with a tallied jury's outcome, and so earns a share of the fee.
+    function agrees(uint256 claimId, uint256 amount) public view returns (bool) {
+        Jury storage jury = _juries[claimId];
+        uint256 award = jury.award;
+        if (award == 0) return amount == 0;
+        if (amount == 0) return false;
+        uint256 band = (jury.maxAmount * agreementBandBps) / BPS_DENOMINATOR;
+        return amount > award ? amount - award <= band : award - amount <= band;
     }
 
     /// @notice The lower median of the amounts revealed so far, or 0 if none are.

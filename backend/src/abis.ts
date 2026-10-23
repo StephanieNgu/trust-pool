@@ -15,6 +15,11 @@ export const poolAbi = [
   "function totalContributed() view returns (uint256)",
   "function totalPaidOut() view returns (uint256)",
   "function contributionsOf(address account) view returns (uint256)",
+  "function stakeOf(address juror) view returns (uint256)",
+  "function activeJuriesOf(address juror) view returns (uint256)",
+  "function totalStaked() view returns (uint256)",
+  "function totalJurorFees() view returns (uint256)",
+  "function totalPenalties() view returns (uint256)",
 ] as const;
 
 export const registryAbi = [
@@ -53,6 +58,12 @@ export const juryAbi = [
   "function amountOf(uint256 claimId, address juror) view returns (uint256)",
   "function noteHashOf(uint256 claimId, address juror) view returns (bytes32)",
   "function getAward(uint256 claimId) view returns (uint256 award, uint256 maxAmount)",
+  "function rewardOf(uint256 claimId, address juror) view returns (uint256)",
+  "function penaltyOf(uint256 claimId, address juror) view returns (uint256)",
+  "function feeFor(uint256 claimId) view returns (uint256)",
+  "function minStake() view returns (uint256)",
+  "function noShowPenalty() view returns (uint256)",
+  "function agreementBandBps() view returns (uint256)",
   "function canTally(uint256 claimId) view returns (bool)",
   "function canCancel(uint256 claimId) view returns (bool)",
   "function cancelAvailableAt(uint256 claimId) view returns (uint256)",

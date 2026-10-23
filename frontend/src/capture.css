@@ -134,3 +134,11 @@
 .vote-panel .amount-input input{width:100%;padding:12px 83px 12px 12px;border:1px solid #d5dfed;border-radius:8px;background:#fff;color:#253047;font-size:13px}
 .vote-panel .amount-input input:focus{outline:2px solid #94baf7;border-color:transparent}.vote-panel .amount-input>span{top:13px}
 .vote-panel small{display:block;margin-top:8px;font-size:10px;color:#78899f;line-height:1.6}
+
+/* Jury duty: the stake card on the Jury Queue, and fees or penalties on juror rows. */
+.jury-duty{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;margin-bottom:18px;padding:18px 20px;border:1px solid #dce7f7;border-radius:12px;background:#f7faff}
+.jury-duty h3{margin:6px 0 8px;font-size:16px}.jury-duty p.muted{margin:0;font-size:11px;line-height:1.7}.jury-duty .eyebrow{margin:0}
+.jury-duty-actions{display:flex;flex-direction:column;align-items:flex-end;gap:8px;text-align:right}.jury-duty-actions strong{font-size:20px}.jury-duty-actions small{font-size:10px;color:#78899f;max-width:220px}
+.jury-duty>.notice{grid-column:1/-1;margin:0}
+.juror-reward,.juror-penalty{margin-left:8px;font-size:10px;font-weight:700}.juror-reward{color:#247952}.juror-penalty{color:#a74f43}
+@media(max-width:640px){.jury-duty{grid-template-columns:1fr}.jury-duty-actions{align-items:flex-start;text-align:left}}

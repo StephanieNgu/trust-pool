@@ -14,6 +14,8 @@ const {
   Outcome,
   ClaimState,
   USDC,
+  EVIDENCE,
+  stakeAsJuror,
 } = require("../helpers");
 
 async function awaitingRandomnessFixture() {
@@ -32,23 +34,28 @@ async function votingFixture() {
 describe("JuryModule", function () {
   describe("configuration", function () {
     it("rejects an invalid quorum or jury size", async function () {
-      const { registry, randomness } = await loadFixture(activePoolFixture);
+      const { registry, randomness, pool } = await loadFixture(activePoolFixture);
       const JM = await ethers.getContractFactory("JuryModule");
-      const args = (size, quorum, period, timeout = 60) => [
+      const incentives = { minStake: USDC(20), feeBps: 200, minFee: USDC(2), agreementBandBps: 1_000, noShowPenalty: USDC(5) };
+      const args = (size, quorum, period, timeout = 60, overrides = {}) => [
         registry.getAddress(),
         randomness.getAddress(),
+        pool.getAddress(),
         size,
         quorum,
         period,
         60,
         timeout,
+        { ...incentives, ...overrides },
       ];
       await expect(JM.deploy(...args(5, 6, 60))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(0, 0, 60))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(5, 3, 0))).to.be.revertedWithCustomError(JM, "InvalidConfig");
       await expect(JM.deploy(...args(5, 3, 60, 0))).to.be.revertedWithCustomError(JM, "InvalidConfig");
-      const noReveal = [registry.getAddress(), randomness.getAddress(), 5, 3, 60, 0, 60];
+      const noReveal = [registry.getAddress(), randomness.getAddress(), pool.getAddress(), 5, 3, 60, 0, 60, incentives];
       await expect(JM.deploy(...noReveal)).to.be.revertedWithCustomError(JM, "InvalidConfig");
+      await expect(JM.deploy(...args(5, 3, 60, 60, { minStake: 0 }))).to.be.revertedWithCustomError(JM, "InvalidConfig");
+      await expect(JM.deploy(...args(5, 3, 60, 60, { noShowPenalty: USDC(21) }))).to.be.revertedWithCustomError(JM, "InvalidConfig");
     });
   });
 
@@ -339,6 +346,104 @@ describe("JuryModule", function () {
       await ctx.claimManager.finalize(ctx.claimId);
       expect((await ctx.jury.getJury(ctx.claimId)).outcome).to.equal(Outcome.Rejected);
       expect((await ctx.jury.getAward(ctx.claimId)).award).to.equal(0n);
+    });
+  });
+
+  describe("incentives", function () {
+    // The default claim asks for 400: the fee is 2% of it (8), and agreeing means within 40 of the median.
+    const FEE = USDC(8);
+
+    it("only picks members who have staked, and locks their stakes while they serve", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      const { jury, pool, holders, claimant } = ctx;
+      expect(await jury.eligibleJurors(claimant.address)).to.have.lengthOf(6);
+      await pool.connect(holders[1]).unstake(USDC(20));
+      await pool.connect(holders[2]).unstake(USDC(20));
+      expect(await jury.eligibleJurors(claimant.address)).to.not.include(holders[1].address);
+      await expect(ctx.claimManager.connect(claimant).submitClaim(USDC(400), EVIDENCE))
+        .to.be.revertedWithCustomError(jury, "NotEnoughEligibleJurors")
+        .withArgs(4n, 5n);
+
+      await stakeAsJuror(ctx, holders[1]);
+      const claimId = await submitClaim(ctx, claimant);
+      const jurors = await selectJury(ctx, claimId);
+      for (const j of jurors) {
+        expect(await pool.activeJuriesOf(j.address)).to.equal(1n);
+        await expect(pool.connect(j).unstake(USDC(20))).to.be.revertedWithCustomError(pool, "StakeLocked");
+      }
+      await castVotes(ctx, claimId, jurors, jurors.map(() => true));
+      await ctx.claimManager.finalize(claimId);
+      for (const j of jurors) expect(await pool.activeJuriesOf(j.address)).to.equal(0n);
+      await expect(pool.connect(jurors[0]).unstake(USDC(20))).to.emit(pool, "Unstaked");
+    });
+
+    it("splits the fee among jurors within 10% of the request from the median", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, pool, token, jurors, claimId } = ctx;
+      // Median 380; 400, 400 and 380 are within 40 of it; 200 is not, and 0 rejects.
+      const amounts = [USDC(400), USDC(400), USDC(380), USDC(200), 0n];
+      await castVotes(ctx, claimId, jurors, amounts);
+      expect(await jury.feeFor(claimId)).to.equal(FEE);
+      const reserve = await pool.balance();
+      const before = await Promise.all(jurors.map((j) => token.balanceOf(j.address)));
+
+      const share = FEE / 3n;
+      await expect(ctx.claimManager.finalize(claimId)).to.emit(jury, "JurySettled").withArgs(claimId, 3n, share, 0n);
+      for (const [i, j] of jurors.entries()) {
+        const expected = i < 3 ? share : 0n;
+        expect(await jury.rewardOf(claimId, j.address)).to.equal(expected);
+        expect((await token.balanceOf(j.address)) - before[i]).to.equal(expected);
+        expect(await jury.penaltyOf(claimId, j.address)).to.equal(0n);
+        expect(await pool.stakeOf(j.address)).to.equal(USDC(20), "disagreeing is not penalized");
+      }
+      expect(reserve - (await pool.balance())).to.equal(share * 3n);
+    });
+
+    it("pays the jurors who rejected when the claim is rejected", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      await castVotes(ctx, claimId, jurors, [0n, 0n, 0n, USDC(400), USDC(390)]);
+      await ctx.claimManager.finalize(claimId);
+      const rewards = await Promise.all(jurors.map((j) => jury.rewardOf(claimId, j.address)));
+      expect(rewards).to.deep.equal([FEE / 3n, FEE / 3n, FEE / 3n, 0n, 0n]);
+    });
+
+    it("takes part of a no-show's stake and adds it to the agreeing jurors' fee", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, pool, jurors, claimId, params } = ctx;
+      // Four vote the full amount; the fifth never commits.
+      await castVotes(ctx, claimId, jurors.slice(0, 4), [true, true, true, true]);
+      await time.increase(votingPeriod(params) + 1);
+      const share = (FEE + USDC(5)) / 4n;
+      await expect(ctx.claimManager.finalize(claimId)).to.emit(jury, "JurySettled").withArgs(claimId, 4n, share, USDC(5));
+      expect(await jury.penaltyOf(claimId, jurors[4].address)).to.equal(USDC(5));
+      expect(await pool.stakeOf(jurors[4].address)).to.equal(USDC(15));
+      expect(await jury.rewardOf(claimId, jurors[0].address)).to.equal(share);
+      // Below the minimum stake, the no-show is not picked again until they top up.
+      expect(await jury.eligibleJurors(ctx.claimant.address)).to.not.include(jurors[4].address);
+    });
+
+    it("pays no fee without quorum, but still penalizes no-shows", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, pool, jurors, claimId, params } = ctx;
+      await castVotes(ctx, claimId, jurors.slice(0, 2), [true, true]);
+      await time.increase(votingPeriod(params) + 1);
+      const reserve = await pool.balance();
+      await expect(ctx.claimManager.finalize(claimId)).to.emit(jury, "JurySettled").withArgs(claimId, 0n, 0n, USDC(15));
+      expect(await jury.rewardOf(claimId, jurors[0].address)).to.equal(0n);
+      expect((await pool.balance()) - reserve).to.equal(USDC(15), "penalties stay in the reserve");
+    });
+
+    it("judges agreement against the request, not the median", async function () {
+      const ctx = await loadFixture(votingFixture);
+      const { jury, jurors, claimId } = ctx;
+      await castVotes(ctx, claimId, jurors, [USDC(10), USDC(30), USDC(50), USDC(90), USDC(91)]);
+      await ctx.claimManager.finalize(claimId);
+      // Median 50; the band is 40 either side (10% of 400), so 10 and 90 agree but 91 does not.
+      expect(await jury.agrees(claimId, USDC(10))).to.equal(true);
+      expect(await jury.agrees(claimId, USDC(90))).to.equal(true);
+      expect(await jury.agrees(claimId, USDC(91))).to.equal(false);
+      expect(await jury.agrees(claimId, 0n)).to.equal(false);
     });
   });
 });

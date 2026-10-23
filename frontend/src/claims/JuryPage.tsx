@@ -1,6 +1,7 @@
 import { formatUnits } from "ethers";
 import { useEffect, useState } from "react";
 import { getClaimsForJuror, type ClaimState, type ClaimView, type DashboardOverview } from "../api";
+import { JuryDuty } from "../member/JuryDuty";
 import { ClaimDetail } from "./ClaimDetail";
 import { CLAIM_STATE_COPY, dateTime } from "./presentation";
 
@@ -9,6 +10,7 @@ interface JuryPageProps {
   ready: boolean;
   overview: DashboardOverview | null;
   onAuthenticated(): void;
+  onStakeChanged(): void;
 }
 
 function errorText(error: unknown) {
@@ -26,7 +28,7 @@ function jurorTask(claim: ClaimView, account: string) {
   return "Vote revealed";
 }
 
-export function JuryPage({ account, ready, overview, onAuthenticated }: JuryPageProps) {
+export function JuryPage({ account, ready, overview, onAuthenticated, onStakeChanged }: JuryPageProps) {
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -65,6 +67,7 @@ export function JuryPage({ account, ready, overview, onAuthenticated }: JuryPage
   const activeTasks = account ? claims.filter((claim) => jurorTask(claim, account).includes("required")).length : 0;
   return <section className="claims-panel jury-panel" aria-label="Jury queue">
     <div className="claims-panel-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h2>Jury queue</h2><p className="muted">Claims where this wallet was selected as a juror.</p></div><div className="claims-panel-actions"><label htmlFor="jury-state-filter">Status</label><select id="jury-state-filter" value={stateFilter} disabled={!ready || loading} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loading} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div></div>
+    <JuryDuty account={account} ready={ready} overview={overview} onChanged={onStakeChanged} />
     <div className="jury-summary"><div><strong>{claims.length}</strong><span>Total assignments</span></div><div><strong>{activeTasks}</strong><span>Actions required</span></div></div>
     {error && <p className="notice warning" role="alert">{error}</p>}
     {loading && <p className="muted" role="status">Loading jury assignments from the backend…</p>}

@@ -103,6 +103,8 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
       stamp,
     );
     await (await ctx.registry.connect(h).buyPolicy(deviceIdHash(testDevice(i)), USDC(1_000), enrollment.evidenceHash)).wait();
+    // Opt in to jury duty with twice the minimum, so one no-show penalty does not end their eligibility.
+    await (await ctx.pool.connect(h).stake(ctx.params.minJurorStake * 2n)).wait();
   }
   await increaseTime(ctx.params.waitingPeriod);
 

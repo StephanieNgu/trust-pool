@@ -129,6 +129,13 @@ describe("claim flow through the backend", () => {
     assert.equal(claim.state, "Offered");
     assert.equal(claim.jury.outcomeReason, "majorityApproved");
     assert.equal(claim.jury.award, USDC(200).toString());
+    // Only the juror who voted 200 is within 30 (10% of 300) of the median, so they get the whole
+    // 6 fee (2% of 300). Everyone revealed, so nobody is penalized.
+    assert.equal(claim.jury.fee, USDC(6).toString());
+    assert.deepEqual(
+      claim.jury.jurors.map((j: { reward: string; penalty: string }) => [j.reward, j.penalty]),
+      amounts.map((a) => [a === USDC(200) ? USDC(6).toString() : "0", "0"]),
+    );
     assert.equal(claim.payoutAmount, USDC(200).toString());
     assert.ok(claim.offerDeadline > claim.submittedAt);
     assert.deepEqual(await keeper.tick(), [], "the keeper does not accept for the claimant early");
@@ -199,6 +206,12 @@ describe("claim flow through the backend", () => {
     const claim = (await api(`/api/claims/${id}`)).body;
     assert.equal(claim.state, "Rejected");
     assert.equal(claim.jury.outcomeReason, "noQuorum");
+    // No fee without quorum; the three jurors who never revealed lose 5 of their stake each.
+    assert.deepEqual(
+      claim.jury.jurors.map((j: { reward: string; penalty: string }) => [j.reward, j.penalty]),
+      jurors.map((_, i) => ["0", i < 2 ? "0" : USDC(5).toString()]),
+    );
+    assert.equal((await api(`/api/members/${jurors[2]}`)).body.juror.stake, USDC(35).toString());
     assert.equal(claim.paidAmount, "0");
     assert.equal(claim.payoutAmount, "0");
 

@@ -49,6 +49,53 @@ export async function contributeToPool(
   return transaction.hash as string;
 }
 
+/** Locks `amount` as a juror stake, approving the pool first if needed. */
+export async function stakeAsJuror(
+  account: string,
+  amount: string,
+  tokenDecimals: number,
+  progress: (message: string) => void,
+): Promise<string> {
+  const { token, pool, deployment } = await session(account);
+  let units: bigint;
+  try {
+    units = parseUnits(amount, tokenDecimals);
+  } catch {
+    throw new Error(`Enter a valid amount with no more than ${tokenDecimals} decimal places.`);
+  }
+  if (units <= 0n) throw new Error("Enter a stake greater than zero.");
+  if (await token.balanceOf(account) < units) throw new Error("Your wallet does not have enough mUSDC for this stake.");
+
+  if (await token.allowance(account, deployment.addresses.pool) < units) {
+    progress("Approve the mUSDC stake in your wallet.");
+    const approval = await token.approve(deployment.addresses.pool, units);
+    progress("Waiting for the token approval to confirm…");
+    const approvalReceipt = await approval.wait();
+    if (!approvalReceipt || approvalReceipt.status !== 1) throw new Error("The token approval did not succeed.");
+  }
+
+  progress("Confirm the juror stake in your wallet.");
+  const transaction = await pool.stake(units);
+  progress("Your stake is confirming on-chain…");
+  const receipt = await transaction.wait();
+  if (!receipt || receipt.status !== 1) throw new Error("The stake did not succeed.");
+  return transaction.hash as string;
+}
+
+/** Withdraws the whole juror stake. The pool refuses while the wallet sits on a jury. */
+export async function withdrawJurorStake(account: string, progress: (message: string) => void): Promise<string> {
+  const { pool } = await session(account);
+  const staked: bigint = await pool.stakeOf(account);
+  if (staked === 0n) throw new Error("This wallet has no juror stake to withdraw.");
+  if (await pool.activeJuriesOf(account) > 0n) throw new Error("You are on a jury right now. Withdraw once its vote has closed.");
+  progress("Confirm withdrawing your juror stake in your wallet.");
+  const transaction = await pool.unstake(staked);
+  progress("Your withdrawal is confirming on-chain…");
+  const receipt = await transaction.wait();
+  if (!receipt || receipt.status !== 1) throw new Error("The withdrawal did not succeed.");
+  return transaction.hash as string;
+}
+
 export async function cancelCoverage(
   account: string,
   progress: (message: string) => void,

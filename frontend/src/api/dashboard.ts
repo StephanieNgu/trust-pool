@@ -13,6 +13,13 @@ export interface DashboardOverview {
   policyCount: number;
   holderCount: number;
   claimCount: number;
+  /** Jury duty: this wallet's stake, the minimum to be picked, and juries it sits on now. */
+  jurorStake: string;
+  minJurorStake: string;
+  activeJuries: number;
+  jurorStaked: boolean;
+  totalStaked: string;
+  totalJurorFees: string;
   coverage: string;
   active: boolean;
   policyId: string;
@@ -73,6 +80,12 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     policyCount: pool.policyCount,
     holderCount: pool.holderCount,
     claimCount: pool.claimCount,
+    jurorStake: formatUnits(member.juror.stake, decimals),
+    minJurorStake: formatUnits(member.juror.minStake, decimals),
+    activeJuries: member.juror.activeJuries,
+    jurorStaked: member.juror.staked,
+    totalStaked: formatUnits(pool.totalStaked, decimals),
+    totalJurorFees: formatUnits(pool.totalJurorFees, decimals),
     coverage: formatUnits(policy?.coverageLimit ?? "0", decimals),
     active: policy?.status === "Active",
     policyId: policy?.id ?? "0",

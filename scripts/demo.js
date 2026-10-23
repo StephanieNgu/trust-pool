@@ -30,8 +30,10 @@ async function main() {
     // Stands in for the hash of the signup photo bundle the backend would store.
     const enrollmentHash = ethers.keccak256(ethers.toUtf8Bytes(`enrollment-photos-${i}`));
     await (await registry.connect(member).buyPolicy(deviceIdHash, USDC(1_000), enrollmentHash)).wait();
+    // Opting in to jury duty: only members with a stake locked are picked.
+    await (await pool.connect(member).stake(params.minJurorStake)).wait();
   }
-  console.log(`    Premium each: ${fmt(await registry.premiumFor(USDC(1_000)))}`);
+  console.log(`    Premium each: ${fmt(await registry.premiumFor(USDC(1_000)))}; juror stake each: ${fmt(params.minJurorStake)}`);
 
   log("A backer contributes extra liquidity");
   await (await token.mint(signers[0].address, USDC(5_000))).wait();
@@ -61,7 +63,7 @@ async function main() {
     [USDC(250), ""],
     [USDC(250), ""],
     [USDC(180), "A screen-only repair is about 180 at most shops."],
-    [USDC(150), "Only the glass is cracked; the display works."],
+    [USDC(160), "Only the glass is cracked; the display works."],
     [0n, "The photos don't show the IMEI or the capture code."],
   ];
   const jurors = jurorAddrs.map((addr, i) => ({
@@ -92,6 +94,11 @@ async function main() {
   await (await claimManager.finalize(claimId)).wait();
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
   console.log(`    The jury's offer is the middle vote: ${fmt(await claimManager.payoutAmount(claimId))}`);
+  console.log(`    Jurors within ${fmt((USDC(250) * BigInt(params.agreementBandBps)) / 10_000n)} of it share the ${fmt(await jury.feeFor(claimId))} fee:`);
+  for (const j of jurors) {
+    const reward = await jury.rewardOf(claimId, j.signer.address);
+    console.log(`      ${short(j.signer.address)} ${reward > 0n ? `earned ${fmt(reward)}` : "earned nothing (outside the band)"}`);
+  }
 
   log("The claimant reads the jurors' reasoning and accepts the offer");
   await (await claimManager.connect(claimant).acceptOffer(claimId)).wait();

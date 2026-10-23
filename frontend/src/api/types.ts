@@ -30,6 +30,19 @@ export interface PoolView {
   policyCount: number;
   holderCount: number;
   claimCount: number;
+  /** Jurors' stakes, held by the pool but not part of `balance`. */
+  totalStaked: string;
+  totalJurorFees: string;
+  totalPenalties: string;
+}
+
+/** A member's jury duty: their stake, and whether it is enough to be picked. */
+export interface MemberJuror {
+  stake: string;
+  minStake: string;
+  /** Juries they sit on now; the stake cannot be withdrawn while above 0. */
+  activeJuries: number;
+  staked: boolean;
 }
 
 export interface MemberPolicy {
@@ -49,6 +62,7 @@ export interface MemberView {
   address: string;
   balance: string;
   contributed: string;
+  juror: MemberJuror;
   policy: MemberPolicy | null;
 }
 
@@ -73,6 +87,10 @@ export interface ClaimJuror {
   amount: string | null;
   /** Hash of the juror's note once revealed, or null if sealed or no note. */
   noteHash: string | null;
+  /** Once tallied: the fee paid to this juror for agreeing with the outcome, in base units. */
+  reward: string | null;
+  /** Once tallied: what was taken from their stake for not revealing, in base units. */
+  penalty: string | null;
 }
 
 export interface ClaimJury {
@@ -87,6 +105,8 @@ export interface ClaimJury {
   maxAmount: string;
   /** Once tallied: the median juror amount, in base units. */
   award: string | null;
+  /** The fee agreeing jurors share, before no-show penalties are added, in base units. */
+  fee: string;
   quorum: number;
   outcome: "None" | "Approved" | "Rejected";
   outcomeReason: "majorityApproved" | "majorityRejected" | "tie" | "noQuorum" | null;

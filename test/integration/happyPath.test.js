@@ -27,6 +27,8 @@ describe("Integration: happy path", function () {
       await token.mint(s.address, USDC(100));
       await token.connect(s).approve(poolAddr, ethers.MaxUint256);
       await expect(registry.connect(s).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i))).to.emit(registry, "PolicyPurchased");
+      // Each also opts in to jury duty by locking the minimum stake.
+      await expect(pool.connect(s).stake(params.minJurorStake)).to.emit(pool, "Staked");
     }
 
     // 2. Contribute: a backer seeds the pool with extra liquidity.

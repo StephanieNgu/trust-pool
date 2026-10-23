@@ -15,6 +15,7 @@ const {
   castVotes,
   votingPeriod,
   finalizeAndAccept,
+  stakeAsJuror,
 } = require("../helpers");
 
 async function castAll(ctx, claimId, jurors, approve) {
@@ -263,13 +264,16 @@ describe("ClaimManager", function () {
     });
 
     it("clamps the payout to the pool's per-claim cap", async function () {
-      // Small pool with no seed liquidity: 7 premiums of 50 = 350 USDC, so the 20% cap is 70 USDC.
+      // Small pool with no seed liquidity: 7 premiums of 50 = 350 USDC. Finalizing pays the jurors'
+      // fee (2% of 900 = 18) from it, leaving 332, so the 20% cap when the offer is fixed is 66.4.
+      // Jurors' stakes are held by the pool too but are not part of the reserve.
       const ctx = await loadFixture(deployFixture);
       const holders = ctx.signers.slice(1, 8);
       for (const [i, h] of holders.entries()) {
         await ctx.token.mint(h.address, USDC(100));
         await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
         await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
+        await stakeAsJuror(ctx, h);
       }
       await time.increase(ctx.params.waitingPeriod);
 
@@ -277,11 +281,11 @@ describe("ClaimManager", function () {
       await castAll(ctx, claimId, await selectJury(ctx, claimId), true);
       await finalizeAndAccept(ctx, claimId, holders[0]);
 
-      expect(await ctx.pool.maxPayout()).to.equal(USDC(70));
+      expect(await ctx.pool.maxPayout()).to.equal(USDC(66.4));
       await expect(ctx.claimManager.executePayout(claimId))
         .to.emit(ctx.claimManager, "ClaimPaid")
-        .withArgs(claimId, holders[0].address, USDC(70));
-      expect((await ctx.claimManager.getClaim(claimId)).paidAmount).to.equal(USDC(70));
+        .withArgs(claimId, holders[0].address, USDC(66.4));
+      expect((await ctx.claimManager.getClaim(claimId)).paidAmount).to.equal(USDC(66.4));
     });
 
     it("fixes the payout at approval, so later pool changes cannot alter it", async function () {
@@ -308,6 +312,7 @@ describe("ClaimManager", function () {
         await ctx.token.mint(h.address, USDC(100));
         await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
         await ctx.registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
+        await stakeAsJuror(ctx, h);
       }
       await time.increase(ctx.params.waitingPeriod);
 
