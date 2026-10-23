@@ -15,6 +15,10 @@ export interface JurorView {
   amount: string | null;
   /** keccak256 of the juror's note once revealed, or null if sealed or the juror left no note. */
   noteHash: string | null;
+  /** Once tallied: the fee this juror was paid for agreeing with the outcome ("0" if none). */
+  reward: string | null;
+  /** Once tallied: what was taken from this juror's stake for not revealing ("0" if nothing). */
+  penalty: string | null;
 }
 
 /**
@@ -40,6 +44,8 @@ export interface JuryView {
   maxAmount: string;
   /** Once tallied: the median juror amount, which becomes the offer (before the pool cap). */
   award: string | null;
+  /** The fee agreeing jurors share, before any no-show penalties are added to it. */
+  fee: string;
   quorum: number;
   outcome: (typeof OUTCOMES)[number];
   outcomeReason: OutcomeReason | null;
@@ -119,20 +125,23 @@ async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryV
   if (JURY_PHASES[Number(phase)] === "None") return null;
 
   const addresses = [...(jurors as string[])];
-  const [committed, revealed, amounts, noteHashes, canTally, revealOpen, quorum, cancelAt, [award, maxAmount]] = await Promise.all([
+  const tallied = JURY_PHASES[Number(phase)] === "Tallied";
+  const [committed, revealed, amounts, noteHashes, rewards, penalties, canTally, revealOpen, quorum, cancelAt, [award, maxAmount], fee] = await Promise.all([
     Promise.all(addresses.map(async (a) => (await c.jury.commitmentOf(claimId, a)) !== ZERO_HASH)),
     Promise.all(addresses.map((a) => c.jury.hasRevealed(claimId, a) as Promise<boolean>)),
     Promise.all(addresses.map((a) => c.jury.amountOf(claimId, a) as Promise<bigint>)),
     Promise.all(addresses.map((a) => c.jury.noteHashOf(claimId, a) as Promise<string>)),
+    Promise.all(addresses.map((a) => (tallied ? (c.jury.rewardOf(claimId, a) as Promise<bigint>) : null))),
+    Promise.all(addresses.map((a) => (tallied ? (c.jury.penaltyOf(claimId, a) as Promise<bigint>) : null))),
     c.jury.canTally(claimId) as Promise<boolean>,
     c.jury.revealOpen(claimId) as Promise<boolean>,
     c.jury.quorum(),
     c.jury.cancelAvailableAt(claimId),
     c.jury.getAward(claimId) as Promise<[bigint, bigint]>,
+    c.jury.feeFor(claimId) as Promise<bigint>,
   ]);
   const yes = Number(approvals);
   const no = Number(rejections);
-  const tallied = JURY_PHASES[Number(phase)] === "Tallied";
   return {
     phase: JURY_PHASES[Number(phase)],
     commitDeadline: Number(commitDeadline) || null,
@@ -143,6 +152,7 @@ async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryV
     rejections: no,
     maxAmount: maxAmount.toString(),
     award: tallied ? award.toString() : null,
+    fee: fee.toString(),
     quorum: Number(quorum),
     outcome: OUTCOMES[Number(outcome)],
     outcomeReason: tallied ? outcomeReason(yes, no, Number(quorum)) : null,
@@ -152,6 +162,8 @@ async function getJuryView(c: ProtocolContracts, claimId: number): Promise<JuryV
       revealed: revealed[i],
       amount: revealed[i] ? amounts[i].toString() : null,
       noteHash: revealed[i] && noteHashes[i] !== ZERO_HASH ? noteHashes[i] : null,
+      reward: rewards[i]?.toString() ?? null,
+      penalty: penalties[i]?.toString() ?? null,
     })),
     canTally,
     cancelAvailableAt: Number(cancelAt) || null,
@@ -186,7 +198,7 @@ export async function listClaims(c: ProtocolContracts, filter: ClaimFilter = {})
 }
 
 export async function getPoolView(c: ProtocolContracts) {
-  const [balance, maxPayout, maxPayoutBps, totalContributed, totalPaidOut, policyCount, holderCount, claims] =
+  const [balance, maxPayout, maxPayoutBps, totalContributed, totalPaidOut, policyCount, holderCount, claims, totalStaked, totalJurorFees, totalPenalties] =
     await Promise.all([
       c.pool.balance(),
       c.pool.maxPayout(),
@@ -196,8 +208,15 @@ export async function getPoolView(c: ProtocolContracts) {
       c.registry.policyCount(),
       c.registry.holderCount(),
       c.claimManager.claimCount(),
+      c.pool.totalStaked(),
+      c.pool.totalJurorFees(),
+      c.pool.totalPenalties(),
     ]);
   return {
+    /** Jurors' stakes are held by the pool but are not part of `balance`, the reserve that pays claims. */
+    totalStaked: totalStaked.toString(),
+    totalJurorFees: totalJurorFees.toString(),
+    totalPenalties: totalPenalties.toString(),
     balance: balance.toString(),
     maxPayout: maxPayout.toString(),
     maxPayoutBps: Number(maxPayoutBps),
@@ -210,12 +229,15 @@ export async function getPoolView(c: ProtocolContracts) {
 }
 
 export async function getMemberView(c: ProtocolContracts, address: string) {
-  const [policy, pastWaitingPeriod, waitingPeriod, balance, contributed] = await Promise.all([
+  const [policy, pastWaitingPeriod, waitingPeriod, balance, contributed, stake, activeJuries, minStake] = await Promise.all([
     c.registry.getPolicy(address),
     c.registry.isPastWaitingPeriod(address),
     c.registry.waitingPeriod(),
     c.token.balanceOf(address),
     c.pool.contributionsOf(address),
+    c.pool.stakeOf(address) as Promise<bigint>,
+    c.pool.activeJuriesOf(address) as Promise<bigint>,
+    c.jury.minStake() as Promise<bigint>,
   ]);
   const status = POLICY_STATUSES[Number(policy.status)];
   const openClaimId = status === "None" ? 0n : await c.claimManager.openClaimOfPolicy(policy.id);
@@ -223,6 +245,14 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
     address,
     balance: balance.toString(),
     contributed: contributed.toString(),
+    juror: {
+      stake: stake.toString(),
+      minStake: minStake.toString(),
+      /** Juries this member sits on now; the stake cannot be withdrawn while above 0. */
+      activeJuries: Number(activeJuries),
+      /** Has enough staked to be picked (they also need an active policy past its waiting period). */
+      staked: stake >= minStake,
+    },
     policy:
       status === "None"
         ? null

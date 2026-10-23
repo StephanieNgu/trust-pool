@@ -289,6 +289,8 @@ sequenceDiagram
 | Voting | Commit-reveal: sealed votes for 2 days, then 1 day to reveal | No juror can see or copy another's vote before committing, which removes herding | Plain on-chain vote: one transaction per juror, but later jurors see earlier votes |
 | Commit-reveal salt | Chosen by the juror's wallet; the frontend should derive it from a wallet signature over the claim id so it can be recovered | A lost salt means a vote cannot be revealed; deriving it avoids storing secrets | Backend stores salts: convenient, but the backend could then read every vote early |
 | What jurors decide | An amount from 0 up to the claim, plus a short note; the offer is the median | The professor's "negotiation" suggestion: jurors can say "you only need 150" against a 300 claim. The median ignores one extreme juror in either direction, so a lone colluder or troll cannot move the payout far. Sealing the note's hash with the amount stops jurors editing their reasoning after seeing others' | Yes/no votes: simpler but all-or-nothing. Mean of amounts: one juror can drag it. Live chat or counteroffers: slower, more steps for jurors, and it reopens herding |
+| Juror incentives | Opt-in stake (20); agreeing jurors share a fee (2% of the claim); no-shows lose 5 of their stake; disagreeing costs nothing | Gives jurors a reason to vote at all (the fee) and to show up once picked (the penalty). Paying for agreement rewards matching the shared evidence, a Schelling point, while sealed votes stop jurors copying each other. Not punishing disagreement keeps an honest minority view safe, so jurors are not pushed to guess the crowd | Kleros-style slashing of every minority vote: stronger push to coherence but punishes honest dissent and makes careful jurors avoid hard cases. No stake: anyone could be picked and ignore the claim for free |
+| Agreement band | Within 10% of the requested amount from the median; voting 0 agrees only with a rejection | Measured against the request so the band is the same width whatever the median; a small median would otherwise leave almost no room | Exact median only: too strict for amounts; % of the median: shrinks to nothing on small offers |
 | Claimant's answer | Accept or withdraw within 2 days; silence accepts; no counteroffer | One decision for the claimant and none for jurors, so the jury is not called back. Withdrawing frees the policy to refile with better evidence or a repair quote | A counter round paid to jurors: considered for later if claimants often withdraw |
 | Payout cap timing | Fixed when the jury decides | The claimant's payout cannot move after the verdict | At payout time: simpler, but other claims or contributions could change the amount |
 | Stalled randomness | Cancel after 1 day, policy freed to refile | Claims never get stuck; a late callback cannot seat a second jury | Retry the request: keeps the claim alive but needs the provider to accept duplicates |
@@ -305,17 +307,18 @@ sequenceDiagram
 |---|---|---|
 | One person creates many wallets to dominate juries | One policy per wallet, waiting period | Identity or device attestation, stake-weighted selection |
 | Claimant sits on their own jury | Claimant excluded from selection | Also exclude linked accounts |
-| Jurors copy each other's votes | Commit-reveal: votes are sealed until every juror has committed or the commit window ends | Juror incentives for honest reveals |
-| Juror never reveals | Unrevealed commits count as no vote; quorum rule rejects the claim if too few reveal | Slash non-revealers |
+| Jurors copy each other's votes | Commit-reveal: votes are sealed until every juror has committed or the commit window ends | Keep |
+| Juror never reveals | Unrevealed commits count as no vote; quorum rule rejects the claim if too few reveal; the no-show loses 5 of their 20 stake and drops below the minimum until they top up | Replace no-shows with fresh jurors |
 | Randomness is predicted or gamed | Mock only, clearly labeled | Chainlink VRF |
 | Pool drained by a single large claim | Coverage limit and `maxPayoutBps` cap | Solvency modeling, reserve ratios, pro-rata payouts |
 | Reentrancy on payout | Checks-effects-interactions, OpenZeppelin `ReentrancyGuard` | External audit |
-| Non-voting jurors stall a claim | Voting deadline and quorum rule | Slash non-voters, replace with fresh jurors |
+| Non-voting jurors stall a claim | Voting deadline and quorum rule; no-show penalty | Replace with fresh jurors |
 | Randomness never arrives | Anyone can cancel after 1 day; the holder can refile | VRF subscription monitoring |
 | Evidence leaks to other members | Backend serves it only to the uploader and, during voting, that claim's jurors | Encrypt to juror keys |
 | Evidence disk or backup is copied | AES-256-GCM encryption at rest | Key management service, key rotation |
 | Device ID guessed from its hash | None: `keccak256(IMEI)` can be brute-forced for known IMEI ranges | Salt the device hash per policy |
-| Jurors collude or don't care | None: there is no juror reward or stake in the MVP, so the protocol makes no anti-collusion claim | Juror stake, coherence rewards |
+| Jurors don't care | Fee for agreeing with the outcome, penalty for not revealing | Tune fee and penalty from real participation data |
+| Jurors collude | Random selection from staked members and sealed votes make coordination hard; the median limits what a minority can move | Larger juries, appeals |
 
 ## 9. Testing and CI
 

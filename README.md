@@ -105,6 +105,13 @@ voting ends the claim gets the jury's offer: the middle (median) of the revealed
 sees each juror's amount and note, then accepts the offer or withdraws the claim. There is no
 counteroffer. If they do neither within 2 days, the offer is accepted for them and paid.
 
+**Jury duty is opt-in and staked.** On the Jury Queue page a member locks 20 mUSDC in the pool to be
+picked for juries; the stake is locked while they sit on a jury and can be withdrawn otherwise. When a
+jury closes, jurors whose amount agrees with the outcome share a fee of 2% of the claim (at least
+2 mUSDC) from the pool. Agreeing means within 10% of the requested amount from the median, or voting 0
+on a rejected claim; no fee is paid without quorum. A juror who never reveals loses 5 mUSDC of their
+stake, which goes to the agreeing jurors. Voting against the majority costs nothing.
+
 An active policy past its waiting period is required, and a policy may have only one open claim.
 Evidence may remain stored if the user rejects or the chain rejects the transaction after upload;
 retrying the same bundle is safe because evidence is content-addressed and produces the same hash.
@@ -163,8 +170,8 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 |---|---|
 | `GET /api/health` | Chain id, block number, keeper status |
 | `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
-| `GET /api/pool` | Balance, per-claim cap, totals, policy and claim counts |
-| `GET /api/members/:address` | Wallet balance, contributions, policy, claim-eligible date, open claim |
+| `GET /api/pool` | Reserve balance (excluding jurors' stakes), per-claim cap, totals including stakes, juror fees and penalties, policy and claim counts |
+| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), policy, claim-eligible date, open claim |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
 | `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?) |
 | `POST /api/claims/:id/notes` 🔒 | A juror's note `{ note }` (up to 500 characters), sent before sealing the vote; returns the `noteHash` to seal. Jurors of the claim only, while voting and before they commit |
@@ -211,12 +218,12 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 |---|---|---|
 | `MockStablecoin` | Demo ERC-20 standing in for USDC (6 decimals) | n/a |
 | `PolicyRegistry` | Sells policies, one per wallet and per device; tracks Active/Lapsed; lists eligible jurors | No |
-| `Pool` | Holds all funds; takes premiums and contributions; pays approved claims up to `maxPayoutBps` of its balance | **Yes** |
+| `Pool` | Holds all funds; takes premiums and contributions; holds jurors' stakes apart from the reserve; pays approved claims up to `maxPayoutBps` of the reserve, and jurors' fees | **Yes** |
 | `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Offered/Rejected → Approved (or Withdrawn) → Paid | No |
-| `JuryModule` | Requests randomness, picks 5 jurors (claimant excluded), runs commit-reveal amount voting, takes the median | No |
+| `JuryModule` | Requests randomness, picks 5 staked jurors (claimant excluded), runs commit-reveal amount voting, takes the median, pays agreeing jurors and penalizes no-shows | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
 
 **Voting is commit-reveal, on amounts.** Each juror votes the amount they think the claim should pay,
 from 0 (reject) up to the amount asked. A juror first calls `commitVote(claimId, commitment)` with

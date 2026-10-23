@@ -9,7 +9,10 @@ import {IPool} from "./interfaces/IPool.sol";
 
 /// @title Pool
 /// @notice The only contract in the protocol that holds funds. Accepts contributions and premiums,
-///         and pays out approved claims on instruction from the ClaimManager.
+///         and pays out approved claims on instruction from the ClaimManager. It also holds jurors'
+///         stakes: members lock a stake to be picked for juries, and the JuryModule pays fees from the
+///         reserve and moves no-show penalties out of stakes. Stakes are not part of the reserve:
+///         `balance()` and the per-claim cap leave them out.
 contract Pool is IPool, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -21,15 +24,30 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
 
     address public registry;
     address public override claimManager;
+    address public jury;
 
     mapping(address => uint256) public contributionsOf;
     uint256 public totalContributed;
     uint256 public totalPaidOut;
 
+    /// @notice Each juror's locked stake.
+    mapping(address => uint256) public override stakeOf;
+    /// @notice How many juries a juror currently sits on; a stake cannot be withdrawn while above 0.
+    mapping(address => uint256) public activeJuriesOf;
+    uint256 public totalStaked;
+    /// @notice Fees paid to jurors from the reserve, and penalties taken from stakes into it.
+    uint256 public totalJurorFees;
+    uint256 public totalPenalties;
+
     event RegistrySet(address indexed registry);
     event ClaimManagerSet(address indexed claimManager);
     event Contributed(address indexed from, uint256 amount);
     event PaidOut(address indexed to, uint256 amount);
+    event JurySet(address indexed jury);
+    event Staked(address indexed juror, uint256 amount);
+    event Unstaked(address indexed juror, uint256 amount);
+    event JurorFeePaid(address indexed juror, uint256 amount);
+    event StakePenalized(address indexed juror, uint256 amount);
 
     error ZeroAddress();
     error AlreadySet();
@@ -38,9 +56,17 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     error NotClaimManager();
     error InvalidBps();
     error InsufficientPoolBalance(uint256 amount, uint256 balance);
+    error NotJury();
+    error StakeLocked(uint256 activeJuries);
+    error InsufficientStake(uint256 amount, uint256 staked);
 
     modifier onlyRegistry() {
         if (msg.sender != registry) revert NotRegistry();
+        _;
+    }
+
+    modifier onlyJury() {
+        if (msg.sender != jury) revert NotJury();
         _;
     }
 
@@ -74,6 +100,13 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
         emit ClaimManagerSet(claimManager_);
     }
 
+    function setJury(address jury_) external onlyOwner {
+        if (jury_ == address(0)) revert ZeroAddress();
+        if (jury != address(0)) revert AlreadySet();
+        jury = jury_;
+        emit JurySet(jury_);
+    }
+
     // ---------------------------------------------------------------------
     // Money in
     // ---------------------------------------------------------------------
@@ -98,6 +131,63 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     }
 
     // ---------------------------------------------------------------------
+    // Juror stakes
+    // ---------------------------------------------------------------------
+
+    /// @notice Lock `amount` more as a juror stake. Caller must approve this contract first. A member
+    ///         is picked for juries only while their stake is at least JuryModule.minStake.
+    function stake(uint256 amount) external nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        stakeOf[msg.sender] += amount;
+        totalStaked += amount;
+        emit Staked(msg.sender, amount);
+        token.safeTransferFrom(msg.sender, address(this), amount);
+    }
+
+    /// @notice Take back `amount` of the caller's stake. Not while they sit on a jury.
+    function unstake(uint256 amount) external nonReentrant {
+        if (amount == 0) revert ZeroAmount();
+        uint256 active = activeJuriesOf[msg.sender];
+        if (active != 0) revert StakeLocked(active);
+        uint256 staked = stakeOf[msg.sender];
+        if (amount > staked) revert InsufficientStake(amount, staked);
+        stakeOf[msg.sender] = staked - amount;
+        totalStaked -= amount;
+        emit Unstaked(msg.sender, amount);
+        token.safeTransfer(msg.sender, amount);
+    }
+
+    /// @notice Called by the JuryModule when a juror is seated, and again when their jury closes.
+    function lockStake(address juror) external onlyJury {
+        activeJuriesOf[juror]++;
+    }
+
+    function unlockStake(address juror) external onlyJury {
+        activeJuriesOf[juror]--;
+    }
+
+    /// @notice Moves up to `amount` of a juror's stake into the reserve; returns how much was taken.
+    function penalize(address juror, uint256 amount) external onlyJury returns (uint256 taken) {
+        uint256 staked = stakeOf[juror];
+        taken = amount < staked ? amount : staked;
+        if (taken == 0) return 0;
+        stakeOf[juror] = staked - taken;
+        totalStaked -= taken;
+        totalPenalties += taken;
+        emit StakePenalized(juror, taken);
+    }
+
+    /// @notice Pays a juror's fee from the reserve. Pays what the reserve holds if it holds less.
+    function payJurorFee(address juror, uint256 amount) external onlyJury nonReentrant returns (uint256 paid) {
+        uint256 available = balance();
+        paid = amount < available ? amount : available;
+        if (paid == 0) return 0;
+        totalJurorFees += paid;
+        emit JurorFeePaid(juror, paid);
+        token.safeTransfer(juror, paid);
+    }
+
+    // ---------------------------------------------------------------------
     // Money out
     // ---------------------------------------------------------------------
 
@@ -117,8 +207,9 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     // Views
     // ---------------------------------------------------------------------
 
+    /// @notice The reserve that pays claims: everything held except jurors' stakes.
     function balance() public view returns (uint256) {
-        return token.balanceOf(address(this));
+        return token.balanceOf(address(this)) - totalStaked;
     }
 
     /// @notice Current per-claim payout cap: `maxPayoutBps` of the pool balance.

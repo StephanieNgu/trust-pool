@@ -158,7 +158,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
     <div className="vote-panel-heading"><span className="eyebrow">YOUR JURY VOTE</span>{deadlineCopy && <span>{deadlineCopy}</span>}</div>
     {!juror.committed ? <>
       <h3>How much should this claim pay?</h3>
-      <p>The claimant asked for {requested} {tokenSymbol}. Pay it all, part of it, or 0 to reject. The claim gets the middle amount of the jury's votes.</p>
+      <p>The claimant asked for {requested} {tokenSymbol}. Pay it all, part of it, or 0 to reject. The claim gets the middle amount of the jury's votes. Jurors within {formatUnits((maxAmount * 10n) / 100n, tokenDecimals)} {tokenSymbol} of it share a {formatUnits(claim.jury?.fee ?? "0", tokenDecimals)} {tokenSymbol} fee; not revealing costs part of your stake.</p>
       <div className="vote-choices">
         <button type="button" className={units === maxAmount ? "selected approve" : ""} disabled={disabled} onClick={() => setAmount(requested)}>Pay in full</button>
         <button type="button" className={units === 0n ? "selected reject" : ""} disabled={disabled} onClick={() => setAmount("0")}>Reject (0)</button>

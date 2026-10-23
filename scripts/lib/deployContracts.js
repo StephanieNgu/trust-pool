@@ -14,6 +14,12 @@ const DEFAULT_PARAMS = {
   commitPeriod: 2 * DAY, // jurors submit sealed votes
   revealPeriod: 1 * DAY, // then open them; 3 days of voting in total
   randomnessTimeout: 1 * DAY, // a claim whose jury randomness is this late can be cancelled
+  // Juror incentives: members lock a stake to be picked; agreeing jurors share a fee; no-shows pay.
+  minJurorStake: USDC(20),
+  jurorFeeBps: 200, // 2% of the amount requested...
+  minJurorFee: USDC(2), // ...but at least 2 mUSDC per claim
+  agreementBandBps: 1_000, // within 10% of the request from the median counts as agreeing
+  noShowPenalty: USDC(5), // taken from the stake of a juror who never reveals
   responsePeriod: 2 * DAY, // the claimant accepts or withdraws the jury's offer; silence accepts
 };
 
@@ -39,11 +45,19 @@ async function deployContracts(overrides = {}) {
   const jury = await ethers.deployContract("JuryModule", [
     await registry.getAddress(),
     await randomness.getAddress(),
+    await pool.getAddress(),
     params.jurySize,
     params.quorum,
     params.commitPeriod,
     params.revealPeriod,
     params.randomnessTimeout,
+    {
+      minStake: params.minJurorStake,
+      feeBps: params.jurorFeeBps,
+      minFee: params.minJurorFee,
+      agreementBandBps: params.agreementBandBps,
+      noShowPenalty: params.noShowPenalty,
+    },
   ]);
   const claimManager = await ethers.deployContract("ClaimManager", [
     await registry.getAddress(),
@@ -55,6 +69,7 @@ async function deployContracts(overrides = {}) {
   await (await pool.setRegistry(await registry.getAddress())).wait();
   await (await pool.setClaimManager(await claimManager.getAddress())).wait();
   await (await jury.setClaimManager(await claimManager.getAddress())).wait();
+  await (await pool.setJury(await jury.getAddress())).wait();
 
   return { deployer, params, token, pool, registry, randomness, jury, claimManager };
 }

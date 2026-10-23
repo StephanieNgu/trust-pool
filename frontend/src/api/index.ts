@@ -56,6 +56,7 @@ export type {
   EvidenceFileInfo,
   EvidenceSummary,
   JuryVote,
+  MemberJuror,
   MemberPolicy,
   MemberView,
   PoolView,

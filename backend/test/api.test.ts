@@ -31,12 +31,16 @@ describe("API", () => {
     assert.equal(pool.maxPayoutBps, 2_000);
     assert.equal(pool.policyCount, 7);
     assert.equal(pool.claimCount, 0);
+    // Seven jurors' stakes of 40 are held by the pool but are not part of the reserve above.
+    assert.equal(pool.totalStaked, USDC(280).toString());
+    assert.equal(pool.totalJurorFees, "0");
   });
 
   it("describes a member and their policy", async () => {
     const member = (await t.api(`/api/members/${t.claimant.address}`)).body;
-    assert.equal(member.balance, USDC(950).toString());
+    assert.equal(member.balance, USDC(910).toString(), "1,000 less the 50 premium and the 40 stake");
     assert.equal(member.contributed, USDC(50).toString());
+    assert.deepEqual(member.juror, { stake: USDC(40).toString(), minStake: USDC(20).toString(), activeJuries: 0, staked: true });
     assert.equal(member.policy.status, "Active");
     assert.equal(member.policy.coverageLimit, USDC(1_000).toString());
     assert.equal(member.policy.pastWaitingPeriod, true);
@@ -44,6 +48,7 @@ describe("API", () => {
 
     const stranger = (await t.api(`/api/members/${t.signers[15].address}`)).body;
     assert.equal(stranger.policy, null);
+    assert.equal(stranger.juror.staked, false);
   });
 
   it("stores evidence and serves it back byte for byte", async () => {

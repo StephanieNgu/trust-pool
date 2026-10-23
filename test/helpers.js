@@ -16,9 +16,14 @@ async function deployFixture() {
   return { ...ctx, signers };
 }
 
+/** Locks the minimum juror stake for `signer`, who must already have approved the pool. */
+async function stakeAsJuror(ctx, signer) {
+  return ctx.pool.connect(signer).stake(ctx.params.minJurorStake);
+}
+
 /**
- * Deployment with `HOLDER_COUNT` policyholders (signers[1..]) who are past the waiting period,
- * plus seed liquidity from the deployer so the per-claim cap is comfortably above one claim.
+ * Deployment with `HOLDER_COUNT` policyholders (signers[1..]) who are past the waiting period and
+ * staked as jurors, plus seed liquidity from the deployer so the per-claim cap is comfortably above one claim.
  */
 const HOLDER_COUNT = 7;
 async function activePoolFixture() {
@@ -34,6 +39,7 @@ async function activePoolFixture() {
     await token.mint(h.address, USDC(1_000));
     await token.connect(h).approve(await pool.getAddress(), ethers.MaxUint256);
     await registry.connect(h).buyPolicy(deviceHash(i), COVERAGE, enrollmentHash(i));
+    await stakeAsJuror(ctx, h);
   }
   await time.increase(ctx.params.waitingPeriod);
 
@@ -126,6 +132,7 @@ module.exports = {
   enrollmentHash,
   deployFixture,
   activePoolFixture,
+  stakeAsJuror,
   selectJury,
   submitClaim,
   saltFor,
