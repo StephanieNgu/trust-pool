@@ -6,6 +6,7 @@ export {
   getPool,
   getProtocolConfig,
   type DashboardOverview,
+  type PremiumOverview,
 } from "./dashboard";
 export {
   authenticateWallet,
