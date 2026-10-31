@@ -14,7 +14,7 @@ import {
   MAX_FILES,
 } from "./evidence";
 import type { Keeper } from "./keeper";
-import { getClaimView, getMemberView, getPoolView, listClaims } from "./protocol";
+import { getClaimView, getMemberView, getPoolView, listClaims, type ClaimView } from "./protocol";
 
 export interface AppDeps {
   deployment: Deployment;
@@ -97,18 +97,22 @@ export function createApp(deps: AppDeps) {
    * its uploaders filed with it, only while that claim is being voted on. That covers both the claim's
    * own photos and the enrollment photos of the policy it was filed on, which jurors compare against.
    * A claim filed by someone else who copied the hash from the chain grants nothing, so the hash being
-   * public does not make the files public. Other members, past jurors and anonymous callers get a 403.
+   * public does not make the files public. A claim's receipt is also open to that claim's jurors, in
+   * any state, so they can see what the payout went to. Other members, past jurors and anonymous
+   * callers get a 403.
    */
   async function requireEvidenceAccess(req: Request, evidenceHash: string): Promise<void> {
     const reader = wallet(req).toLowerCase();
     if (!(await evidence.has(evidenceHash))) throw new HttpError(404, "Evidence not found.");
     const uploaders = await evidence.getUploaders(evidenceHash);
     if (uploaders.includes(reader)) return;
-    const claims = await listClaims(contracts, { juror: reader, state: "Voting" });
+    const claims = await listClaims(contracts, { juror: reader });
     const isJuror = claims.some(
       (c) =>
-        (c.evidenceHash.toLowerCase() === evidenceHash || c.enrollmentHash?.toLowerCase() === evidenceHash) &&
-        uploaders.includes(c.claimant.toLowerCase()),
+        uploaders.includes(c.claimant.toLowerCase()) &&
+        (c.receipt.hash?.toLowerCase() === evidenceHash ||
+          (c.state === "Voting" &&
+            (c.evidenceHash.toLowerCase() === evidenceHash || c.enrollmentHash?.toLowerCase() === evidenceHash))),
     );
     if (!isJuror) {
       throw new HttpError(
@@ -175,10 +179,23 @@ export function createApp(deps: AppDeps) {
     return { enrollmentMatchesPolicy, claimMatchesEnrollment: sameDevice(claimed, enrolled) };
   }
 
+  /**
+   * What can be said about a submitted receipt without showing it: whether the total the claimant
+   * entered in the bundle is the one submitted on-chain, and whether the invoice is dated on or after
+   * the day the claim was filed. null fields when there is no receipt or it is not stored here.
+   */
+  async function checkReceipt(claim: ClaimView) {
+    const details = claim.receipt.hash ? (await evidence.getSummary(claim.receipt.hash))?.receipt ?? null : null;
+    if (!details || details.claimId !== claim.id) return { totalMatches: null, datedAfterClaim: null };
+    const filedOn = new Date(claim.submittedAt * 1000).toISOString().slice(0, 10);
+    return { totalMatches: details.total === claim.receipt.amount, datedAfterClaim: details.date >= filedOn };
+  }
+
   app.get("/api/claims/:id", async (req, res) => {
     const claim = await getClaimView(contracts, parseClaimId(req.params.id));
     if (!claim) throw new HttpError(404, "Claim not found.");
     const available = await evidence.has(claim.evidenceHash);
+    const receiptAvailable = claim.receipt.hash !== null && (await evidence.has(claim.receipt.hash));
     const enrollmentAvailable = claim.enrollmentHash !== null && (await evidence.has(claim.enrollmentHash));
     res.json({
       ...claim,
@@ -188,6 +205,8 @@ export function createApp(deps: AppDeps) {
         url: enrollmentAvailable ? `/api/evidence/${claim.enrollmentHash}` : null,
       },
       deviceCheck: await checkDevice(claim.claimant, claim.evidenceHash, enrollmentAvailable ? claim.enrollmentHash : null),
+      receiptFile: { available: receiptAvailable, url: receiptAvailable ? `/api/evidence/${claim.receipt.hash}` : null },
+      receiptCheck: await checkReceipt(claim),
     });
   });
 
@@ -261,12 +280,27 @@ export function createApp(deps: AppDeps) {
    * Upload a bundle. `kind: "enrollment"` (device details and signup photos) is open to any signed-in
    * wallet, since it comes before buying a policy; its hash is passed to PolicyRegistry.buyPolicy.
    * `kind: "claim"` (the default) needs an active policy; its hash is passed to submitClaim.
+   * `kind: "receipt"` is the claimant's invoice for an accepted claim still waiting on one; its hash
+   * and total are passed to submitReceipt. A receipt is a document, so it needs no capture code.
    */
   app.post("/api/evidence", async (req, res) => {
     const uploader = wallet(req);
-    const kind = (req.body as { kind?: unknown } | undefined)?.kind ?? "claim";
+    const body = req.body as { kind?: unknown; receipt?: { claimId?: unknown } } | undefined;
+    const kind = body?.kind ?? "claim";
     if (kind === "claim" && !(await contracts.registry.isActive(uploader))) {
       throw new HttpError(403, "Only wallets with an active policy can upload claim evidence.");
+    }
+    if (kind === "receipt") {
+      encodeBundle(req.body);
+      const claim = await getClaimView(contracts, parseClaimId(body?.receipt?.claimId));
+      if (!claim || claim.claimant.toLowerCase() !== uploader.toLowerCase()) {
+        throw new HttpError(403, "Only the claimant can upload a receipt for their claim.");
+      }
+      if (claim.state !== "Approved" || claim.receipt.hash) {
+        throw new HttpError(409, "This claim is not waiting on a receipt.");
+      }
+      res.status(201).json(await evidence.put(req.body, uploader));
+      return;
     }
     // Validate before using up the capture code, so a mistake in the form does not cost a retake.
     encodeBundle(req.body);

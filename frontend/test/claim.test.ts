@@ -20,6 +20,7 @@ import {
   requestCaptureCode,
   submitJuryNote,
   uploadEvidence,
+  uploadReceipt,
   validateEvidenceFiles,
 } from "../src/api";
 import {
@@ -28,6 +29,7 @@ import {
   executeClaimPayout,
   finalizeClaim,
   submitClaim,
+  submitReceipt,
   withdrawClaim,
 } from "../src/contracts/claims";
 import { claimBond } from "../src/claims/bond";
@@ -261,7 +263,7 @@ describe("frontend claim workflow", () => {
     assert.equal(claim.state, "Voting", "the keeper is not auto-resolving");
   });
 
-  it("finalizes to the median offer, which the claimant reads, accepts and is paid", async () => {
+  it("finalizes to the median offer, which the claimant reads, accepts and is paid against a receipt", async () => {
     const before = await getDashboardOverview(claimant);
 
     const finalizeProgress = progressLog();
@@ -290,17 +292,38 @@ describe("frontend claim workflow", () => {
     const progress = progressLog();
     await acceptOffer(claimant, "1", progress.report);
     assert.equal(progress.messages[0], "Confirm accepting the jury's offer in your wallet.");
-    assert.equal((await getClaim("1")).state, "Approved");
+    claim = await getClaim("1");
+    assert.equal(claim.state, "Approved");
+    assert.ok(claim.receipt.deadline);
+    await assert.rejects(executeClaimPayout(claimant, "1", () => {}), "nothing is paid without a receipt");
+
+    // The repair cost 170. The claimant uploads the invoice and records it on-chain.
+    const invoice = pickedFile("invoice.pdf", "application/pdf", "%PDF screen replacement 170.00");
+    // Dated the day the claim was filed, by chain time (the tests fast-forward the chain).
+    const details = { shop: "Fix-It Phones", total: USDC(170), date: new Date(claim.submittedAt * 1000).toISOString().slice(0, 10) };
+    await assert.rejects(uploadReceipt(claimant, "1", { ...details, shop: " " }, [invoice]), /shop/);
+    await assert.rejects(uploadReceipt(jurors[0], "1", details, [invoice]), (e: unknown) => e instanceof ApiError && e.status === 403);
+    const receipt = await uploadReceipt(claimant, "1", details, [invoice]);
+    assert.equal(receipt.kind, "receipt");
+    const receiptProgress = progressLog();
+    await submitReceipt(claimant, "1", receipt.evidenceHash, USDC(170), receiptProgress.report);
+    assert.equal(receiptProgress.messages[0], "Confirm the receipt in your wallet.");
+    claim = await getClaim("1");
+    assert.deepEqual(claim.receipt, { deadline: claim.receipt.deadline, hash: receipt.evidenceHash, amount: USDC(170).toString() });
+    assert.equal(claim.payoutAmount, USDC(170).toString());
+    assert.deepEqual(claim.receiptCheck, { totalMatches: true, datedAfterClaim: true });
+    // The jurors can open the receipt to see what the payout went to.
+    assert.equal((await getEvidence(jurors[0], receipt.evidenceHash)).receipt?.shop, "Fix-It Phones");
 
     await executeClaimPayout(claimant, "1", () => {});
     claim = await getClaim("1");
     assert.equal(claim.state, "Paid");
-    assert.equal(claim.paidAmount, USDC(200).toString());
+    assert.equal(claim.paidAmount, USDC(170).toString());
     await assert.rejects(executeClaimPayout(claimant, "1", () => {}), "a claim is paid once");
 
     const after = await getDashboardOverview(claimant);
-    assert.equal(Number(after.balance) - Number(before.balance), 200 + 10, "the payout and the bond's remainder");
-    assert.equal(Number(after.totalPaidOut) - Number(before.totalPaidOut), 200);
+    assert.equal(Number(after.balance) - Number(before.balance), 170 + 10, "the payout and the bond's remainder");
+    assert.equal(Number(after.totalPaidOut) - Number(before.totalPaidOut), 170);
     assert.equal(after.openClaimId, null);
     assert.deepEqual(
       (await getClaimsForMember(claimant, "Paid")).map((c) => c.id),

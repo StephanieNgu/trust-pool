@@ -5,6 +5,7 @@ import { readChainTimestamp } from "../contracts/jury";
 import { cancelStalledClaim, executeClaimPayout, finalizeClaim } from "../contracts/claims";
 import { JuryVotePanel } from "./JuryVotePanel";
 import { JuryReasoning, OfferPanel } from "./OfferPanel";
+import { ReceiptPanel } from "./ReceiptPanel";
 import { EvidenceViewer } from "./EvidenceViewer";
 import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
 
@@ -29,6 +30,17 @@ function outcomeCopy(reason: ClaimJury["outcomeReason"]) {
   if (reason === "noQuorum") return "Rejected: quorum not met";
   if (reason === "tie") return "Rejected: tied vote";
   return "Pending";
+}
+
+/** The automatic checks on a submitted receipt. */
+function ReceiptCheck({ check }: { check: ClaimDetailView["receiptCheck"] }) {
+  const badge = (value: boolean | null, yes: string, no: string) =>
+    value === null ? null : <span className={value ? "match" : "mismatch"}>{value ? `✓ ${yes}` : `⚠ ${no}`}</span>;
+  if (check.totalMatches === null && check.datedAfterClaim === null) return null;
+  return <div className="imei-checks" aria-label="Automatic receipt checks">
+    {badge(check.totalMatches, "Receipt total matches the amount submitted", "Receipt total differs from the amount submitted")}
+    {badge(check.datedAfterClaim, "Dated on or after the claim", "Dated before the claim was filed")}
+  </div>;
 }
 
 function DeviceCheck({ check }: { check: ClaimDetailView["deviceCheck"] }) {
@@ -123,15 +135,22 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
       <div><dt>Policy</dt><dd>#{claim.policyId}</dd></div>
       <div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div>
       <div><dt>Coverage limit</dt><dd>{formatUnits(claim.coverageLimit, tokenDecimals)} {tokenSymbol}</dd></div>
-      <div><dt>{claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatUnits(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
+      <div><dt>{claim.state === "Paid" ? "Paid out" : claim.receipt.amount ? "Payout (offer or receipt, if less)" : claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatUnits(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
       <div><dt>Claim bond</dt><dd>{bondText(claim, tokenDecimals, tokenSymbol)}</dd></div>
       {claim.offerDeadline && <div><dt>Claimant responds by</dt><dd>{dateTime(claim.offerDeadline)}</dd></div>}
+      {claim.state === "Approved" && !claim.receipt.hash && <div><dt>Receipt due by</dt><dd>{dateTime(claim.receipt.deadline)}</dd></div>}
+      {claim.receipt.amount && <div><dt>Receipt total</dt><dd>{formatUnits(claim.receipt.amount, tokenDecimals)} {tokenSymbol}</dd></div>}
       <div className="detail-wide"><dt>Evidence hash</dt><dd title={claim.evidenceHash}>{claim.evidenceHash}</dd></div>
       <div><dt>Evidence stored</dt><dd>{claim.evidence.available ? "Available to authorized wallets" : "Not found in backend"}</dd></div>
       <div><dt>Your role</dt><dd>{claim.claimant.toLowerCase() === account.toLowerCase() ? "Claimant" : currentJuror ? "Selected juror" : "Observer"}</dd></div>
     </dl>
 
     <OfferPanel claim={claim} account={account} chainTimestamp={chainTimestamp} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />
+    <ReceiptPanel claim={claim} account={account} chainTimestamp={chainTimestamp} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />
+    {claim.receipt.hash && <>
+      <ReceiptCheck check={claim.receiptCheck} />
+      <EvidenceViewer account={account} claim={claim} source="receipt" tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />
+    </>}
 
     <div className="detail-section-heading"><div><span className="eyebrow">SAME DEVICE?</span><h3>Signup photos and claim photos</h3></div></div>
     <p className="muted">Check that the claim photos show the device registered at signup (same model, colour and marks), that the damage is real, and that the first claim photo shows its capture code.</p>

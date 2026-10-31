@@ -36,6 +36,8 @@ export {
   submitJuryNote,
   requestCaptureCode,
   uploadEvidence,
+  uploadReceipt,
+  MAX_SHOP_LENGTH,
   validateDeviceDetails,
   validateEvidenceFiles,
 } from "./claims";
@@ -61,4 +63,5 @@ export type {
   MemberPolicy,
   MemberView,
   PoolView,
+  ReceiptDetails,
 } from "./types";

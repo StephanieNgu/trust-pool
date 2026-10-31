@@ -24,6 +24,7 @@ const DEFAULT_PARAMS = {
   // Claimant bond: posted when filing, returned minus the share of the ask the jury cut.
   claimBondBps: 500, // 5% of the amount asked...
   minClaimBond: USDC(5), // ...but at least 5 mUSDC
+  receiptPeriod: 30 * DAY, // after accepting, the claimant uploads the repair or replacement receipt
 };
 
 /**
@@ -69,6 +70,7 @@ async function deployContracts(overrides = {}) {
     params.responsePeriod,
     params.claimBondBps,
     params.minClaimBond,
+    params.receiptPeriod,
   ]);
 
   await (await pool.setRegistry(await registry.getAddress())).wait();

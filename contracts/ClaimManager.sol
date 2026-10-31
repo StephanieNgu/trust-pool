@@ -12,7 +12,8 @@ import {IPool} from "./interfaces/IPool.sol";
 /// @notice Owns the claim state machine:
 ///         Submitted -> JuryPending -> Voting -> Offered -> Approved -> Paid, or Voting -> Rejected,
 ///         or Offered -> Withdrawn when the claimant turns the jury's offer down,
-///         or JuryPending -> Cancelled when randomness never arrives.
+///         or JuryPending -> Cancelled when randomness never arrives,
+///         or Approved -> Expired when no receipt arrives in time.
 /// @dev The jury votes an amount rather than yes/no. Its offer (the median juror amount, capped) is
 ///      shown to the claimant with each juror's reasoning; the claimant accepts or withdraws within
 ///      `responsePeriod`. Saying nothing counts as accepting, so a claim never waits on the claimant.
@@ -21,6 +22,9 @@ import {IPool} from "./interfaces/IPool.sol";
 ///      a claim paid in full loses nothing, one cut to half loses half the bond, and a rejected claim
 ///      loses all of it. The forfeited part joins the reserve. A jury without quorum or a stalled
 ///      claim refunds the bond in full, since nobody judged the claim.
+/// @dev Payout is reimbursement: once the offer is accepted the claimant has `receiptPeriod` to submit
+///      the receipt for the repair or replacement (its hash and total). The claim then pays the smaller
+///      of the offer and the receipt, so money goes to what was actually spent.
 /// @dev Holds no funds. Payouts are executed by the Pool on this contract's instruction.
 contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     enum State {
@@ -33,7 +37,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         Paid,
         Cancelled,
         Offered,
-        Withdrawn
+        Withdrawn,
+        Expired
     }
 
     struct Claim {
@@ -53,6 +58,11 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         /// @dev Posted when the claim is filed and settled when the jury decides (or the claim is cancelled).
         uint256 bond;
         uint256 bondForfeited;
+        /// @dev Set when the offer is accepted: the receipt must arrive by then or the claim expires.
+        uint256 receiptDeadline;
+        /// @dev Content hash of the receipt bundle stored off-chain, and the total it shows.
+        bytes32 receiptHash;
+        uint256 receiptAmount;
     }
 
     IPolicyRegistry public immutable registry;
@@ -63,6 +73,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     /// @notice The claimant's bond: `bondBps` of the amount asked, but at least `minBond`.
     uint256 public immutable bondBps;
     uint256 public immutable minBond;
+    /// @notice How long after accepting an offer the claimant has to submit the repair or replacement receipt.
+    uint256 public immutable receiptPeriod;
 
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
@@ -82,6 +94,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     event ClaimPaid(uint256 indexed claimId, address indexed claimant, uint256 amount);
     event OfferMade(uint256 indexed claimId, uint256 amount, uint256 deadline);
     event BondSettled(uint256 indexed claimId, uint256 returned, uint256 forfeited);
+    event ReceiptSubmitted(uint256 indexed claimId, bytes32 receiptHash, uint256 amount, uint256 payout);
 
     error ZeroAddress();
     error NoActivePolicy();
@@ -97,6 +110,10 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     error ResponseWindowOpen(uint256 deadline);
     error ResponseWindowClosed(uint256 deadline);
     error InvalidConfig();
+    error ReceiptRequired();
+    error ReceiptAlreadySubmitted();
+    error ReceiptWindowOpen(uint256 deadline);
+    error ReceiptWindowClosed(uint256 deadline);
 
     constructor(
         IPolicyRegistry registry_,
@@ -104,18 +121,20 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         IJuryModule jury_,
         uint256 responsePeriod_,
         uint256 bondBps_,
-        uint256 minBond_
+        uint256 minBond_,
+        uint256 receiptPeriod_
     ) Ownable(msg.sender) {
         if (address(registry_) == address(0) || address(pool_) == address(0) || address(jury_) == address(0)) {
             revert ZeroAddress();
         }
-        if (responsePeriod_ == 0 || bondBps_ > BPS_DENOMINATOR) revert InvalidConfig();
+        if (responsePeriod_ == 0 || receiptPeriod_ == 0 || bondBps_ > BPS_DENOMINATOR) revert InvalidConfig();
         registry = registry_;
         pool = pool_;
         jury = jury_;
         responsePeriod = responsePeriod_;
         bondBps = bondBps_;
         minBond = minBond_;
+        receiptPeriod = receiptPeriod_;
     }
 
     // ---------------------------------------------------------------------
@@ -152,7 +171,10 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
             approvedAmount: 0,
             offerDeadline: 0,
             bond: bond,
-            bondForfeited: 0
+            bondForfeited: 0,
+            receiptDeadline: 0,
+            receiptHash: bytes32(0),
+            receiptAmount: 0
         });
         openClaimOfPolicy[policy.id] = claimId;
         emit ClaimSubmitted(claimId, msg.sender, policy.id, amount, evidenceHash);
@@ -170,7 +192,36 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (msg.sender != claim.claimant && block.timestamp <= claim.offerDeadline) {
             revert ResponseWindowOpen(claim.offerDeadline);
         }
+        claim.receiptDeadline = block.timestamp + receiptPeriod;
         _setState(claimId, State.Approved);
+    }
+
+    /// @notice Submit the receipt for the repair or replacement. Only the claimant, once, before
+    ///         `receiptDeadline`. The claim will pay the smaller of the offer and `amount`.
+    /// @param receiptHash Content hash of the (encrypted) receipt bundle stored off-chain.
+    /// @param amount The receipt's total, in token units.
+    function submitReceipt(uint256 claimId, bytes32 receiptHash, uint256 amount) external nonReentrant {
+        _requireState(claimId, State.Approved);
+        Claim storage claim = _claims[claimId];
+        if (msg.sender != claim.claimant) revert NotClaimant();
+        if (claim.receiptHash != bytes32(0)) revert ReceiptAlreadySubmitted();
+        if (block.timestamp > claim.receiptDeadline) revert ReceiptWindowClosed(claim.receiptDeadline);
+        if (receiptHash == bytes32(0)) revert InvalidEvidence();
+        if (amount == 0) revert InvalidAmount();
+        claim.receiptHash = receiptHash;
+        claim.receiptAmount = amount;
+        emit ReceiptSubmitted(claimId, receiptHash, amount, payoutAmount(claimId));
+    }
+
+    /// @notice Close an accepted claim whose receipt never arrived. Anyone, after `receiptDeadline`.
+    ///         Nothing is paid and the policy is freed.
+    function expireClaim(uint256 claimId) external nonReentrant {
+        _requireState(claimId, State.Approved);
+        Claim storage claim = _claims[claimId];
+        if (claim.receiptHash != bytes32(0)) revert ReceiptAlreadySubmitted();
+        if (block.timestamp <= claim.receiptDeadline) revert ReceiptWindowOpen(claim.receiptDeadline);
+        _setState(claimId, State.Expired);
+        delete openClaimOfPolicy[claim.policyId];
     }
 
     /// @notice Turn the jury's offer down and close the claim with no payout. Only the claimant,
@@ -220,13 +271,15 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         _settleBond(claimId, jury.quorate(claimId) ? bondForfeit(claim.bond, claim.amount, award) : 0);
     }
 
-    /// @notice Pay an approved claim the amount fixed at approval. If the pool cannot cover it right
-    ///         now the Pool reverts and the claim stays Approved until it can (first come, first served).
+    /// @notice Pay an approved claim once its receipt is in: the smaller of the offer and the receipt.
+    ///         If the pool cannot cover it right now the Pool reverts and the claim stays Approved until
+    ///         it can (first come, first served).
     function executePayout(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.Approved);
         Claim storage claim = _claims[claimId];
+        if (claim.receiptHash == bytes32(0)) revert ReceiptRequired();
 
-        uint256 amount = claim.approvedAmount;
+        uint256 amount = payoutAmount(claimId);
         if (amount == 0) revert NothingToPay();
 
         // Effects before the external call (checks-effects-interactions).
@@ -269,13 +322,16 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         return _claims[claimId];
     }
 
-    /// @notice What the claim pays: the fixed amount once the jury has made its offer, otherwise the
-    ///         most a full approval would fix right now (min of claim amount, coverage limit, pool cap).
+    /// @notice What the claim pays: the fixed amount once the jury has made its offer (lowered to the
+    ///         receipt's total once one is in), otherwise the most a full approval would fix right now
+    ///         (min of claim amount, coverage limit, pool cap).
     function payoutAmount(uint256 claimId) public view returns (uint256) {
         Claim storage claim = _claims[claimId];
         State state = claim.state;
-        if (state == State.Offered || state == State.Approved || state == State.Paid || state == State.Withdrawn) {
-            return claim.approvedAmount;
+        if (state == State.Paid) return claim.paidAmount;
+        if (state == State.Offered || state == State.Approved || state == State.Withdrawn || state == State.Expired) {
+            uint256 receipt = claim.receiptAmount;
+            return receipt != 0 && receipt < claim.approvedAmount ? receipt : claim.approvedAmount;
         }
         return _capped(claim, claim.amount);
     }
