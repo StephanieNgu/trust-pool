@@ -46,3 +46,14 @@
     --sidebar-width: 61px;
   }
 }
+
+/* Monthly premium status on the coverage card. */
+.premium-panel{margin:0 0 14px;padding:11px 13px;border-radius:9px;border:1px solid #dfe8f4;background:#f6f9fd;max-width:380px}
+.coverage-content .premium-panel>p{margin:0 0 8px;max-width:none;color:#4d5f78;line-height:1.6}
+.premium-panel.due{border-color:#cfe0fb;background:#edf4ff}
+.premium-panel.due>p{color:#2f5f9f!important}
+.premium-panel.warning{border-color:#f1dcc0;background:#fff7ec}
+.premium-panel.warning>p{color:#8b652f!important}
+.premium-panel .primary{padding:9px 13px;font-size:11px}
+.premium-panel .text-button{padding:0}
+.coverage-content .premium-panel .notice{margin:8px 0 0}

@@ -148,7 +148,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     /// @dev Pulls `bondFor(amount)` from the caller, who must approve the Pool first.
     function submitClaim(uint256 amount, bytes32 evidenceHash) external nonReentrant returns (uint256 claimId) {
         IPolicyRegistry.Policy memory policy = registry.getPolicy(msg.sender);
-        if (policy.status != IPolicyRegistry.Status.Active) revert NoActivePolicy();
+        // isActive also requires the premiums to be paid, or within their grace period.
+        if (!registry.isActive(msg.sender)) revert NoActivePolicy();
         if (!registry.isPastWaitingPeriod(msg.sender)) revert WaitingPeriodNotElapsed();
         if (amount == 0) revert InvalidAmount();
         if (amount > policy.coverageLimit) revert ExceedsCoverageLimit(amount, policy.coverageLimit);

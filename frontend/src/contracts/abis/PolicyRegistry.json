@@ -2,10 +2,16 @@
   "function premiumFor(uint256 coverageLimit) view returns (uint256)",
   "function buyPolicy(bytes32 deviceIdHash, uint256 coverageLimit, bytes32 enrollmentHash) returns (uint256 policyId)",
   "function cancelPolicy()",
+  "function payPremium() returns (uint256 paidUntil)",
   "function getPolicy(address holder) view returns (tuple(uint256 id, address holder, bytes32 deviceIdHash, uint256 coverageLimit, uint256 startTime, uint8 status, bytes32 enrollmentHash))",
   "function isActive(address holder) view returns (bool)",
   "function isPastWaitingPeriod(address holder) view returns (bool)",
   "function maxCoverageLimit() view returns (uint256)",
   "function waitingPeriod() view returns (uint256)",
+  "function premiumStatus(address holder) view returns (uint8 state, uint256 paidUntil, uint256 graceEndsAt, uint256 amount)",
+  "function premiumPeriod() view returns (uint256)",
+  "error PolicyOverdue()",
+  "error PaidTooFarAhead(uint256 paidThrough)",
+  "error NoActivePolicy()",
   "error OpenClaimExists(uint256 claimId)"
 ]

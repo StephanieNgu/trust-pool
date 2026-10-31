@@ -6,7 +6,9 @@ const USDC = (amount) => ethers.parseUnits(String(amount), 6);
 /** Prototype parameters. Override any of them by passing a partial object to deployContracts(). */
 const DEFAULT_PARAMS = {
   waitingPeriod: 7 * DAY,
-  premiumBps: 500, // 5% of coverage limit, paid upfront
+  premiumBps: 500, // 5% of coverage limit per premium period
+  premiumPeriod: 30 * DAY, // premiums are paid monthly; buying a policy pays the first month
+  gracePeriod: 7 * DAY, // a missed premium keeps coverage this long before the policy lapses
   maxCoverageLimit: USDC(2_000),
   maxPayoutBps: 2_000, // a single claim may take at most 20% of the pool
   jurySize: 5,
@@ -44,6 +46,8 @@ async function deployContracts(overrides = {}) {
     params.waitingPeriod,
     params.premiumBps,
     params.maxCoverageLimit,
+    params.premiumPeriod,
+    params.gracePeriod,
   ]);
   const randomness = await ethers.deployContract("MockRandomness");
   const jury = await ethers.deployContract("JuryModule", [
