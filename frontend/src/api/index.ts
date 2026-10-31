@@ -9,6 +9,17 @@ export {
   type PremiumOverview,
 } from "./dashboard";
 export {
+  getNotifications,
+  markNotificationsSeen,
+  readSeenNotifications,
+  timeLeft,
+  unreadCount,
+  type MemberNotification,
+  type NotificationFeed,
+  type NotificationKind,
+  type NotificationSeverity,
+} from "./notifications";
+export {
   authenticateWallet,
   clearWalletAuth,
   getWalletAuthHeaders,
