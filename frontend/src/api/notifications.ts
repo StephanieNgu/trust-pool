@@ -1,7 +1,7 @@
 import { getAddress } from "ethers";
 import { apiRequest } from "./client";
 
-export type NotificationKind = "jury" | "claim" | "policy";
+export type NotificationKind = "jury" | "claim" | "policy" | "premium";
 export type NotificationSeverity = "action" | "warning" | "success" | "info";
 
 /** One dashboard notification, built by the backend from chain state. See backend/src/notifications.ts. */

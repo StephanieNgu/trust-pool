@@ -85,6 +85,8 @@ needs to know, refreshed every 15 seconds:
   a missed commit or reveal, and the outcome with the fee earned or penalty taken.
 * **Your claims**: each status change (filed, jury reviewing, offer to accept or withdraw before it
   auto-accepts, approved, paid, rejected, withdrawn, cancelled), with how much of the bond came back.
+* **Monthly premiums**: a premium due within 7 days, a missed premium during the grace period (with the
+  grace deadline), coverage stopped once grace ends, and the policy closing.
 * **Your policy**: the waiting period and when claims open, and a juror stake below the minimum.
 
 `GET /api/members/:address/notifications` builds the list from chain state on each request

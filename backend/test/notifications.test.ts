@@ -97,4 +97,51 @@ describe("notifications", () => {
     assert.equal(paid?.id, "claim:1:Paid");
     assert.match(paid!.body, /300 mUSDC was sent to your wallet\. Your bond was returned in full\./);
   });
+
+  it("reminds a member before a premium is due, in grace, and once coverage stops", async () => {
+    const member = t.holders[3].address;
+    const premiumOf = async () => (await t.api(`/api/members/${member}/premium`)).body.premium;
+    const now = async () => (await ethers.provider.getBlock("latest"))!.timestamp;
+    const premiumNotes = async () => (await notes(member)).filter((n) => n.kind === "premium");
+    const policyId = (await t.registry.getPolicy(member)).id.toString();
+
+    let premium = await premiumOf();
+    // Earlier tests may have moved the clock; start from more than a week before the due date.
+    if (premium.status === "Paid" && premium.dueSoon) {
+      await (await t.registry.connect(t.holders[3]).payPremium()).wait();
+      premium = await premiumOf();
+    }
+    assert.equal(premium.status, "Paid");
+    assert.deepEqual(await premiumNotes(), []);
+
+    // Six days before it is due: pay it, with the due date as the deadline.
+    await increaseTime(premium.dueAt - (await now()) - 6 * 24 * 60 * 60);
+    let [due] = await premiumNotes();
+    assert.equal(due.id, `premium:${policyId}:${premium.paidThrough}:due`);
+    assert.equal(due.severity, "action");
+    assert.equal(due.deadline, premium.dueAt);
+    assert.match(due.body, /^Pay 50 mUSDC/);
+
+    // Missed: still covered, so pay before the grace period ends.
+    await increaseTime(7 * 24 * 60 * 60);
+    premium = await premiumOf();
+    assert.equal(premium.status, "Grace");
+    [due] = await premiumNotes();
+    assert.equal(due.id, `premium:${policyId}:${premium.paidThrough}:grace`);
+    assert.equal(due.severity, "action");
+    assert.equal(due.deadline, premium.graceEndsAt);
+    assert.ok((await ids(member)).includes(`policy:${policyId}:eligible`), "still covered in grace");
+
+    // Grace over: coverage has stopped, and the member is no longer told they can file claims.
+    await increaseTime(premium.graceEndsAt - (await now()) + 60);
+    [due] = await premiumNotes();
+    assert.equal(due.id, `premium:${policyId}:overdue`);
+    assert.equal(due.severity, "warning");
+    assert.ok(!(await ids(member)).includes(`policy:${policyId}:eligible`));
+
+    await (await t.registry.lapseOverdue(member)).wait();
+    [due] = await premiumNotes();
+    assert.equal(due.id, `premium:${policyId}:lapsed`);
+    assert.equal(due.severity, "info");
+  });
 });
