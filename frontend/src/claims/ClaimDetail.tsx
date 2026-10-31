@@ -112,6 +112,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
   if (!claim) return null;
 
   const jury = claim.jury;
+  const isClaimant = claim.claimant.toLowerCase() === account.toLowerCase();
   const currentJuror = jury?.jurors.find((juror) => juror.address.toLowerCase() === account.toLowerCase());
   const canFinalize = claim.state === "Voting" && Boolean(jury?.canTally);
   // The contract pays only against a receipt (ReceiptRequired otherwise), so offer the fallback once there is one.
@@ -162,8 +163,10 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
       <EvidenceViewer account={account} claim={claim} source="receipt" tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />
     </>}
 
-    <div className="detail-section-heading"><div><span className="eyebrow">SAME DEVICE?</span><h3>Signup photos and claim photos</h3></div></div>
-    <p className="muted">Check that the claim photos show the device registered at signup (same model, colour and marks), that the damage is real, and that the first claim photo shows its capture code.</p>
+    <div className="detail-section-heading"><div><span className="eyebrow">{isClaimant ? "YOUR EVIDENCE" : "SAME DEVICE?"}</span><h3>Signup photos and claim photos</h3></div></div>
+    <p className="muted">{isClaimant
+      ? "This is what your jurors see: the photos you took at signup next to the ones you sent with this claim, and the checks below."
+      : "Check that the claim photos show the device registered at signup (same model, colour and marks), that the damage is real, and that the first claim photo shows its capture code."}</p>
     <DeviceCheck check={claim.deviceCheck} />
     <div className="evidence-compare">
       <EvidenceViewer account={account} claim={claim} source="enrollment" onAuthenticated={onAuthenticated} />
@@ -172,7 +175,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
 
     <div className="detail-section-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h3>Jury</h3></div>{jury && <span>{jury.commits} committed · {jury.approvals + jury.rejections} revealed</span>}</div>
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>
-      <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Quorum</dt><dd>{jury.approvals + jury.rejections} / {jury.quorum} revealed</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} would pay · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
+      <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Revealed</dt><dd>{jury.approvals + jury.rejections} of {jury.jurors.length} (quorum {jury.quorum})</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} would pay · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
       {chainTimeError && <p className="notice warning">Could not synchronize blockchain time: {chainTimeError}</p>}
       <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? (juror.amount === "0" ? "Rejects" : `Pays ${formatAmount(juror.amount ?? "0", tokenDecimals)}`) : juror.committed ? "Sealed" : "Waiting"}{juror.reward && juror.reward !== "0" && <small className="juror-reward">+{formatAmount(juror.reward, tokenDecimals)} fee</small>}{juror.penalty && juror.penalty !== "0" && <small className="juror-penalty">−{formatAmount(juror.penalty, tokenDecimals)} no-show</small>}</span></div>)}</div>
       {enableJurorActions && <JuryVotePanel claim={claim} account={account} chainTimestamp={chainTimestamp} evidenceVerified={evidenceVerified} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />}

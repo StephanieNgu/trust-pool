@@ -96,10 +96,14 @@ export async function payPremiums(registry: Contract, holders: Signer[]) {
   }
 }
 
+// The suites were written against a 5% premium, which keeps their amounts round. The deploy
+// default is 1.5% (checked in test/unit/params.test.js); premium logic does not depend on the rate.
+const TEST_PARAMS = { premiumBps: 500 };
+
 /** Deploys the protocol with seven policyholders past the waiting period and a seeded pool. */
 export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
   await hre.run("compile", { quiet: true });
-  const ctx = await deployContracts();
+  const ctx = await deployContracts(TEST_PARAMS);
   const signers = await ethers.getSigners();
   const holders = signers.slice(1, 8);
   const poolAddr = await ctx.pool.getAddress();

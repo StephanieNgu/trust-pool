@@ -54,7 +54,8 @@ The frontend includes a personal dashboard and a device coverage purchase form. 
 Contract instances are created centrally in `frontend/src/contracts/contracts.ts`. The frontend
 loads local addresses from `deployments/localhost.json`, which `npm run deploy:local` writes (see
 [Smart Contracts](#smart-contracts)). The deploy script also gives every Hardhat dev account
-10,000 mUSDC; import one of the private keys printed by `npm run chain` into MetaMask to use it.
+10,000 mUSDC and seeds the community pool with 5,000 mUSDC from the last dev account, so a demo claim is not
+capped to a few mUSDC; import one of the private keys printed by `npm run chain` into MetaMask to use it.
 
 ### Dashboard, community pool and device coverage
 
@@ -214,6 +215,7 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
 | `GET /api/pool` | Reserve balance (excluding jurors' stakes and claim bonds), per-claim cap, totals including stakes, juror fees, penalties and bonds, the claim bond rate and minimum, policy and claim counts |
 | `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), how many other members could sit on a jury for this wallet's claim (`jury: { available, required }`; a claim cannot be filed below `required`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below) |
+| `GET /api/members/:address/history` | The member's account history from contract events, newest first: `{ history: [{ id, kind, title, amount, direction, claimId, txHash, blockNumber, logIndex, at }] }`. `kind` is `coverage`, `premium`, `lapse`, `contribution`, `stake`, `unstake`, `fee`, `penalty`, `bond`, `bondReturn`, `claim` or `payout`; `direction` is `in` (to the wallet), `out` or null. Premiums are listed once, not again as contributions |
 | `GET /api/members/:address/premium` | Just the premium schedule, light enough to poll for reminders: `{ premium: { status, amount, period, paidThrough, dueAt, graceEndsAt, secondsUntilDue, dueSoon, canPay, asOf } }`, or `{ premium: null }` without a policy. `status` is `Paid`, `Grace` (missed, still covered until `graceEndsAt`), `Overdue` (not covered; the keeper will close it) or `Lapsed`. `dueSoon` is true within 7 days of `dueAt` or once missed |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
 | `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, the `bond` (amount, and once decided what was returned and forfeited), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?), the `receipt` (deadline, hash, total) with `receiptFile` and `receiptCheck` (does the total match, is it dated after the claim?) |
@@ -274,7 +276,7 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `JuryModule` | Requests randomness, picks 5 staked jurors (claimant excluded), runs commit-reveal amount voting, takes the median, pays agreeing jurors and penalizes no-shows | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium per 30-day period (the first paid on purchase), 7-day grace period after a missed premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 1.5% premium per 30-day period (the first paid on purchase), 7-day grace period after a missed premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default. The test suites pin a 5% premium to keep their amounts round.
 
 **Voting is commit-reveal, on amounts.** Each juror votes the amount they think the claim should pay,
 from 0 (reject) up to the amount asked. A juror first calls `commitVote(claimId, commitment)` with

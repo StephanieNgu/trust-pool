@@ -52,6 +52,9 @@ export function readCachedWalletAuth(address: string, now = Math.floor(Date.now(
   }
 }
 
+/** Fired on `window` with the address once a wallet signs in. */
+export const WALLET_AUTH_EVENT = "trustpool:wallet-auth";
+
 export function clearWalletAuth(address: string) {
   sessionStorage.removeItem(cacheKey(address));
 }
@@ -72,6 +75,10 @@ export async function authenticateWallet(address: string): Promise<WalletAuth> {
     headers: challenge.headers,
   };
   sessionStorage.setItem(cacheKey(account), JSON.stringify(auth));
+  // Lets every panel that waits on a signature (evidence, receipts) load at once.
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new CustomEvent(WALLET_AUTH_EVENT, { detail: account }));
+  }
   return auth;
 }
 

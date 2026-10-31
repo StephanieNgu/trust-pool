@@ -56,7 +56,7 @@ export function CaptureCodePanel({ account, code, disabled = false, onCode, onAu
       <p>Write this code on paper and hold it next to the device in the first photo, or show it on another screen. It works for one upload until {clock(code.expiresAt)}.</p>
       <button className="text-button" type="button" disabled={disabled || busy} onClick={() => void getCode()}>Get a new code</button>
     </> : <>
-      <span className="eyebrow">STEP 1</span>
+      <span className="eyebrow">FIRST, A ONE-TIME CODE</span>
       <p>{expired ? "Your code has expired. Get a new one and retake the photos with it." : "Get a one-time code to show in your photos. It proves they were taken just now."}</p>
       <button className="primary" type="button" disabled={!account || disabled || busy} onClick={() => void getCode()}>{busy ? "Getting code…" : "Get capture code"}</button>
     </>}

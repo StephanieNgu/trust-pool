@@ -29,6 +29,16 @@ function jurorTask(claim: ClaimView, account: string) {
   return "Vote revealed";
 }
 
+/** When the juror's next step is due, for the queue card; null when nothing is due. */
+function jurorDeadline(claim: ClaimView, account: string): string | null {
+  const jury = claim.jury;
+  const juror = jury?.jurors.find((item) => item.address.toLowerCase() === account.toLowerCase());
+  if (!jury || !juror || claim.state !== "Voting") return null;
+  if (!juror.committed && jury.commitDeadline) return `Vote by ${dateTime(jury.commitDeadline)}`;
+  if (!juror.revealed && jury.revealDeadline) return `${jury.revealOpen ? "Reveal" : "Reveals close"} by ${dateTime(jury.revealDeadline)}`;
+  return null;
+}
+
 export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated, onStakeChanged }: JuryPageProps) {
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
@@ -71,7 +81,7 @@ export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated
 
   const activeTasks = account ? claims.filter((claim) => jurorTask(claim, account).includes("required")).length : 0;
   return <section className="claims-panel jury-panel" aria-label="Jury queue">
-    <div className="claims-panel-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h2>Jury queue</h2><p className="muted">Claims where this wallet was selected as a juror.</p></div><div className="claims-panel-actions"><label htmlFor="jury-state-filter">Status</label><select id="jury-state-filter" value={stateFilter} disabled={!ready || loading} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Expired", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loading} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div></div>
+    <div className="claims-panel-heading"><div><span className="eyebrow">YOUR ASSIGNMENTS</span><h2>Claims you were picked for</h2></div><div className="claims-panel-actions"><label htmlFor="jury-state-filter">Status</label><select id="jury-state-filter" value={stateFilter} disabled={!ready || loading} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Expired", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loading} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div></div>
     <JuryDuty account={account} ready={ready} overview={overview} onChanged={onStakeChanged} />
     <div className="jury-summary"><div><strong>{claims.length}</strong><span>Total assignments</span></div><div><strong>{activeTasks}</strong><span>Actions required</span></div></div>
     {error && <p className="notice warning" role="alert">{error}</p>}
@@ -83,6 +93,7 @@ export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated
         <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatAmount(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
         <p>Submitted {dateTime(claim.submittedAt)}</p>
         <div className={task.includes("required") ? "jury-action required" : "jury-action"}>{task}</div>
+        {jurorDeadline(claim, account) && <p className="jury-deadline">{jurorDeadline(claim, account)}</p>}
         <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>Review claim →</button>
       </article>;
     })}</div>

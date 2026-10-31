@@ -9,9 +9,13 @@ const EVIDENCE = ethers.keccak256(ethers.toUtf8Bytes("ipfs://demo-evidence-bundl
 const deviceHash = (label) => ethers.keccak256(ethers.toUtf8Bytes(`device:${label}`));
 const enrollmentHash = (label) => ethers.keccak256(ethers.toUtf8Bytes(`enrollment:${label}`));
 
+// The suites were written against a 5% premium, which keeps their amounts round. The deploy
+// default is 1.5% (checked in test/unit/params.test.js); premium logic does not depend on the rate.
+const TEST_PARAMS = { premiumBps: 500 };
+
 /** Fresh deployment with no policies. */
 async function deployFixture() {
-  const ctx = await deployContracts();
+  const ctx = await deployContracts(TEST_PARAMS);
   const signers = await ethers.getSigners();
   return { ...ctx, signers };
 }

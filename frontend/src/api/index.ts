@@ -8,6 +8,7 @@ export {
   type DashboardOverview,
   type PremiumOverview,
 } from "./dashboard";
+export { getMemberHistory, type HistoryEntry, type HistoryKind } from "./history";
 export {
   getNotifications,
   markNotificationsSeen,
@@ -24,6 +25,7 @@ export {
   clearWalletAuth,
   getWalletAuthHeaders,
   readCachedWalletAuth,
+  WALLET_AUTH_EVENT,
   type WalletAuth,
 } from "./auth";
 export {

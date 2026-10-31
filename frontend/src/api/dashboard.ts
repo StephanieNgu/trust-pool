@@ -55,6 +55,8 @@ export interface DashboardOverview {
   claimEligibleAt: number | null;
   pastWaitingPeriod: boolean;
   openClaimId: string | null;
+  /** The policy's signup bundle, which holds the device's details; null without a policy. */
+  enrollmentHash: string | null;
   backendBlock: number;
   keeperRunning: boolean;
   keeperLastTickAt: number | null;
@@ -138,6 +140,7 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     claimEligibleAt: policy?.claimEligibleAt ?? null,
     pastWaitingPeriod: policy?.pastWaitingPeriod ?? false,
     openClaimId: policy?.openClaimId ?? null,
+    enrollmentHash: policy?.enrollmentHash ?? null,
     backendBlock: health.blockNumber,
     keeperRunning: health.keeper?.running ?? false,
     keeperLastTickAt: health.keeper?.lastTickAt ?? null,

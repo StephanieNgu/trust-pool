@@ -10,6 +10,7 @@ const { deployContracts, USDC } = require("./lib/deployContracts");
 
 const LOCAL_NETWORKS = ["hardhat", "localhost"];
 const FAUCET_AMOUNT = USDC(10_000);
+const POOL_SEED = USDC(5_000);
 
 async function main() {
   // Keep the production/default rule at seven days, but remove the wait from local UI testing.
@@ -21,11 +22,18 @@ async function main() {
     addresses[name] = await ctx[name].getAddress();
   }
 
-  // On local networks, give every dev account some mock USDC to play with.
+  // On local networks, give every dev account some mock USDC to play with, and seed the pool so a
+  // demo claim can be paid: a claim takes at most 20% of the pool, and premiums alone start it small.
   if (LOCAL_NETWORKS.includes(network.name)) {
     for (const s of await ethers.getSigners()) {
       await (await ctx.token.mint(s.address, FAUCET_AMOUNT)).wait();
     }
+    // The seed comes from the last dev account, which the demo roles (accounts 0 to 5) never use.
+    const signers = await ethers.getSigners();
+    const treasury = signers[signers.length - 1];
+    await (await ctx.token.mint(treasury.address, POOL_SEED)).wait();
+    await (await ctx.token.connect(treasury).approve(await ctx.pool.getAddress(), POOL_SEED)).wait();
+    await (await ctx.pool.connect(treasury).contribute(POOL_SEED)).wait();
   }
 
   const params = Object.fromEntries(Object.entries(ctx.params).map(([k, v]) => [k, v.toString()]));

@@ -1,0 +1,178 @@
+/* Claims page: an open claim gets the page; the form shows only when the member can file. */
+.claims-layout.single {
+  grid-template-columns: 1fr;
+  max-width: 980px;
+}
+.claim-detail-layout {
+  max-width: 980px;
+}
+.claim-detail-layout .claims-panel {
+  min-height: 420px;
+}
+.claim-blocked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  background: #fff;
+  border: 1px solid #e5eaf2;
+  border-radius: 15px;
+  padding: 22px 25px;
+}
+.claim-blocked h2 {
+  font-size: 18px;
+  margin: 6px 0 6px;
+}
+.claim-blocked p {
+  margin: 0;
+}
+@media (max-width: 600px) {
+  .claim-blocked {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Jury queue: when the juror's next step is due. */
+.jury-card > p.jury-deadline {
+  margin: 10px 0 0;
+  font-size: 10px;
+  color: #936021;
+  font-weight: 600;
+}
+
+/* Account history on the dashboard. */
+.activity-row .amount-in {
+  color: #247952;
+  font-weight: 600;
+}
+.activity-row .amount-out {
+  color: #5d6f88;
+}
+.activity-row .history-claim {
+  display: block;
+  padding: 0;
+  margin-top: 5px;
+  font-size: 10px;
+}
+.history-more {
+  display: block;
+  margin: 12px auto;
+}
+.history-loading {
+  padding: 18px 23px;
+  margin: 0;
+}
+
+/* Dashboard: the member's open or latest claim, in place of the signup pitch once covered. */
+.claim-summary h3 {
+  margin: 10px 0 6px;
+}
+.claim-summary-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.claim-summary-status {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #4d5f78;
+  margin: 6px 0 12px;
+}
+.claim-summary .notice {
+  margin: 0 0 12px;
+}
+.claim-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+.claim-summary-actions .text-button {
+  padding: 0;
+}
+
+/* Sidebar: the member's chosen name, edited in place. */
+.profile-name {
+  background: none;
+  border: 0;
+  color: #fff;
+  padding: 0;
+  text-align: left;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -.5px;
+  margin: 19px 0 7px;
+  cursor: pointer;
+}
+.profile-name small {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: #8fa0b8;
+  margin-top: 3px;
+}
+.profile-name-input {
+  width: 100%;
+  margin: 19px 0 7px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid #394251;
+  background: #1d2129;
+  color: #fff;
+  font-size: 15px;
+}
+
+/* Signup: numbered steps down the form. */
+.purchase-card .step-label {
+  display: block;
+  margin: 34px 0 0;
+  padding-top: 22px;
+  border-top: 1px solid #edf1f6;
+}
+.purchase-card .ownership-options .eyebrow {
+  display: block;
+}
+
+/* Phones: keep the top bar to one compact block instead of a tall column of controls. */
+@media (max-width: 800px) {
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .topbar-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 8px;
+  }
+  .topbar-actions .network {
+    flex-basis: 100%;
+  }
+}
+@media (max-width: 480px) {
+  .topbar .breadcrumb {
+    display: none;
+  }
+  .topbar-actions .wallet-button {
+    padding: 8px 10px;
+  }
+}
+/* The generic how-card hides on phones; the claim summary is the member's own status, so it stays. */
+@media (max-width: 800px) {
+  .how-card.claim-summary {
+    display: block;
+  }
+}
+/* Fact grids: fill gaps left by a wide row, and leave any empty trailing cell white instead of grey. */
+.detail-grid {
+  grid-auto-flow: dense;
+  background: #fff;
+}
+.detail-grid > div {
+  box-shadow: 1px 0 0 #e8edf4, 0 1px 0 #e8edf4;
+}

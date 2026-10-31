@@ -44,7 +44,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
   const juror = claim.jury?.jurors.find((item) => item.address.toLowerCase() === account.toLowerCase());
   const maxAmount = BigInt(claim.jury?.maxAmount ?? claim.amount);
   const requested = formatUnits(maxAmount, tokenDecimals);
-  const [amount, setAmount] = useState(requested);
+  const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -55,7 +55,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
     let active = true;
     setStoredSecret(null);
     void loadVoteSecret(account, claim.id).then((secret) => { if (active) setStoredSecret(secret); });
-    setAmount(requested);
+    setAmount("");
     setNote("");
     setFeedback("");
     setError("");
@@ -73,7 +73,8 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
   /** The amount typed, in base units, or an error message. */
   function parsedAmount(): bigint | string {
     try {
-      const units = parseUnits(amount.trim() || "0", tokenDecimals);
+      if (!amount.trim()) return "Enter the amount you would pay, or 0 to reject.";
+      const units = parseUnits(amount.trim(), tokenDecimals);
       if (units < 0n || units > maxAmount) return `Enter an amount from 0 to ${formatAmount(maxAmount, tokenDecimals)} ${tokenSymbol}.`;
       return units;
     } catch {

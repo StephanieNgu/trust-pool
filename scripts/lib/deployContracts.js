@@ -6,7 +6,7 @@ const USDC = (amount) => ethers.parseUnits(String(amount), 6);
 /** Prototype parameters. Override any of them by passing a partial object to deployContracts(). */
 const DEFAULT_PARAMS = {
   waitingPeriod: 7 * DAY,
-  premiumBps: 500, // 5% of coverage limit per premium period
+  premiumBps: 150, // 1.5% of coverage limit per premium period (18% a year)
   premiumPeriod: 30 * DAY, // premiums are paid monthly; buying a policy pays the first month
   gracePeriod: 7 * DAY, // a missed premium keeps coverage this long before the policy lapses
   maxCoverageLimit: USDC(2_000),
