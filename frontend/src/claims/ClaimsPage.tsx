@@ -92,6 +92,14 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     if (focusClaim) setSelectedClaimId(focusClaim.id);
   }, [focusClaim]);
 
+  // With a claim open, start on it rather than on the list, unless the member went back to the list.
+  const userClosedDetail = useRef(false);
+  useEffect(() => { userClosedDetail.current = false; }, [account]);
+  const openClaimId = overview?.openClaimId ?? null;
+  useEffect(() => {
+    if (openClaimId && !userClosedDetail.current) setSelectedClaimId((current) => current ?? openClaimId);
+  }, [openClaimId]);
+
   useEffect(() => {
     let active = true;
     setClaimsError("");
@@ -170,15 +178,48 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   );
   const accepted = ALLOWED_EVIDENCE_TYPES.join(",");
 
+  if (selectedClaimId && account) {
+    // A claim gets the whole page: its offer, receipt and evidence are what matter while it is open.
+    return <div className="claim-detail-layout"><ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onAuthenticated={onAuthenticated} onClaimChanged={() => setClaimRefresh((value) => value + 1)} onBack={() => { userClosedDetail.current = true; setSelectedClaimId(null); }} /></div>;
+  }
+
+  const claimList = <section className="claims-panel" aria-label="My claims">
+      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><div className="claims-panel-actions"><label htmlFor="claim-state-filter">Status</label><select id="claim-state-filter" value={stateFilter} disabled={!ready || loadingClaims} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Expired", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div></div>
+      {claimsError && <p className="notice warning" role="alert">{claimsError}</p>}
+      {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
+      {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No claims yet" : `No ${CLAIM_STATE_COPY[stateFilter].toLowerCase()} claims`}</strong><p>{stateFilter === "All" ? "Your submitted claims and their jury status will appear here." : "Choose another status to view the rest of your claim history."}</p></div>}
+      <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>
+        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatAmount(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
+        <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Offered" || claim.state === "Approved" || claim.state === "Paid" ? <div><dt>{claim.state === "Offered" ? "Jury's offer" : "Payout"}</dt><dd>{formatAmount(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
+        {claim.state === "Offered" && <p className="notice">The jury made an offer. Open the claim to accept it or withdraw.</p>}
+        <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>{claim.state === "Offered" ? "Review offer →" : "View details →"}</button>
+      </article>)}</div>
+    </section>;
+
+  // The form only shows when this wallet can file; otherwise say why, and give the list the page.
+  const blocked = !overview?.active
+    ? { title: "You need active coverage to file a claim", body: "Get device coverage first. Claims open once its waiting period ends." }
+    : !overview.pastWaitingPeriod
+      ? { title: "Your coverage is in its waiting period", body: `You can file claims from ${overview.claimEligibleAt ? new Date(overview.claimEligibleAt * 1000).toLocaleString() : "the end of the waiting period"}.` }
+      : overview.openClaimId
+        ? { title: `Claim #${overview.openClaimId} is open`, body: "A policy has one claim at a time. You can file another once this one is decided." }
+        : null;
+  if (blocked) {
+    return <div className="claims-layout single">
+      <section className="claim-blocked" aria-label="Filing a claim">
+        <div><span className="eyebrow">SUBMIT A CLAIM</span><h2>{blocked.title}</h2><p className="muted">{blocked.body}</p></div>
+        {overview?.openClaimId && <button className="primary" type="button" onClick={() => setSelectedClaimId(overview.openClaimId)}>Open claim #{overview.openClaimId}</button>}
+      </section>
+      {claimList}
+    </div>;
+  }
+
   return <div className="claims-layout">
     <form className="purchase-card claim-form" onSubmit={(event) => void submit(event)}>
       <span className="eyebrow">SUBMIT A CLAIM</span>
       <h2>Tell the pool what happened.</h2>
       <p className="muted">Your evidence is encrypted by the backend. Only you and selected jurors can access it.</p>
 
-      {!overview?.active && <p className="notice warning">An active device policy is required.</p>}
-      {overview?.active && !overview.pastWaitingPeriod && overview.claimEligibleAt && <p className="notice warning">Claims become available on {new Date(overview.claimEligibleAt * 1000).toLocaleString()}.</p>}
-      {overview?.openClaimId && <p className="notice warning">Claim #{overview.openClaimId} is already open for this policy.</p>}
       {overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && tooFewJurors && <p className="notice warning">Claims are paused: a jury needs {overview.jurySize} other members with active coverage and a juror stake, and only {overview.jurorsAvailable} {overview.jurorsAvailable === 1 ? "is" : "are"} available right now.</p>}
 
       <label htmlFor="claim-amount">Requested payout</label>
@@ -221,18 +262,6 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
       {feedback && <p className="notice" role="status">{feedback}</p>}
       {error && <p className="notice warning" role="alert">{error}</p>}
     </form>
-
-    {selectedClaimId && account ? <ClaimDetail claimId={selectedClaimId} account={account} tokenDecimals={overview?.tokenDecimals ?? 6} tokenSymbol={overview?.tokenSymbol ?? "mUSDC"} onAuthenticated={onAuthenticated} onClaimChanged={() => setClaimRefresh((value) => value + 1)} onBack={() => setSelectedClaimId(null)} /> : <section className="claims-panel" aria-label="My claims">
-      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><div className="claims-panel-actions"><label htmlFor="claim-state-filter">Status</label><select id="claim-state-filter" value={stateFilter} disabled={!ready || loadingClaims} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Expired", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div></div>
-      {claimsError && <p className="notice warning" role="alert">{claimsError}</p>}
-      {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
-      {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No claims yet" : `No ${CLAIM_STATE_COPY[stateFilter].toLowerCase()} claims`}</strong><p>{stateFilter === "All" ? "Your submitted claims and their jury status will appear here." : "Choose another status to view the rest of your claim history."}</p></div>}
-      <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>
-        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatAmount(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
-        <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Offered" || claim.state === "Approved" || claim.state === "Paid" ? <div><dt>{claim.state === "Offered" ? "Jury's offer" : "Payout"}</dt><dd>{formatAmount(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
-        {claim.state === "Offered" && <p className="notice">The jury made an offer. Open the claim to accept it or withdraw.</p>}
-        <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>{claim.state === "Offered" ? "Review offer →" : "View details →"}</button>
-      </article>)}</div>
-    </section>}
+    {claimList}
   </div>;
 }

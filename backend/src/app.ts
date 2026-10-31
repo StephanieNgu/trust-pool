@@ -15,6 +15,7 @@ import {
   MAX_FILES,
 } from "./evidence";
 import type { Keeper } from "./keeper";
+import { getMemberHistory } from "./history";
 import { buildNotifications } from "./notifications";
 import { getClaimView, getMemberView, getPoolView, getPremiumView, listClaims, type ClaimView } from "./protocol";
 
@@ -161,6 +162,15 @@ export function createApp(deps: AppDeps) {
    * In-app notifications for a wallet: jury duty (picked, commit and reveal deadlines, outcome), its
    * own claims' status, and its policy. Built from public chain state, so no signature is needed.
    */
+  /**
+   * The member's account history from contract events, newest first: premiums, contributions, stakes,
+   * bonds, payouts and juror fees. Public chain data, so no signature is needed.
+   */
+  app.get("/api/members/:address/history", async (req, res) => {
+    const address = parseAddress(req.params.address, "address");
+    res.json({ history: await getMemberHistory(provider, deployment.addresses, address) });
+  });
+
   app.get("/api/members/:address/notifications", async (req, res) => {
     const address = parseAddress(req.params.address, "address");
     const me = address.toLowerCase();

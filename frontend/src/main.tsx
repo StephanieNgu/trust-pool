@@ -4,6 +4,7 @@ import App from "./App";
 import "./styles.css";
 import "./layout-fixes.css";
 import "./capture.css";
+import "./polish.css";
 
 const rootElement = document.getElementById("root");
 

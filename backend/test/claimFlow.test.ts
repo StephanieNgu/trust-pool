@@ -229,6 +229,31 @@ describe("claim flow through the backend", () => {
     const pool = (await api("/api/pool")).body;
     assert.equal(pool.totalPaidOut, USDC(180).toString());
     assert.equal(pool.claimCount, 1);
+
+    // The claimant's account history, read from events: newest first. The first month's premium
+    // is shown once, on the coverage entry, not again as a separate premium.
+    type Entry = { kind: string; amount: string | null; direction: string | null; claimId: string | null; at: number };
+    const history: Entry[] = (await api(`/api/members/${claimant.address}/history`)).body.history;
+    assert.equal(history[0].kind, "payout");
+    assert.deepEqual(
+      history.map((e) => [e.kind, e.amount, e.direction]).sort(),
+      [
+        ["bond", USDC(15).toString(), "out"],
+        ["bondReturn", USDC(10).toString(), "in"],
+        ["claim", null, null],
+        ["coverage", USDC(50).toString(), "out"],
+        ["payout", USDC(180).toString(), "in"],
+        ["stake", USDC(40).toString(), "out"],
+      ].sort(),
+    );
+    assert.ok(history.every((e, i) => i === 0 || history[i - 1].at >= e.at));
+    const filed = history.find((e) => e.kind === "claim") as Entry & { title: string };
+    assert.equal(filed.title, "Claim #1 filed");
+    assert.equal(filed.claimId, "1");
+    // A juror whose amount agreed with the offer sees the fee they earned.
+    const agreeing: Entry[] = (await api(`/api/members/${jurorAddrs[1]}/history`)).body.history;
+    assert.ok(agreeing.some((e) => e.kind === "fee" && e.direction === "in" && BigInt(e.amount!) > 0n));
+    assert.equal((await api("/api/members/0x123/history")).status, 400);
   });
 
   it("rejects a claim when too few jurors vote before the deadline", async () => {

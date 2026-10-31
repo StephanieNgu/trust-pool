@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   ALLOWED_EVIDENCE_TYPES,
   getEvidence,
+  readCachedWalletAuth,
+  WALLET_AUTH_EVENT,
   getEvidenceResource,
   type CaptureStamp,
   type ClaimDetailView,
@@ -211,6 +213,24 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
   const selectedJuror = claim.jury?.jurors.some((juror) => juror.address.toLowerCase() === account.toLowerCase()) ?? false;
   // A claim's jurors can open its receipt at any time, and its photos only while voting.
   const canRead = claimant || (selectedJuror && (source === "receipt" || claim.state === "Voting"));
+
+  // Once the wallet is signed in (here, in another panel, or from the header), load without a click.
+  const loadRef = useRef(loadEvidence);
+  loadRef.current = loadEvidence;
+  const autoLoaded = useRef<string | null>(null);
+  useEffect(() => {
+    if (!canRead || !available) return;
+    const key = `${account}:${evidenceHash}`;
+    const tryLoad = () => {
+      if (autoLoaded.current === key || !readCachedWalletAuth(account)) return;
+      autoLoaded.current = key;
+      void loadRef.current();
+    };
+    tryLoad();
+    const onAuth = (event: Event) => { if ((event as CustomEvent<string>).detail?.toLowerCase() === account.toLowerCase()) tryLoad(); };
+    window.addEventListener(WALLET_AUTH_EVENT, onAuth);
+    return () => window.removeEventListener(WALLET_AUTH_EVENT, onAuth);
+  }, [account, evidenceHash, canRead, available]);
   const copy = COPY[source];
 
   if (source === "enrollment" && !claim.enrollmentHash) {

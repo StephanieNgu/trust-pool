@@ -116,19 +116,20 @@ export function DeviceEnrollment({ account, draft, disabled = false, onChange, o
       </div>)}
     </div>
     <small>Only a hash of the {imei === "hidden" ? "make and serial number" : "IMEI (or serial number)"} goes on-chain. The details and photos are stored encrypted and shown only to the jurors of a claim you file.</small>
+    <span className="eyebrow step-label">02 / PHOTOS OF THE DEVICE</span>
     <CaptureCodePanel account={account} code={draft.captureCode} disabled={disabled} onCode={(captureCode) => onChange({ ...draft, captureCode })} onAuthenticated={onAuthenticated} />
     {draft.captureCode && <div className="photo-slots">
       {photosFor(draft.device.type).map(({ key, label, hint }) => <PhotoSlot key={key} id={`enroll-${key}`} label={label} hint={hint} file={draft.photos[key]} disabled={disabled} onChange={(file) => onChange({ ...draft, photos: { ...draft.photos, [key]: file } })} />)}
     </div>}
     <div className="ownership-options">
-      <span className="eyebrow">PROOF IT'S YOURS (OPTIONAL)</span>
+      <span className="eyebrow">03 / PROOF IT'S YOURS (OPTIONAL)</span>
       {deviceKeysSupported() && <label className="check-row" htmlFor="enroll-on-device">
         <input id="enroll-on-device" type="checkbox" checked={draft.onThisDevice} disabled={disabled} onChange={(event) => onChange({ ...draft, onThisDevice: event.target.checked })} />
         <span><strong>I'm signing up on the device I'm insuring</strong><small>This browser keeps a key that can't be copied off the device. Claims you later file from it show jurors they came from the insured device. Leave this off for a camera, or anything you're registering from another device.</small></span>
       </label>}
       <label htmlFor="enroll-purchase-proof">Proof of purchase</label>
       <small>An invoice, receipt or carrier bill that names the device. Jurors see whether one was given.</small>
-      <input id="enroll-purchase-proof" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} disabled={disabled} onChange={(event) => onChange({ ...draft, purchaseProof: event.target.files?.[0] ?? null })} />
+      <input id="enroll-purchase-proof" className="file-input" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} disabled={disabled} onChange={(event) => onChange({ ...draft, purchaseProof: event.target.files?.[0] ?? null })} />
     </div>
   </div>;
 }
