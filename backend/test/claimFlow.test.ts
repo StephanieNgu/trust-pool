@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256, ZeroHash } from "ethers";
 import { Keeper } from "../src/keeper";
-import { PHOTO, USDC, commit, increaseTime, payPremiums, reveal, setup, signerFor, testImei } from "./helpers";
+import { PHOTO, photo, USDC, commit, increaseTime, payPremiums, reveal, setup, signerFor, testImei } from "./helpers";
 
 describe("claim flow through the backend", () => {
   let t: Awaited<ReturnType<typeof setup>>;
@@ -19,12 +19,16 @@ describe("claim flow through the backend", () => {
     const { claimant, claimManager, token, api, post, getAs, keeper, signers, jury } = t;
 
     // 1. Claimant uploads photos and gets the hash to put on-chain.
-    //    The phone still turns on, so they include its IMEI from Settings > About.
+    //    The phone still turns on, so they include its IMEI from Settings > About, and file from it:
+    //    the browser signs the capture code with the key it made at signup.
+    const code = await t.captureCode(claimant);
     const upload = await post("/api/evidence", {
+      captureCode: code,
+      deviceSignature: t.deviceSign(claimant.address, code),
       description: "Cracked screen after a drop",
       amountReason: "The shop quoted 300 for a new screen and battery.",
       device: { imei: testImei(0) },
-      files: [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }],
+      files: [{ name: "front.jpg", contentType: "image/jpeg", data: photo() }],
     }, claimant);
     assert.equal(upload.status, 201);
     const { evidenceHash } = upload.body;
@@ -40,7 +44,12 @@ describe("claim flow through the backend", () => {
     const { enrollmentHash } = claim;
     assert.equal(enrollmentHash, (await t.registry.getPolicy(claimant.address)).enrollmentHash);
     assert.deepEqual(claim.enrollment, { available: true, url: `/api/evidence/${enrollmentHash}` });
-    assert.deepEqual(claim.deviceCheck, { enrollmentMatchesPolicy: true, claimMatchesEnrollment: true });
+    assert.deepEqual(claim.deviceCheck, {
+      enrollmentMatchesPolicy: true,
+      claimMatchesEnrollment: true,
+      filedFromDevice: true,
+      purchaseProof: true,
+    });
 
     // 3. Keeper fulfils the randomness request; five jurors are selected, claimant excluded.
     const actions = await keeper.tick();
@@ -220,7 +229,7 @@ describe("claim flow through the backend", () => {
     const { evidenceHash } = (
       await post(
         "/api/evidence",
-        { files: [{ name: "receipt.pdf", contentType: "application/pdf", data: PHOTO }] },
+        { files: [{ name: "receipt.pdf", contentType: "application/pdf", data: photo() }] },
         claimant,
       )
     ).body;
@@ -244,6 +253,9 @@ describe("claim flow through the backend", () => {
     const claim = (await api(`/api/claims/${id}`)).body;
     assert.equal(claim.state, "Rejected");
     assert.equal(claim.jury.outcomeReason, "noQuorum");
+    // This holder signed up from another device and gave no proof of purchase.
+    assert.equal(claim.deviceCheck.filedFromDevice, null);
+    assert.equal(claim.deviceCheck.purchaseProof, false);
     // No fee without quorum; the three jurors who never revealed lose 5 of their stake each.
     assert.deepEqual(
       claim.jury.jurors.map((j: { reward: string; penalty: string }) => [j.reward, j.penalty]),
@@ -267,7 +279,7 @@ describe("claim flow through the backend", () => {
   it("accepts an unanswered offer after the deadline, and lets a claimant withdraw instead", async () => {
     const { holders, claimManager, api, post, keeper, signers, jury, params, token } = t;
     const file = (owner: (typeof holders)[number]) =>
-      post("/api/evidence", { files: [{ name: "a.png", contentType: "image/png", data: PHOTO }] }, owner);
+      post("/api/evidence", { files: [{ name: "a.png", contentType: "image/png", data: photo() }] }, owner);
 
     const fileAndApprove = async (owner: (typeof holders)[number]) => {
       const { evidenceHash } = (await file(owner)).body;
@@ -322,7 +334,7 @@ describe("claim flow through the backend", () => {
     // A keeper that does not own MockRandomness cannot fulfil, standing in for a VRF that never answers.
     const stalledKeeper = await Keeper.create(t.contracts, t.signers[9], { fulfillRandomness: true, autoResolve: true });
     const { evidenceHash } = (
-      await post("/api/evidence", { files: [{ name: "a.png", contentType: "image/png", data: PHOTO }] }, claimant)
+      await post("/api/evidence", { files: [{ name: "a.png", contentType: "image/png", data: photo() }] }, claimant)
     ).body;
     await (await claimManager.connect(claimant).submitClaim(USDC(100), evidenceHash)).wait();
     const id = Number(await claimManager.claimCount());

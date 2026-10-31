@@ -1,6 +1,7 @@
 import { getAddress, keccak256, toUtf8Bytes } from "ethers";
 import { getWalletAuthHeaders } from "./auth";
 import { ApiError, apiRequest } from "./client";
+import type { DeviceKeyJwk } from "../member/deviceKey";
 import type {
   CaptureCode,
   ClaimDetailView,
@@ -135,7 +136,17 @@ export const MAX_JURY_NOTE_LENGTH = 500;
 
 async function postBundle(
   address: string,
-  body: { kind: EvidenceKind; description: string; amountReason?: string; device?: DeviceDetails; receipt?: ReceiptDetails; captureCode?: string },
+  body: {
+    kind: EvidenceKind;
+    description: string;
+    amountReason?: string;
+    device?: DeviceDetails;
+    receipt?: ReceiptDetails;
+    deviceKey?: DeviceKeyJwk;
+    purchaseProof?: number[];
+    deviceSignature?: string;
+    captureCode?: string;
+  },
   files: File[],
 ): Promise<EvidenceSummary> {
   validateEvidenceFiles(files);
@@ -168,21 +179,43 @@ export async function uploadEvidence(
   captureCode: string,
   deviceId = "",
   amountReason = "",
+  deviceSignature?: string,
 ): Promise<EvidenceSummary> {
   const device = claimDeviceId(deviceId);
   const reason = amountReason.trim();
-  return postBundle(address, { kind: "claim", description, ...(reason ? { amountReason: reason } : {}), device, captureCode }, files);
+  return postBundle(
+    address,
+    { kind: "claim", description, ...(reason ? { amountReason: reason } : {}), device, ...(deviceSignature ? { deviceSignature } : {}), captureCode },
+    files,
+  );
 }
 
-/** Uploads the signup photos and device details. Pass the returned hash to purchaseCoverage. */
+/**
+ * Uploads the signup photos and device details. Pass the returned hash to purchaseCoverage. Optional:
+ * `deviceKey`, the public half of a key made in this browser when signing up from the device itself,
+ * and `purchaseProof`, an invoice or bill naming the device, sent after the photos.
+ */
 export async function enrollDevice(
   address: string,
   device: DeviceDetails,
   files: File[],
   captureCode: string,
+  options: { deviceKey?: DeviceKeyJwk; purchaseProof?: File[] } = {},
 ): Promise<EvidenceSummary> {
   const details = validateDeviceDetails(device);
-  return postBundle(address, { kind: "enrollment", description: "", device: details, captureCode }, files);
+  const proof = options.purchaseProof ?? [];
+  return postBundle(
+    address,
+    {
+      kind: "enrollment",
+      description: "",
+      device: details,
+      ...(options.deviceKey ? { deviceKey: options.deviceKey } : {}),
+      ...(proof.length ? { purchaseProof: proof.map((_, i) => files.length + i) } : {}),
+      captureCode,
+    },
+    [...files, ...proof],
+  );
 }
 
 export const MAX_SHOP_LENGTH = 120;

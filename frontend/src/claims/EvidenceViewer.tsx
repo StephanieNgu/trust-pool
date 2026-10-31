@@ -46,6 +46,7 @@ interface StoredEvidenceBundle {
   amountReason?: string;
   device?: DeviceDetails | null;
   receipt?: ReceiptDetails;
+  purchaseProof?: number[];
   capture?: CaptureStamp | null;
   files: StoredEvidenceFile[];
 }
@@ -114,6 +115,7 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
   const evidenceHash = sourceHash(claim, source);
   const available = sourceAvailable(claim, source);
   const [receipt, setReceipt] = useState<ReceiptDetails | null>(null);
+  const [purchaseProof, setPurchaseProof] = useState<number[]>([]);
   const [description, setDescription] = useState("");
   const [amountReason, setAmountReason] = useState("");
   const [device, setDevice] = useState<DeviceDetails | null>(null);
@@ -190,6 +192,7 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
       setAmountReason(typeof bundle.amountReason === "string" ? bundle.amountReason : "");
       setDevice(bundle.device ?? null);
       setReceipt(bundle.receipt ?? null);
+      setPurchaseProof(Array.isArray(bundle.purchaseProof) ? bundle.purchaseProof : []);
       setCapture(bundle.capture ?? null);
       // A claim filed with the signup bundle as its evidence shows no new photos at all.
       const mismatch = (bundle.kind ?? "claim") !== source;
@@ -230,7 +233,7 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
         {!verified && <p className="notice warning" role="alert">Do not vote on this evidence. Its content hash does not match the hash recorded on-chain.</p>}
         <div className="evidence-files">{files.map((file) => <article className="evidence-file" key={file.index}>
           {file.contentType.startsWith("image/") && file.contentType !== "image/heic" ? <a href={file.objectUrl} target="_blank" rel="noreferrer" title={`Open ${file.name}`}><img src={file.objectUrl} alt={`Evidence: ${file.name}`} /></a> : <div className="evidence-document"><strong>{file.contentType === "image/heic" ? "HEIC" : "PDF"}</strong><span>{file.contentType === "image/heic" ? "Open the original in a compatible viewer" : "Document evidence"}</span></div>}
-          <div className="evidence-file-meta"><div><strong title={file.name}>{file.name}</strong><span>{file.contentType} · {fileSize(file.size)}</span></div><a href={file.objectUrl} target="_blank" rel="noreferrer">Open original ↗</a></div>
+          <div className="evidence-file-meta"><div><strong title={file.name}>{purchaseProof.includes(file.index) ? `Proof of purchase · ${file.name}` : file.name}</strong><span>{file.contentType} · {fileSize(file.size)}</span></div><a href={file.objectUrl} target="_blank" rel="noreferrer">Open original ↗</a></div>
         </article>)}</div>
         <div className="evidence-integrity"><span>On-chain fingerprint</span><code title={evidenceHash}>{shortHash(evidenceHash)}</code><button className="text-button" type="button" onClick={() => void loadEvidence()}>Verify again</button></div>
       </>}

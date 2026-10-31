@@ -19,10 +19,19 @@
 // on-chain with the total, and the claim pays the smaller of the offer and that total. A receipt file
 // can back only one claim: the store remembers a keyed hash of every receipt file it has taken.
 //
+// Ownership. Photos only show that someone held a device, so three things make it harder to insure,
+// or claim on, a device that is not yours:
+//   - Fresh photos: a signup or claim photo file can be used in one bundle only, so the same pictures
+//     cannot insure one phone twice or back a second claim.
+//   - Device key: enrolling from the device itself, the browser makes a P-256 key that cannot leave
+//     it and puts the public half in the enrollment bundle. A claim filed from the same browser signs
+//     its capture code with it, so jurors can see the claim came from the insured device.
+//   - Proof of purchase: signup may include an invoice or carrier bill naming the device.
+//
 // The store also keeps jurors' notes: the short reasoning a juror gives with the amount they vote.
 // Only the note's keccak256 goes into the sealed vote on-chain; the text is stored here, encrypted
 // like the bundles, and shown to the claimant and the other jurors once that juror reveals.
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getBytes, keccak256, toUtf8Bytes } from "ethers";
@@ -95,10 +104,47 @@ export interface ReceiptDetails {
 
 export const MAX_SHOP_LENGTH = 120;
 
+/** The public half of a device key: an ECDSA P-256 key as a JWK. */
+export interface DeviceKey {
+  kty: "EC";
+  crv: "P-256";
+  x: string;
+  y: string;
+}
+
+/** What a claim's device signature signs: the claimant's wallet and the claim's capture code. */
+export function deviceProofMessage(wallet: string, captureCode: string): string {
+  return `TrustPool device proof\nwallet: ${wallet.toLowerCase()}\ncode: ${captureCode}`;
+}
+
+/**
+ * Whether `signature` (base64, IEEE P1363 r||s as WebCrypto produces) is `key`'s ECDSA P-256 SHA-256
+ * signature over deviceProofMessage(wallet, captureCode).
+ */
+export function verifyDeviceSignature(key: DeviceKey, wallet: string, captureCode: string, signature: string): boolean {
+  try {
+    const publicKey = createPublicKey({ key: { ...key }, format: "jwk" });
+    return verify(
+      "sha256",
+      Buffer.from(deviceProofMessage(wallet, captureCode), "utf8"),
+      { key: publicKey, dsaEncoding: "ieee-p1363" },
+      Buffer.from(signature, "base64"),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export interface EvidenceUpload {
   kind?: BundleKind;
   /** Receipts only. */
   receipt?: ReceiptDetails;
+  /** Enrollment only: the public key of a key kept in the enrolling browser. */
+  deviceKey?: DeviceKey;
+  /** Enrollment only: indexes into `files` of the proof of purchase. */
+  purchaseProof?: number[];
+  /** Claims only: the device key's signature over deviceProofMessage(claimant, captureCode). */
+  deviceSignature?: string;
   description?: string;
   /** Claims only: why the claimant asked for this amount. A repair quote can be one of the files. */
   amountReason?: string;
@@ -121,6 +167,9 @@ interface StoredBundle {
   amountReason?: string;
   device?: DeviceDetails | null;
   receipt?: ReceiptDetails;
+  deviceKey?: DeviceKey;
+  purchaseProof?: number[];
+  deviceSignature?: string;
   capture?: CaptureStamp | null;
   files: StoredFile[];
 }
@@ -141,6 +190,12 @@ export interface EvidenceSummary {
   device: DeviceDetails | null;
   /** Receipts: what the claimant entered from the invoice; null for other kinds. */
   receipt: ReceiptDetails | null;
+  /** Enrollment: the device key's public half, or null if signup was not done from the device. */
+  deviceKey: DeviceKey | null;
+  /** Enrollment: indexes of the files that are proof of purchase (empty if none). */
+  purchaseProof: number[];
+  /** Claims: the device key's signature, or null if the claim was not filed from the device. */
+  deviceSignature: string | null;
   capture: CaptureStamp | null;
   size: number;
   files: EvidenceFileInfo[];
@@ -241,6 +296,45 @@ function validateDevice(device: unknown, kind: BundleKind): DeviceDetails | null
   return result;
 }
 
+function validateDeviceKey(key: unknown, kind: BundleKind): DeviceKey | undefined {
+  if (key === undefined) return undefined;
+  if (kind !== "enrollment") throw new EvidenceError("deviceKey is only for enrollment bundles.", 400);
+  const { kty, crv, x, y } = (key ?? {}) as Partial<DeviceKey>;
+  const coordinate = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
+  if (kty !== "EC" || crv !== "P-256" || !coordinate(x) || !coordinate(y)) {
+    throw new EvidenceError("deviceKey must be a P-256 public key as a JWK (kty, crv, x, y).", 400);
+  }
+  try {
+    createPublicKey({ key: { kty, crv, x: x as string, y: y as string }, format: "jwk" });
+  } catch {
+    throw new EvidenceError("deviceKey is not a valid P-256 public key.", 400);
+  }
+  return { kty, crv, x: x as string, y: y as string };
+}
+
+function validatePurchaseProof(indexes: unknown, kind: BundleKind, fileCount: number): number[] | undefined {
+  if (indexes === undefined) return undefined;
+  if (kind !== "enrollment") throw new EvidenceError("purchaseProof is only for enrollment bundles.", 400);
+  if (
+    !Array.isArray(indexes) ||
+    indexes.length === 0 ||
+    !indexes.every((i, n) => Number.isSafeInteger(i) && i >= 0 && i < fileCount && (n === 0 || i > indexes[n - 1]))
+  ) {
+    throw new EvidenceError("purchaseProof must list file indexes in increasing order.", 400);
+  }
+  return indexes as number[];
+}
+
+function validateDeviceSignature(signature: unknown, kind: BundleKind): string | undefined {
+  if (signature === undefined) return undefined;
+  if (kind !== "claim") throw new EvidenceError("deviceSignature is only for claim bundles.", 400);
+  // A P-256 signature in IEEE P1363 form is 64 bytes: 88 base64 characters.
+  if (typeof signature !== "string" || signature.length !== 88 || !BASE64_PATTERN.test(signature)) {
+    throw new EvidenceError("deviceSignature must be a base64 P-256 signature.", 400);
+  }
+  return signature;
+}
+
 function validateReceipt(receipt: unknown, kind: BundleKind): ReceiptDetails | undefined {
   if (kind !== "receipt") {
     if (receipt !== undefined) throw new EvidenceError("receipt details are only for receipt bundles.", 400);
@@ -283,7 +377,8 @@ export function sameDevice(claimed: DeviceDetails | null, enrolled: DeviceDetail
  */
 export function encodeBundle(upload: unknown, capture: CaptureStamp | null = null): Buffer {
   if (!upload || typeof upload !== "object") throw new EvidenceError("Body must be a JSON object.", 400);
-  const { kind = "claim", description = "", amountReason, device, receipt, files } = upload as Partial<EvidenceUpload>;
+  const { kind = "claim", description = "", amountReason, device, receipt, deviceKey, purchaseProof, deviceSignature, files } =
+    upload as Partial<EvidenceUpload>;
 
   if (!(BUNDLE_KINDS as readonly unknown[]).includes(kind)) {
     throw new EvidenceError(`kind must be one of ${BUNDLE_KINDS.join(", ")}.`, 400);
@@ -330,10 +425,18 @@ export function encodeBundle(upload: unknown, capture: CaptureStamp | null = nul
     ...(amountReason ? { amountReason } : {}),
     device: validateDevice(device, kind),
     ...(receiptDetails ? { receipt: receiptDetails } : {}),
+    // Each left out when absent, so bundles without them hash exactly as before.
+    ...optional("deviceKey", validateDeviceKey(deviceKey, kind)),
+    ...optional("purchaseProof", validatePurchaseProof(purchaseProof, kind, stored.length)),
+    ...optional("deviceSignature", validateDeviceSignature(deviceSignature, kind)),
     capture,
     files: stored,
   };
   return Buffer.from(JSON.stringify(bundle), "utf8");
+}
+
+function optional<K extends string, V>(key: K, value: V | undefined): Partial<Record<K, V>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
 }
 
 export function hashBundle(bytes: Uint8Array): string {
@@ -356,6 +459,9 @@ function summarize(evidenceHash: string, bytes: Buffer): EvidenceSummary {
     amountReason: bundle.amountReason ?? "",
     device: bundle.device ?? null,
     receipt: bundle.receipt ?? null,
+    deviceKey: bundle.deviceKey ?? null,
+    purchaseProof: bundle.purchaseProof ?? [],
+    deviceSignature: bundle.deviceSignature ?? null,
     capture: bundle.capture ?? null,
     size: bytes.length,
     files: bundle.files.map((f, index) => ({ index, name: f.name, contentType: f.contentType, size: f.size })),
@@ -422,7 +528,8 @@ export async function loadOrCreateKeyFile(file: string): Promise<{ key: Buffer; 
 /** Content-addressed, encrypted evidence store on the local filesystem. */
 export class LocalEvidenceStore {
   private readonly key: Buffer;
-  private readonly deviceCache = new Map<string, DeviceDetails | null>();
+  /** Bundles never change once stored, so their summaries are cached rather than decrypted on every view. */
+  private readonly summaryCache = new Map<string, EvidenceSummary>();
 
   constructor(
     readonly dir: string,
@@ -440,10 +547,31 @@ export class LocalEvidenceStore {
     return join(this.dir, `${evidenceHash}.uploaders.json`);
   }
 
-  private receiptMarkPathFor(fileData: string): string {
-    // Keyed, so the marker names say nothing about the files to anyone without the evidence key.
+  /** Keyed, so the marker names say nothing about the files to anyone without the evidence key. */
+  private markPathFor(folder: "receipts" | "photos", fileData: string): string {
     const id = createHmac("sha256", this.key).update(Buffer.from(fileData, "base64")).digest("hex");
-    return join(this.dir, "receipts", `${id}.json`);
+    return join(this.dir, folder, `${id}.json`);
+  }
+
+  /**
+   * Refuses a signup or claim bundle any of whose files is already in another bundle, then records its
+   * files as belonging to this one. Uploading the identical bundle again (a retry) is fine.
+   */
+  private async claimPhotoFiles(bundle: StoredBundle, evidenceHash: string): Promise<void> {
+    if (bundle.kind === "receipt") return;
+    const paths = bundle.files.map((f) => this.markPathFor("photos", f.data));
+    for (const path of paths) {
+      try {
+        const used = (JSON.parse(await readFile(path, "utf8")) as { evidenceHash: string }).evidenceHash;
+        if (used !== evidenceHash) {
+          throw new EvidenceError("A photo in this upload has been uploaded before. Take new photos of the device.", 409);
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+    }
+    await mkdir(join(this.dir, "photos"), { recursive: true });
+    for (const path of paths) await writeAtomic(path, Buffer.from(JSON.stringify({ evidenceHash })));
   }
 
   /**
@@ -453,7 +581,7 @@ export class LocalEvidenceStore {
   private async claimReceiptFiles(bundle: StoredBundle): Promise<void> {
     const claimId = bundle.receipt?.claimId;
     if (!claimId) return;
-    const paths = bundle.files.map((f) => this.receiptMarkPathFor(f.data));
+    const paths = bundle.files.map((f) => this.markPathFor("receipts", f.data));
     for (const path of paths) {
       try {
         const used = (JSON.parse(await readFile(path, "utf8")) as { claimId: string }).claimId;
@@ -476,7 +604,9 @@ export class LocalEvidenceStore {
     const bytes = encodeBundle(upload, capture);
     const evidenceHash = hashBundle(bytes);
     await mkdir(this.dir, { recursive: true });
-    await this.claimReceiptFiles(JSON.parse(bytes.toString("utf8")) as StoredBundle);
+    const bundle = JSON.parse(bytes.toString("utf8")) as StoredBundle;
+    await this.claimReceiptFiles(bundle);
+    await this.claimPhotoFiles(bundle, evidenceHash);
     if (!(await this.has(evidenceHash))) {
       await writeAtomic(this.pathFor(evidenceHash), encrypt(this.key, evidenceHash, bytes));
     }
@@ -528,17 +658,17 @@ export class LocalEvidenceStore {
    * stored, so the answer is cached rather than decrypting the whole bundle on every claim view.
    */
   async getDevice(evidenceHash: string): Promise<DeviceDetails | null> {
-    const cached = this.deviceCache.get(evidenceHash);
-    if (cached !== undefined) return cached;
-    const summary = await this.getSummary(evidenceHash);
-    if (!summary) return null;
-    this.deviceCache.set(evidenceHash, summary.device);
-    return summary.device;
+    return (await this.getSummary(evidenceHash))?.device ?? null;
   }
 
   async getSummary(evidenceHash: string): Promise<EvidenceSummary | null> {
+    const cached = this.summaryCache.get(evidenceHash);
+    if (cached) return cached;
     const bytes = await this.getRaw(evidenceHash);
-    return bytes && summarize(evidenceHash, bytes);
+    if (!bytes) return null;
+    const summary = summarize(evidenceHash, bytes);
+    this.summaryCache.set(evidenceHash, summary);
+    return summary;
   }
 
   async getFile(evidenceHash: string, index: number): Promise<{ info: EvidenceFileInfo; data: Buffer } | null> {

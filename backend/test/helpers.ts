@@ -1,7 +1,7 @@
 // Shared setup for backend tests: an in-process Hardhat chain with the real contracts deployed,
 // plus the Express app listening on a random port.
 import type { AddressInfo } from "node:net";
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +11,7 @@ import { createApp } from "../src/app";
 import { AUTH_HEADERS, authMessage } from "../src/auth";
 import { connectContracts, type Deployment, type DeploymentAddresses } from "../src/chain";
 import { CaptureChallenges } from "../src/capture";
-import { deviceIdHash, LocalEvidenceStore } from "../src/evidence";
+import { deviceIdHash, deviceProofMessage, LocalEvidenceStore, type DeviceKey } from "../src/evidence";
 import { Keeper, type KeeperOptions } from "../src/keeper";
 import { deployContracts, USDC } from "../../scripts/lib/deployContracts";
 
@@ -19,6 +19,13 @@ export { USDC };
 export const { ethers } = hre;
 
 export const PHOTO = Buffer.from("not really a jpeg, but the bytes are what matter").toString("base64");
+
+let photoCount = 0;
+/** A different photo on every call: the backend refuses a photo file that was uploaded before. */
+export function photo(): string {
+  photoCount += 1;
+  return Buffer.from(`not really a jpeg, photo #${String(photoCount).padStart(6, "0")}`).toString("base64");
+}
 
 /** A valid IMEI (Luhn check digit included) for test device `i`: 35000000000000 + i, then the check digit. */
 export function testImei(i: number): string {
@@ -103,16 +110,23 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
   await (await ctx.token.mint(ctx.deployer.address, USDC(10_000))).wait();
   await (await ctx.token.approve(poolAddr, USDC(10_000))).wait();
   await (await ctx.pool.contribute(USDC(10_000))).wait();
+  // The claimant (holders[0]) enrols from the device itself, so the browser makes a device key, and
+  // adds a proof of purchase. The other holders enrol from another device and give no proof.
+  const device = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const { kty, crv, x, y } = device.publicKey.export({ format: "jwk" });
+  const deviceKey = { kty, crv, x, y } as DeviceKey;
+  /** What the claimant's browser on the insured device signs when filing a claim with `code`. */
+  const deviceSign = (wallet: string, code: string) =>
+    sign("sha256", Buffer.from(deviceProofMessage(wallet, code)), { key: device.privateKey, dsaEncoding: "ieee-p1363" }).toString("base64");
   for (const [i, h] of holders.entries()) {
     await (await ctx.token.mint(h.address, USDC(1_000))).wait();
     await (await ctx.token.connect(h).approve(poolAddr, ethers.MaxUint256)).wait();
     // Enrol as the app would: device details and signup photos stamped with a capture code.
     const stamp = captures.consume(h.address, captures.issue(h.address).code);
-    const enrollment = await evidence.put(
-      { kind: "enrollment", device: testDevice(i), files: [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }] },
-      h.address,
-      stamp,
-    );
+    const files = [{ name: "front.jpg", contentType: "image/jpeg", data: photo() }];
+    const fromDevice = i === 0 ? { deviceKey, purchaseProof: [1] } : {};
+    if (i === 0) files.push({ name: "invoice.pdf", contentType: "application/pdf", data: photo() });
+    const enrollment = await evidence.put({ kind: "enrollment", device: testDevice(i), ...fromDevice, files }, h.address, stamp);
     await (await ctx.registry.connect(h).buyPolicy(deviceIdHash(testDevice(i)), USDC(1_000), enrollment.evidenceHash)).wait();
     // Opt in to jury duty with twice the minimum, so one no-show penalty does not end their eligibility.
     await (await ctx.pool.connect(h).stake(ctx.params.minJurorStake * 2n)).wait();
@@ -207,6 +221,7 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
     postRaw,
     captureCode,
     captures,
+    deviceSign,
     getAs,
     authHeaders,
     close,

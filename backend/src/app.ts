@@ -8,6 +8,7 @@ import {
   deviceIdHash,
   encodeBundle,
   sameDevice,
+  verifyDeviceSignature,
   EvidenceError,
   LocalEvidenceStore,
   MAX_FILE_BYTES,
@@ -213,14 +214,31 @@ export function createApp(deps: AppDeps) {
    * and serials themselves stay in the private bundles. null means there was nothing to compare.
    */
   async function checkDevice(claimant: string, claimHash: string, enrollmentHash: string | null) {
-    const enrolled = enrollmentHash ? await evidence.getDevice(enrollmentHash) : null;
-    const claimed = (await evidence.has(claimHash)) ? await evidence.getDevice(claimHash) : null;
+    const enrollment = enrollmentHash ? await evidence.getSummary(enrollmentHash) : null;
+    const claim = (await evidence.has(claimHash)) ? await evidence.getSummary(claimHash) : null;
+    const enrolled = enrollment?.device ?? null;
     let enrollmentMatchesPolicy: boolean | null = null;
     if (enrolled) {
       const policy = await contracts.registry.getPolicy(claimant);
       enrollmentMatchesPolicy = deviceIdHash(enrolled) === policy.deviceIdHash;
     }
-    return { enrollmentMatchesPolicy, claimMatchesEnrollment: sameDevice(claimed, enrolled) };
+    // Filed from the insured device: the claim's capture code is signed by the key made at signup.
+    // null when signup was not done from the device, so there is nothing to check against.
+    let filedFromDevice: boolean | null = null;
+    if (enrollment?.deviceKey && claim) {
+      filedFromDevice = Boolean(
+        claim.deviceSignature &&
+          claim.capture &&
+          verifyDeviceSignature(enrollment.deviceKey, claimant, claim.capture.code, claim.deviceSignature),
+      );
+    }
+    return {
+      enrollmentMatchesPolicy,
+      claimMatchesEnrollment: sameDevice(claim?.device ?? null, enrolled),
+      filedFromDevice,
+      /** Whether signup included proof of purchase; null without signup details. */
+      purchaseProof: enrollment ? enrollment.purchaseProof.length > 0 : null,
+    };
   }
 
   /**

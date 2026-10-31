@@ -9,6 +9,7 @@ import { PremiumPanel } from "./member/PremiumPanel";
 import { PoolPage } from "./member/PoolPage";
 import { AttentionList, NotificationBell, useNotifications } from "./member/Notifications";
 import type { MemberNotification } from "./api";
+import { createDeviceKey } from "./member/deviceKey";
 import { purchaseCoverage, quoteCoverage } from "./contracts/insurance";
 
 type IconName = "grid" | "shield" | "wallet" | "pool" | "arrow" | "check";
@@ -134,7 +135,9 @@ export default function App() {
       let enrolled = enrollmentHash;
       if (!enrolled) {
         report("Uploading your device photos…");
-        enrolled = (await enrollDevice(account, enrollmentDevice(enrollment), enrollmentFiles(enrollment), enrollment.captureCode?.code ?? "")).evidenceHash;
+        const deviceKey = enrollment.onThisDevice ? await createDeviceKey(account) : undefined;
+        const purchaseProof = enrollment.purchaseProof ? [enrollment.purchaseProof] : [];
+        enrolled = (await enrollDevice(account, enrollmentDevice(enrollment), enrollmentFiles(enrollment), enrollment.captureCode?.code ?? "", { deviceKey, purchaseProof })).evidenceHash;
         if (currentIdentity.current === started) setEnrollmentHash(enrolled);
         setAuthStatus("authenticated");
       }
