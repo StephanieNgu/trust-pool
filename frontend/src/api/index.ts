@@ -66,6 +66,7 @@ export type {
   EvidenceKind,
   ClaimBond,
   ClaimDetailView,
+  ClaimEvent,
   ClaimJury,
   ClaimState,
   ClaimView,

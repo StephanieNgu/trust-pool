@@ -275,10 +275,15 @@ export interface CaptureStamp {
   receivedAt: number;
 }
 
+/** The covered events a claim can be for; see claims/coverageTerms.ts. */
+export type ClaimEvent = "screen" | "accidental" | "liquid" | "theft" | "breakdown";
+
 export interface EvidenceSummary {
   evidenceHash: string;
   kind: EvidenceKind;
   description: string;
+  /** Claims: the covered event the claimant picked; null on older claims. */
+  event?: ClaimEvent | null;
   /** Claims: why the claimant asked for this amount, or "". */
   amountReason: string;
   device: DeviceDetails | null;

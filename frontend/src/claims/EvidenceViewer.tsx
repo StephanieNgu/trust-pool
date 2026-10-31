@@ -13,6 +13,7 @@ import {
   type ReceiptDetails,
 } from "../api";
 import { dateTime, shortHash, formatAmount } from "./presentation";
+import { coveredEvent } from "./coverageTerms";
 
 interface EvidenceViewerProps {
   account: string;
@@ -45,6 +46,7 @@ interface StoredEvidenceBundle {
   version: number;
   kind?: EvidenceKind;
   description: string;
+  event?: string;
   amountReason?: string;
   device?: DeviceDetails | null;
   receipt?: ReceiptDetails;
@@ -120,6 +122,7 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
   const [purchaseProof, setPurchaseProof] = useState<number[]>([]);
   const [description, setDescription] = useState("");
   const [amountReason, setAmountReason] = useState("");
+  const [claimEvent, setClaimEvent] = useState<string | null>(null);
   const [device, setDevice] = useState<DeviceDetails | null>(null);
   const [capture, setCapture] = useState<CaptureStamp | null>(null);
   const [kindMismatch, setKindMismatch] = useState(false);
@@ -192,6 +195,7 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
       objectUrls.current = createdUrls;
       setDescription(bundle.description);
       setAmountReason(typeof bundle.amountReason === "string" ? bundle.amountReason : "");
+      setClaimEvent(typeof bundle.event === "string" ? bundle.event : null);
       setDevice(bundle.device ?? null);
       setReceipt(bundle.receipt ?? null);
       setPurchaseProof(Array.isArray(bundle.purchaseProof) ? bundle.purchaseProof : []);
@@ -232,9 +236,10 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
     return () => window.removeEventListener(WALLET_AUTH_EVENT, onAuth);
   }, [account, evidenceHash, canRead, available]);
   const copy = COPY[source];
+  const eventInfo = coveredEvent(claimEvent);
 
   if (source === "enrollment" && !claim.enrollmentHash) {
-    return <section className="evidence-viewer" aria-label={copy.title}><div className="detail-section-heading evidence-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h3>{copy.title}</h3></div></div><p className="notice warning">This policy has no signup photos on record, so the device cannot be compared.</p></section>;
+  return <section className="evidence-viewer" aria-label={copy.title}><div className="detail-section-heading evidence-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h3>{copy.title}</h3></div></div><p className="notice warning">This policy has no signup photos on record, so the device cannot be compared.</p></section>;
   }
 
   return <section className="evidence-viewer" aria-label={copy.title}>
@@ -245,6 +250,7 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
       {error && <p className="notice warning" role="alert">{error}<button className="text-button" type="button" onClick={() => void loadEvidence()}>Try again</button></p>}
       {files.length > 0 && <>
         {kindMismatch && <p className="notice warning" role="alert">{source === "claim" ? "This claim was filed with the signup photos instead of new photos of the damage. Do not approve it." : `This is not a${source === "receipt" ? " receipt" : "n enrollment bundle"}.`}</p>}
+        {source === "claim" && <div className="evidence-description evidence-event"><span>COVERED EVENT</span><p>{eventInfo ? <><strong>{eventInfo.label}.</strong> {eventInfo.covers}<br /><em>Expect to see:</em> {eventInfo.evidence}</> : "The claimant did not pick a covered event (claims filed before the policy terms were added)."}</p></div>}
         {source === "claim" && <div className="evidence-description"><span>CLAIMANT STATEMENT</span><p>{description || "No written description was provided."}</p></div>}
         {source === "claim" && <div className="evidence-description"><span>WHY THIS AMOUNT</span><p>{amountReason || "The claimant did not explain the amount."}</p></div>}
         {device && <dl className="detail-grid compact">{(["type", "make", "model", "color", "serial", "imei"] as const).filter((key) => device[key]).map((key) => <div key={key}><dt>{key === "imei" ? "IMEI" : key[0].toUpperCase() + key.slice(1)}</dt><dd>{device[key]}</dd></div>)}</dl>}

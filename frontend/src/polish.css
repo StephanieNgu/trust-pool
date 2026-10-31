@@ -192,3 +192,139 @@
   font-size: 10px;
   color: #8b652f;
 }
+
+/* Claim form: covered event picker, and inline links inside helper text. */
+.purchase-card .claim-event-select {
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid #dce3ed;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #253047;
+  font: inherit;
+  font-size: 13px;
+}
+.purchase-card .claim-event-select:focus {
+  outline: 2px solid #94baf7;
+  border-color: transparent;
+}
+.text-button.inline-link {
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.evidence-event em {
+  font-style: normal;
+  font-weight: 600;
+}
+
+/* Policy terms page. */
+.terms-page {
+  display: grid;
+  gap: 18px;
+  max-width: 980px;
+}
+.terms-card {
+  background: #fff;
+  border: 1px solid #e5eaf2;
+  border-radius: 15px;
+  padding: 26px 28px;
+}
+.terms-card h2 {
+  font-size: 19px;
+  letter-spacing: -0.5px;
+  margin: 4px 0 16px;
+}
+.terms-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 8px 0 0;
+}
+.terms-facts > div {
+  background: #f7faff;
+  border: 1px solid #e4ebf5;
+  border-radius: 11px;
+  padding: 14px 16px;
+}
+.terms-facts dt {
+  font-size: 10px;
+  color: #74849b;
+}
+.terms-facts dd {
+  margin: 6px 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #253047;
+}
+.terms-facts small {
+  font-size: 10px;
+  color: #8090a7;
+  line-height: 1.5;
+}
+.terms-events {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.terms-event {
+  border: 1px solid #e3e9f2;
+  border-radius: 12px;
+  padding: 15px 17px;
+  background: #fbfcfe;
+}
+.terms-event h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+.terms-event p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: #5d6e86;
+  margin: 0;
+}
+.terms-event .terms-evidence {
+  margin-top: 8px;
+  color: #3c689e;
+}
+.terms-list,
+.terms-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #425774;
+}
+.terms-steps li {
+  margin-bottom: 8px;
+}
+.terms-card > .muted {
+  margin: 10px 0 0;
+}
+.terms-footnote {
+  font-size: 10px;
+  color: #8090a7;
+  margin: 0;
+}
+.terms-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+@media (max-width: 800px) {
+  .terms-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .terms-events {
+    grid-template-columns: 1fr;
+  }
+  .terms-card {
+    padding: 22px 20px;
+  }
+}
+@media (max-width: 480px) {
+  .terms-facts {
+    grid-template-columns: 1fr;
+  }
+}

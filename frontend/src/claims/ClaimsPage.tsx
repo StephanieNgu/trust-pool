@@ -6,6 +6,7 @@ import {
   getClaimsForMember,
   uploadEvidence,
   type CaptureCode,
+  type ClaimEvent,
   type ClaimView,
   type DashboardOverview,
 } from "../api";
@@ -16,6 +17,7 @@ import { claimBond } from "./bond";
 import { ClaimDetail } from "./ClaimDetail";
 import { CLAIM_FILTERS, CLAIM_STATE_COPY, type ClaimFilter, matchesClaimFilter, dateTime, shortHash, formatAmount } from "./presentation";
 import { contractErrorMessage } from "../contracts/errors";
+import { COVERED_EVENTS, coveredEvent } from "./coverageTerms";
 
 interface ClaimsPageProps {
   account: string | null;
@@ -23,6 +25,8 @@ interface ClaimsPageProps {
   overview: DashboardOverview | null;
   onAuthenticated(): void;
   onSubmitted(): void;
+  /** Opens the policy terms page. */
+  onOpenTerms?(): void;
   /** A claim to open, e.g. from a notification; a new nonce reopens the same claim. */
   focusClaim?: { id: string; nonce: number } | null;
 }
@@ -53,13 +57,14 @@ function bondPreview(amount: string, overview: DashboardOverview | null): string
   }
 }
 
-export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticated, onSubmitted }: ClaimsPageProps) {
+export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticated, onSubmitted, onOpenTerms }: ClaimsPageProps) {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [captureCode, setCaptureCode] = useState<CaptureCode | null>(null);
   const [deviceId, setDeviceId] = useState("");
   const [amountReason, setAmountReason] = useState("");
+  const [claimEvent, setClaimEvent] = useState<ClaimEvent | "">("");
   const [onInsuredDevice, setOnInsuredDevice] = useState(false);
 
   useEffect(() => {
@@ -124,6 +129,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     if (!overview.pastWaitingPeriod) { setError("Your policy waiting period has not ended yet."); return; }
     if (overview.openClaimId) { setError(`Policy already has open claim #${overview.openClaimId}.`); return; }
     if (overview.jurorsAvailable < overview.jurySize) { setError(`A jury needs ${overview.jurySize} other members with active coverage and a juror stake; only ${overview.jurorsAvailable} are available right now.`); return; }
+    if (!claimEvent) { setError("Choose what happened to the device."); return; }
     if (!amountReason.trim()) { setError("Explain how you arrived at the amount, so jurors can judge it."); return; }
     try {
       const requested = parseUnits(amount, overview.tokenDecimals);
@@ -143,7 +149,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     try {
       // Filing from the insured device: sign the capture code with the key made at signup, if any.
       const deviceSignature = captureCode ? (await signWithDeviceKey(account, captureCode.code)) ?? undefined : undefined;
-      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId, amountReason, deviceSignature);
+      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId, amountReason, deviceSignature, claimEvent);
       onAuthenticated();
       setFeedback(`Evidence uploaded (${shortHash(evidence.evidenceHash)}).`);
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
@@ -154,6 +160,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
       setCaptureCode(null);
       setDeviceId("");
       setAmountReason("");
+      setClaimEvent("");
       if (fileInput.current) fileInput.current.value = "";
       setClaimRefresh((value) => value + 1);
       onSubmitted();
@@ -167,13 +174,14 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   }
 
   const bond = bondPreview(amount, overview);
+  const selectedEvent = coveredEvent(claimEvent);
   const tooFewJurors = overview ? overview.jurorsAvailable < overview.jurySize : false;
   const capBelowAsk = (() => {
     if (!overview || !amount) return false;
     try { return parseUnits(amount, overview.tokenDecimals) > parseUnits(overview.cap, overview.tokenDecimals); } catch { return false; }
   })();
   const canSubmit = Boolean(
-    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && !tooFewJurors && amount && amountReason.trim() && files.length && captureCode,
+    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && !tooFewJurors && claimEvent && amount && amountReason.trim() && files.length && captureCode,
   );
   const accepted = ALLOWED_EVIDENCE_TYPES.join(",");
 
@@ -221,6 +229,13 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
 
       {overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && tooFewJurors && <p className="notice warning">Claims are paused: a jury needs {overview.jurySize} other members with active coverage and a juror stake, and only {overview.jurorsAvailable} {overview.jurorsAvailable === 1 ? "is" : "are"} available right now.</p>}
 
+      <label htmlFor="claim-event">What happened to the device?</label>
+      <select id="claim-event" className="claim-event-select" value={claimEvent} onChange={(event) => setClaimEvent(event.target.value as ClaimEvent | "")} required disabled={busy}>
+        <option value="">Choose a covered event…</option>
+        {COVERED_EVENTS.map((covered) => <option key={covered.id} value={covered.id}>{covered.label}</option>)}
+      </select>
+      <small>{selectedEvent ? <>{selectedEvent.covers} <strong>Include:</strong> {selectedEvent.evidence}</> : "Loss, wear and tear, and deliberate damage aren't covered."} {onOpenTerms && <button className="text-button inline-link" type="button" onClick={onOpenTerms}>What's covered?</button>}</small>
+
       <label htmlFor="claim-amount">Requested payout</label>
       <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.coverage} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
       <small>Maximum: {overview?.active ? `${Number(overview.coverage).toLocaleString()} ${overview.tokenSymbol}` : "—"}</small>
@@ -234,7 +249,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
       <textarea id="claim-amount-reason" value={amountReason} onChange={(event) => setAmountReason(event.target.value)} placeholder="e.g. The repair shop quoted 280 for a new screen. Add the quote below if you have one." maxLength={MAX_AMOUNT_REASON_LENGTH} rows={3} required disabled={busy} />
       <small>Jurors vote how much to pay, from nothing up to what you ask. A repair quote or price for a replacement helps them agree with your amount.</small>
 
-      <label htmlFor="claim-description">What happened?</label>
+      <label htmlFor="claim-description">Tell jurors what happened</label>
       <textarea id="claim-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the damage, loss, and when it occurred." maxLength={2000} rows={5} disabled={busy} />
       <small>{description.length}/2,000 characters</small>
 

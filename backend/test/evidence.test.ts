@@ -209,6 +209,18 @@ describe("LocalEvidenceStore", async () => {
     assert.ok(!encodeBundle({ files: [file("q")] }).toString().includes("amountReason"));
   });
 
+  it("records which covered event a claim is for", async () => {
+    const { evidenceHash, event } = await store.put({ event: "liquid", files: [file("e")] }, ALICE);
+    assert.equal(event, "liquid");
+    assert.equal((await store.getSummary(evidenceHash))?.event, "liquid");
+    // Not a covered event, or not a claim.
+    assert.throws(() => encodeBundle({ event: "loss", files: [file("e")] }), EvidenceError);
+    assert.throws(() => encodeBundle({ kind: "enrollment", event: "screen", files: [file("e")] }), EvidenceError);
+    // Older claims have none, and serialize exactly as before.
+    assert.equal((await store.put({ files: [file("e2")] }, ALICE)).event, null);
+    assert.ok(!encodeBundle({ files: [file("e")] }).toString().includes("event"));
+  });
+
   it("stores juror notes encrypted, under the hash sealed into the vote", async () => {
     const hash = await store.putNote(7, BOB, "Only the screen is cracked.");
     assert.equal(hash, noteHash("Only the screen is cracked."));

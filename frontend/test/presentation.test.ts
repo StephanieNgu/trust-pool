@@ -30,3 +30,11 @@ describe("juror labels", () => {
     assert.equal(jurorLabel(-1), "Juror");
   });
 });
+
+describe("covered events", () => {
+  it("lists exactly the events the backend accepts on a claim", async () => {
+    const { COVERED_EVENTS } = await import("../src/claims/coverageTerms");
+    const { CLAIM_EVENTS } = await import("../../backend/src/evidence");
+    assert.deepEqual(COVERED_EVENTS.map((event) => event.id), [...CLAIM_EVENTS]);
+  });
+});
