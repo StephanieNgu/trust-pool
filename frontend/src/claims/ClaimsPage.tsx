@@ -6,7 +6,6 @@ import {
   getClaimsForMember,
   uploadEvidence,
   type CaptureCode,
-  type ClaimState,
   type ClaimView,
   type DashboardOverview,
 } from "../api";
@@ -15,7 +14,7 @@ import { submitClaim } from "../contracts/claims";
 import { hasDeviceKey, signWithDeviceKey } from "../member/deviceKey";
 import { claimBond } from "./bond";
 import { ClaimDetail } from "./ClaimDetail";
-import { CLAIM_STATE_COPY, dateTime, shortHash, formatAmount } from "./presentation";
+import { CLAIM_FILTERS, CLAIM_STATE_COPY, type ClaimFilter, matchesClaimFilter, dateTime, shortHash, formatAmount } from "./presentation";
 import { contractErrorMessage } from "../contracts/errors";
 
 interface ClaimsPageProps {
@@ -77,7 +76,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   const [claimsError, setClaimsError] = useState("");
   const [claimRefresh, setClaimRefresh] = useState(0);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
-  const [stateFilter, setStateFilter] = useState<ClaimState | "All">("All");
+  const [stateFilter, setStateFilter] = useState<ClaimFilter>("All");
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
 
@@ -105,8 +104,8 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     setClaimsError("");
     if (!account || !ready) return () => { active = false; };
     setLoadingClaims(true);
-    void getClaimsForMember(account, stateFilter === "All" ? undefined : stateFilter)
-      .then((items) => { if (active) setClaims(items); })
+    void getClaimsForMember(account)
+      .then((items) => { if (active) setClaims(items.filter((claim) => matchesClaimFilter(claim.state, stateFilter))); })
       .catch((cause) => { if (active) setClaimsError(message(cause)); })
       .finally(() => { if (active) setLoadingClaims(false); });
     return () => { active = false; };
@@ -184,10 +183,10 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   }
 
   const claimList = <section className="claims-panel" aria-label="My claims">
-      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><div className="claims-panel-actions"><label htmlFor="claim-state-filter">Status</label><select id="claim-state-filter" value={stateFilter} disabled={!ready || loadingClaims} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Expired", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div></div>
+      <div className="claims-panel-heading"><div><span className="eyebrow">ON-CHAIN HISTORY</span><h2>My claims</h2></div><div className="claims-panel-actions"><label htmlFor="claim-state-filter">Status</label><select id="claim-state-filter" value={stateFilter} disabled={!ready || loadingClaims} onChange={(event) => setStateFilter(event.target.value as ClaimFilter)}>{CLAIM_FILTERS.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}</select><button className="text-button" type="button" disabled={!ready || loadingClaims} onClick={() => setClaimRefresh((value) => value + 1)}>Refresh</button></div></div>
       {claimsError && <p className="notice warning" role="alert">{claimsError}</p>}
       {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
-      {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No claims yet" : `No ${CLAIM_STATE_COPY[stateFilter].toLowerCase()} claims`}</strong><p>{stateFilter === "All" ? "Your submitted claims and their jury status will appear here." : "Choose another status to view the rest of your claim history."}</p></div>}
+      {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No claims yet" : `No ${stateFilter.toLowerCase()} claims`}</strong><p>{stateFilter === "All" ? "Your submitted claims and their jury status will appear here." : "Choose another status to view the rest of your claim history."}</p></div>}
       <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>
         <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatAmount(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
         <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Offered" || claim.state === "Approved" || claim.state === "Paid" ? <div><dt>{claim.state === "Offered" ? "Jury's offer" : "Payout"}</dt><dd>{formatAmount(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>

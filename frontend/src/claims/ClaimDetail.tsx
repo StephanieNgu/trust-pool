@@ -7,7 +7,7 @@ import { JuryVotePanel } from "./JuryVotePanel";
 import { JuryReasoning, OfferPanel } from "./OfferPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { EvidenceViewer } from "./EvidenceViewer";
-import { CLAIM_STATE_COPY, dateTime, shortHash, formatAmount } from "./presentation";
+import { CLAIM_STATE_COPY, dateTime, jurorLabel, formatAmount } from "./presentation";
 
 interface ClaimDetailProps {
   claimId: string;
@@ -146,7 +146,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
       <div><dt>Policy</dt><dd>#{claim.policyId}</dd></div>
       <div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div>
       <div><dt>Coverage limit</dt><dd>{formatAmount(claim.coverageLimit, tokenDecimals)} {tokenSymbol}</dd></div>
-      <div><dt>{claim.state === "Paid" ? "Paid out" : claim.receipt.amount ? "Payout (offer or receipt, if less)" : claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatAmount(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
+      <div><dt>{claim.state === "Paid" ? "Paid out" : claim.receipt.amount ? "Payout (offer or receipt, if less)" : claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatAmount(claim.payoutAmount, tokenDecimals)} {tokenSymbol}{!claim.receipt.amount && claim.state !== "Paid" && BigInt(claim.payoutAmount) < BigInt(claim.amount) && <small className="cap-note">Limited by the pool cap: one claim can take at most a set share of the pool. {formatAmount(claim.amount, tokenDecimals)} was asked.</small>}</dd></div>
       <div><dt>Claim bond</dt><dd>{bondText(claim, tokenDecimals, tokenSymbol)}</dd></div>
       {claim.offerDeadline && <div><dt>Claimant responds by</dt><dd>{dateTime(claim.offerDeadline)}</dd></div>}
       {claim.state === "Approved" && !claim.receipt.hash && <div><dt>Receipt due by</dt><dd>{dateTime(claim.receipt.deadline)}</dd></div>}
@@ -177,7 +177,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>
       <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Revealed</dt><dd>{jury.approvals + jury.rejections} of {jury.jurors.length} (quorum {jury.quorum})</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} would pay · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
       {chainTimeError && <p className="notice warning">Could not synchronize blockchain time: {chainTimeError}</p>}
-      <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? (juror.amount === "0" ? "Rejects" : `Pays ${formatAmount(juror.amount ?? "0", tokenDecimals)}`) : juror.committed ? "Sealed" : "Waiting"}{juror.reward && juror.reward !== "0" && <small className="juror-reward">+{formatAmount(juror.reward, tokenDecimals)} fee</small>}{juror.penalty && juror.penalty !== "0" && <small className="juror-penalty">−{formatAmount(juror.penalty, tokenDecimals)} no-show</small>}</span></div>)}</div>
+      <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{jurorLabel(index).slice(-1)}</b><span className="juror-name">{jurorLabel(index)}</span>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? (juror.amount === "0" ? "Rejects" : `Pays ${formatAmount(juror.amount ?? "0", tokenDecimals)}`) : juror.committed ? "Sealed" : "Waiting"}{juror.reward && juror.reward !== "0" && <small className="juror-reward">+{formatAmount(juror.reward, tokenDecimals)} fee</small>}{juror.penalty && juror.penalty !== "0" && <small className="juror-penalty">−{formatAmount(juror.penalty, tokenDecimals)} no-show</small>}</span></div>)}</div>
       {enableJurorActions && <JuryVotePanel claim={claim} account={account} chainTimestamp={chainTimestamp} evidenceVerified={evidenceVerified} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />}
       {claim.state !== "Offered" && <JuryReasoning claim={claim} account={account} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />}
     </>}

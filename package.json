@@ -18,6 +18,7 @@
     "chain": "hardhat node",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "demo": "hardhat run scripts/demo.js",
+    "seed:demo": "hardhat run scripts/seed-demo.js --network localhost",
     "lint": "npm run lint:js && npm run lint:sol",
     "lint:js": "eslint .",
     "lint:sol": "solhint \"contracts/**/*.sol\"",

@@ -14,8 +14,28 @@ export const CLAIM_STATE_COPY: Record<ClaimState, string> = {
   Expired: "Expired",
 };
 
+/** The claim list filter: most members only need to tell live claims from finished ones. */
+export type ClaimFilter = "All" | "Open" | "Closed";
+export const CLAIM_FILTERS: { value: ClaimFilter; label: string }[] = [
+  { value: "All", label: "All claims" },
+  { value: "Open", label: "Open" },
+  { value: "Closed", label: "Closed" },
+];
+const OPEN_STATES: readonly ClaimState[] = ["Submitted", "JuryPending", "Voting", "Offered", "Approved"];
+export function matchesClaimFilter(state: ClaimState, filter: ClaimFilter) {
+  return filter === "All" || OPEN_STATES.includes(state) === (filter === "Open");
+}
+
 export function shortHash(value: string) {
   return `${value.slice(0, 8)}…${value.slice(-6)}`;
+}
+
+/**
+ * Jurors by their seat on the jury ("Juror A" to "Juror E") rather than their wallet, so the claimant
+ * and the other jurors don't see who voted what.
+ */
+export function jurorLabel(index: number) {
+  return index >= 0 && index < 26 ? `Juror ${String.fromCharCode(65 + index)}` : "Juror";
 }
 
 export function dateTime(timestamp: number | null) {

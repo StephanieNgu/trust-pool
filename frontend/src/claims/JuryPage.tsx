@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { getClaimsForJuror, type ClaimState, type ClaimView, type DashboardOverview } from "../api";
+import { getClaimsForJuror, type ClaimView, type DashboardOverview } from "../api";
 import { JuryDuty } from "../member/JuryDuty";
 import { ClaimDetail } from "./ClaimDetail";
-import { CLAIM_STATE_COPY, dateTime, formatAmount } from "./presentation";
+import { CLAIM_FILTERS, CLAIM_STATE_COPY, type ClaimFilter, matchesClaimFilter, dateTime, formatAmount } from "./presentation";
 
 interface JuryPageProps {
   account: string | null;
@@ -45,7 +45,7 @@ export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
-  const [stateFilter, setStateFilter] = useState<ClaimState | "All">("All");
+  const [stateFilter, setStateFilter] = useState<ClaimFilter>("All");
 
   useEffect(() => {
     setClaims([]);
@@ -62,8 +62,8 @@ export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated
     setError("");
     if (!account || !ready) return () => { active = false; };
     setLoading(true);
-    void getClaimsForJuror(account, stateFilter === "All" ? undefined : stateFilter)
-      .then((items) => { if (active) setClaims(items); })
+    void getClaimsForJuror(account)
+      .then((items) => { if (active) setClaims(items.filter((claim) => matchesClaimFilter(claim.state, stateFilter))); })
       .catch((cause) => { if (active) setError(errorText(cause)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -81,12 +81,12 @@ export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated
 
   const activeTasks = account ? claims.filter((claim) => jurorTask(claim, account).includes("required")).length : 0;
   return <section className="claims-panel jury-panel" aria-label="Jury queue">
-    <div className="claims-panel-heading"><div><span className="eyebrow">YOUR ASSIGNMENTS</span><h2>Claims you were picked for</h2></div><div className="claims-panel-actions"><label htmlFor="jury-state-filter">Status</label><select id="jury-state-filter" value={stateFilter} disabled={!ready || loading} onChange={(event) => setStateFilter(event.target.value as ClaimState | "All")}><option value="All">All statuses</option>{(["JuryPending", "Voting", "Offered", "Approved", "Rejected", "Paid", "Withdrawn", "Expired", "Cancelled"] satisfies ClaimState[]).map((state) => <option key={state} value={state}>{CLAIM_STATE_COPY[state]}</option>)}</select><button className="text-button" type="button" disabled={!ready || loading} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div></div>
+    <div className="claims-panel-heading"><div><span className="eyebrow">YOUR ASSIGNMENTS</span><h2>Claims you were picked for</h2></div><div className="claims-panel-actions"><label htmlFor="jury-state-filter">Status</label><select id="jury-state-filter" value={stateFilter} disabled={!ready || loading} onChange={(event) => setStateFilter(event.target.value as ClaimFilter)}>{CLAIM_FILTERS.map((filter) => <option key={filter.value} value={filter.value}>{filter.label}</option>)}</select><button className="text-button" type="button" disabled={!ready || loading} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div></div>
     <JuryDuty account={account} ready={ready} overview={overview} onChanged={onStakeChanged} />
     <div className="jury-summary"><div><strong>{claims.length}</strong><span>Total assignments</span></div><div><strong>{activeTasks}</strong><span>Actions required</span></div></div>
     {error && <p className="notice warning" role="alert">{error}</p>}
     {loading && <p className="muted" role="status">Loading jury assignments from the backend…</p>}
-    {!loading && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No jury assignments" : `No ${CLAIM_STATE_COPY[stateFilter].toLowerCase()} assignments`}</strong><p>{stateFilter === "All" ? "When the protocol selects this wallet, the claim will appear here." : "Choose another status to view the rest of your jury history."}</p></div>}
+    {!loading && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No jury assignments" : `No ${stateFilter.toLowerCase()} assignments`}</strong><p>{stateFilter === "All" ? "When the protocol selects this wallet, the claim will appear here." : "Choose another status to view the rest of your jury history."}</p></div>}
     <div className="jury-queue">{account && claims.map((claim) => {
       const task = jurorTask(claim, account);
       return <article className="jury-card" key={claim.id}>

@@ -1,3 +1,4 @@
+import { displayAmount } from "../claims/presentation";
 import { useEffect, useState, type FormEvent } from "react";
 import type { DashboardOverview } from "../api";
 import { contributeToPool } from "../contracts/member";
@@ -11,7 +12,7 @@ interface PoolPageProps {
 }
 
 function money(value?: string) {
-  return value === undefined ? "—" : Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  return value === undefined ? "—" : displayAmount(value);
 }
 
 function errorText(error: unknown) {

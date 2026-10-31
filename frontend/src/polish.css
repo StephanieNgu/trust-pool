@@ -176,3 +176,19 @@
 .detail-grid > div {
   box-shadow: 1px 0 0 #e8edf4, 0 1px 0 #e8edf4;
 }
+/* Jurors by seat letter instead of wallet address. */
+.juror-row .juror-name {
+  font-weight: 600;
+  color: #4d607c;
+}
+.reasoning-juror {
+  font-size: 10px;
+  color: #8090a7;
+  white-space: nowrap;
+}
+.detail-grid .cap-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #8b652f;
+}

@@ -1,3 +1,4 @@
+import { displayAmount } from "./claims/presentation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { HARDHAT_LOCAL_CHAIN_ID, useWallet } from "./wallet";
 import { authenticateWallet, clearWalletAuth, enrollDevice, getDashboardOverview, readCachedWalletAuth, validateDeviceDetails, type DashboardOverview } from "./api";
@@ -22,7 +23,7 @@ function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }
 const short = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
-const money = (value?: string) => value === undefined ? "—" : Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
+const money = (value?: string) => value === undefined ? "—" : displayAmount(value);
 function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) return "Request cancelled in your wallet. You can try again.";
   const reverted = contractErrorMessage(error);
