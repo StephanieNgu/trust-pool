@@ -26,6 +26,7 @@ describe("claim flow through the backend", () => {
       captureCode: code,
       deviceSignature: t.deviceSign(claimant.address, code),
       description: "Cracked screen after a drop",
+      event: "screen",
       amountReason: "The shop quoted 300 for a new screen and battery.",
       device: { imei: testImei(0) },
       files: [{ name: "front.jpg", contentType: "image/jpeg", data: photo() }],

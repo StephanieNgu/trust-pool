@@ -42,6 +42,14 @@ export const BUNDLE_KINDS = ["claim", "enrollment", "receipt"] as const;
 export type BundleKind = (typeof BUNDLE_KINDS)[number];
 export const MAX_DEVICE_FIELD_LENGTH = 64;
 export const MAX_FILES = 10;
+
+/**
+ * What a claim can be for, as the policy terms list them: a cracked screen, other accidental damage,
+ * liquid damage, theft, or a breakdown outside the maker's warranty. Loss, wear and deliberate
+ * damage are not covered, so they are not on the list.
+ */
+export const CLAIM_EVENTS = ["screen", "accidental", "liquid", "theft", "breakdown"] as const;
+export type ClaimEvent = (typeof CLAIM_EVENTS)[number];
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_DESCRIPTION_LENGTH = 2_000;
 /** A claim's explanation of the amount asked for, e.g. "repair quote from the shop: 280". */
@@ -146,6 +154,8 @@ export interface EvidenceUpload {
   /** Claims only: the device key's signature over deviceProofMessage(claimant, captureCode). */
   deviceSignature?: string;
   description?: string;
+  /** Claims only: which covered event happened (see CLAIM_EVENTS). */
+  event?: ClaimEvent;
   /** Claims only: why the claimant asked for this amount. A repair quote can be one of the files. */
   amountReason?: string;
   device?: DeviceDetails;
@@ -164,6 +174,7 @@ interface StoredBundle {
   version: number;
   kind?: BundleKind;
   description: string;
+  event?: ClaimEvent;
   amountReason?: string;
   device?: DeviceDetails | null;
   receipt?: ReceiptDetails;
@@ -185,6 +196,8 @@ export interface EvidenceSummary {
   evidenceHash: string;
   kind: BundleKind;
   description: string;
+  /** Claims: the covered event the claimant picked, or null (older claims have none). */
+  event: ClaimEvent | null;
   /** Claims: the claimant's explanation of the amount, or "" if they gave none. */
   amountReason: string;
   device: DeviceDetails | null;
@@ -377,7 +390,7 @@ export function sameDevice(claimed: DeviceDetails | null, enrolled: DeviceDetail
  */
 export function encodeBundle(upload: unknown, capture: CaptureStamp | null = null): Buffer {
   if (!upload || typeof upload !== "object") throw new EvidenceError("Body must be a JSON object.", 400);
-  const { kind = "claim", description = "", amountReason, device, receipt, deviceKey, purchaseProof, deviceSignature, files } =
+  const { kind = "claim", description = "", event, amountReason, device, receipt, deviceKey, purchaseProof, deviceSignature, files } =
     upload as Partial<EvidenceUpload>;
 
   if (!(BUNDLE_KINDS as readonly unknown[]).includes(kind)) {
@@ -390,6 +403,12 @@ export function encodeBundle(upload: unknown, capture: CaptureStamp | null = nul
     if (kind !== "claim") throw new EvidenceError("amountReason is only for claim evidence.", 400);
     if (typeof amountReason !== "string" || amountReason.length > MAX_AMOUNT_REASON_LENGTH) {
       throw new EvidenceError(`amountReason must be a string of at most ${MAX_AMOUNT_REASON_LENGTH} characters.`, 400);
+    }
+  }
+  if (event !== undefined) {
+    if (kind !== "claim") throw new EvidenceError("event is only for claim evidence.", 400);
+    if (!(CLAIM_EVENTS as readonly unknown[]).includes(event)) {
+      throw new EvidenceError(`event must be one of ${CLAIM_EVENTS.join(", ")}.`, 400);
     }
   }
   if (kind === "receipt" && device !== undefined) throw new EvidenceError("A receipt has no device details.", 400);
@@ -421,7 +440,8 @@ export function encodeBundle(upload: unknown, capture: CaptureStamp | null = nul
     version: BUNDLE_VERSION,
     kind,
     description,
-    // Left out when absent, so bundles without one hash exactly as before.
+    // Left out when absent, so bundles without them hash exactly as before.
+    ...optional("event", event),
     ...(amountReason ? { amountReason } : {}),
     device: validateDevice(device, kind),
     ...(receiptDetails ? { receipt: receiptDetails } : {}),
@@ -456,6 +476,7 @@ function summarize(evidenceHash: string, bytes: Buffer): EvidenceSummary {
     evidenceHash,
     kind: bundle.kind ?? "claim",
     description: bundle.description,
+    event: bundle.event ?? null,
     amountReason: bundle.amountReason ?? "",
     device: bundle.device ?? null,
     receipt: bundle.receipt ?? null,

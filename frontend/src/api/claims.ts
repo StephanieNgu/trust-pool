@@ -5,6 +5,7 @@ import type { DeviceKeyJwk } from "../member/deviceKey";
 import type {
   CaptureCode,
   ClaimDetailView,
+  ClaimEvent,
   ClaimState,
   ClaimView,
   DeviceDetails,
@@ -139,6 +140,7 @@ async function postBundle(
   body: {
     kind: EvidenceKind;
     description: string;
+    event?: ClaimEvent;
     amountReason?: string;
     device?: DeviceDetails;
     receipt?: ReceiptDetails;
@@ -171,6 +173,7 @@ async function postBundle(
  * Uploads claim evidence. `captureCode` must be one this wallet requested and the photos should show.
  * `deviceId` is optional: the IMEI or serial number the claimant typed, matched against the enrollment.
  * `amountReason` tells jurors why the claim asks for this amount; a repair quote can be one of `files`.
+ * `event` is the covered event the claim is for.
  */
 export async function uploadEvidence(
   address: string,
@@ -180,12 +183,13 @@ export async function uploadEvidence(
   deviceId = "",
   amountReason = "",
   deviceSignature?: string,
+  event?: ClaimEvent,
 ): Promise<EvidenceSummary> {
   const device = claimDeviceId(deviceId);
   const reason = amountReason.trim();
   return postBundle(
     address,
-    { kind: "claim", description, ...(reason ? { amountReason: reason } : {}), device, ...(deviceSignature ? { deviceSignature } : {}), captureCode },
+    { kind: "claim", description, ...(event ? { event } : {}), ...(reason ? { amountReason: reason } : {}), device, ...(deviceSignature ? { deviceSignature } : {}), captureCode },
     files,
   );
 }
