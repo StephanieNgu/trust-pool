@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { getEvidence, readCachedWalletAuth, WALLET_AUTH_EVENT, type DeviceDetails } from "../api";
+import { getEvidence, getProfileIfSignedIn, readCachedWalletAuth, updateProfileIfSignedIn, WALLET_AUTH_EVENT, type DeviceDetails } from "../api";
 
-// Per-wallet conveniences kept in this browser only: the insured device's name (its details are
-// stored encrypted on the backend) and the name the member chose to be greeted by.
+// Per-wallet conveniences: the insured device's name (its details are stored encrypted on the
+// backend), a nickname for it, and the name the member chose to be greeted by. Kept in this browser,
+// and in the member's profile on the backend once signed in, so they follow the member around.
 const deviceKey = (account: string, enrollmentHash: string) => `trustpool:device:${account.toLowerCase()}:${enrollmentHash.toLowerCase()}`;
 const nameKey = (account: string) => `trustpool:name:${account.toLowerCase()}`;
+const nicknameKey = (account: string) => `trustpool:device-nickname:${account.toLowerCase()}`;
 const LAST_DEVICE_KEY = (account: string) => `trustpool:device-pending:${account.toLowerCase()}`;
 
 function read(key: string): string | null {
@@ -65,17 +67,51 @@ export function useDeviceLabel(account: string | null, enrollmentHash: string | 
   return label;
 }
 
-/** The name this browser greets the member by, and a setter (empty clears it). */
-export function useDisplayName(account: string | null): [string | null, (name: string) => void] {
-  const [name, setName] = useState<string | null>(null);
-  useEffect(() => { setName(account ? read(nameKey(account)) : null); }, [account]);
-  const update = (value: string) => {
+/**
+ * A text field of the member's profile, with this browser's copy as the fallback. When signed in, the
+ * profile's value wins; if only this browser has one (set before signing in), it is saved up to the
+ * profile. Returns the value and a setter (empty clears it).
+ */
+function useProfileField(account: string | null, field: "displayName" | "deviceNickname", key: (account: string) => string, max: number): [string | null, (value: string) => void] {
+  const [value, setValue] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setValue(account ? read(key(account)) : null);
+    if (!account) return () => { active = false; };
+    const sync = () => {
+      void getProfileIfSignedIn(account).then((profile) => {
+        if (!profile || !active) return;
+        const local = read(key(account));
+        if (profile[field]) {
+          write(key(account), profile[field]);
+          setValue(profile[field]);
+        } else if (local) {
+          void updateProfileIfSignedIn(account, { [field]: local }).catch(() => undefined);
+        }
+      }).catch(() => { /* keep this browser's copy */ });
+    };
+    sync();
+    window.addEventListener(WALLET_AUTH_EVENT, sync);
+    return () => { active = false; window.removeEventListener(WALLET_AUTH_EVENT, sync); };
+  }, [account, field, key]);
+  const update = (next: string) => {
     if (!account) return;
-    const trimmed = value.trim().slice(0, 40);
-    write(nameKey(account), trimmed || null);
-    setName(trimmed || null);
+    const trimmed = next.trim().replace(/\s+/g, " ").slice(0, max);
+    write(key(account), trimmed || null);
+    setValue(trimmed || null);
+    void updateProfileIfSignedIn(account, { [field]: trimmed }).catch(() => undefined);
   };
-  return [name, update];
+  return [value, update];
+}
+
+/** The name the member is greeted by, and a setter (empty clears it). */
+export function useDisplayName(account: string | null): [string | null, (name: string) => void] {
+  return useProfileField(account, "displayName", nameKey, 40);
+}
+
+/** What the member calls their device ("Work phone"), and a setter (empty goes back to make and model). */
+export function useDeviceNickname(account: string | null): [string | null, (name: string) => void] {
+  return useProfileField(account, "deviceNickname", nicknameKey, 60);
 }
 
 export function initials(name: string | null): string {

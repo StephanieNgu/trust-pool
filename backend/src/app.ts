@@ -2,6 +2,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { isAddress, type Provider } from "ethers";
 import { CLAIM_STATES, type ClaimState } from "./abis";
 import { AUTH_HEADERS, AUTH_MAX_AGE_SECONDS, AuthError, authMessage, authenticate } from "./auth";
+import { AccountStore, ProfileError } from "./accounts";
 import { CaptureChallenges, CaptureError } from "./capture";
 import type { Deployment, ProtocolContracts } from "./chain";
 import {
@@ -30,6 +31,8 @@ export interface AppDeps {
   keeper?: Keeper | null;
   /** Value for Access-Control-Allow-Origin; omit to disable CORS headers. */
   corsOrigin?: string;
+  /** Sign-in sessions and member profiles; in memory by default. */
+  accounts?: AccountStore;
 }
 
 class HttpError extends Error {
@@ -62,6 +65,7 @@ function parseHash(value: unknown): string {
 export function createApp(deps: AppDeps) {
   const { deployment, provider, contracts, evidence, keeper } = deps;
   const captures = deps.captures ?? new CaptureChallenges();
+  const accounts = deps.accounts ?? new AccountStore();
   const app = express();
   app.disable("x-powered-by");
 
@@ -70,7 +74,7 @@ export function createApp(deps: AppDeps) {
     app.use((req, res, next) => {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", ["Content-Type", ...Object.values(AUTH_HEADERS)].join(", "));
+      res.setHeader("Access-Control-Allow-Headers", ["Content-Type", "Authorization", ...Object.values(AUTH_HEADERS)].join(", "));
       if (req.method === "OPTIONS") {
         res.sendStatus(204);
         return;
@@ -92,8 +96,22 @@ export function createApp(deps: AppDeps) {
   // Service and protocol info
   // ---------------------------------------------------------------------------
 
-  /** The wallet whose signature authenticates this request, or a 401. */
-  const wallet = (req: Request) => authenticate((name) => req.get(name), deployment.chainId);
+  /** A session token from `Authorization: Bearer …`, if the request carries one. */
+  const bearer = (req: Request) => /^Bearer\s+(\S+)$/i.exec(req.get("authorization") ?? "")?.[1] ?? null;
+
+  /**
+   * The wallet behind this request, or a 401: either a session opened with POST /api/auth/session, or a
+   * fresh signature in the x-trustpool headers (what opens a session, and what scripts can still use).
+   */
+  const wallet = async (req: Request): Promise<string> => {
+    const token = bearer(req);
+    if (token) {
+      const session = await accounts.resolveSession(token);
+      if (!session) throw new AuthError("Your sign-in has expired; sign in again.");
+      return session.address;
+    }
+    return authenticate((name) => req.get(name), deployment.chainId);
+  };
 
   /**
    * Evidence is private. It is served to whoever uploaded it, and to the jurors of a claim that one of
@@ -105,7 +123,7 @@ export function createApp(deps: AppDeps) {
    * callers get a 403.
    */
   async function requireEvidenceAccess(req: Request, evidenceHash: string): Promise<void> {
-    const reader = wallet(req).toLowerCase();
+    const reader = (await wallet(req)).toLowerCase();
     if (!(await evidence.has(evidenceHash))) throw new HttpError(404, "Evidence not found.");
     const uploaders = await evidence.getUploaders(evidenceHash);
     if (uploaders.includes(reader)) return;
@@ -287,7 +305,7 @@ export function createApp(deps: AppDeps) {
    * (JuryModule.computeCommitment). The text stays private until the juror reveals.
    */
   app.post("/api/claims/:id/notes", async (req, res) => {
-    const juror = wallet(req);
+    const juror = await wallet(req);
     const claim = await getClaimView(contracts, parseClaimId(req.params.id));
     if (!claim) throw new HttpError(404, "Claim not found.");
     const seat = claim.jury?.jurors.find((j) => j.address.toLowerCase() === juror.toLowerCase());
@@ -304,7 +322,7 @@ export function createApp(deps: AppDeps) {
    * sealed vote. Only the juror's own notes, and only to them.
    */
   app.get("/api/claims/:id/notes/mine", async (req, res) => {
-    const juror = wallet(req);
+    const juror = await wallet(req);
     const claim = await getClaimView(contracts, parseClaimId(req.params.id));
     if (!claim) throw new HttpError(404, "Claim not found.");
     const seat = claim.jury?.jurors.find((j) => j.address.toLowerCase() === juror.toLowerCase());
@@ -317,7 +335,7 @@ export function createApp(deps: AppDeps) {
    * shown only to the claimant and the claim's jurors, since they may describe the evidence.
    */
   app.get("/api/claims/:id/votes", async (req, res) => {
-    const reader = wallet(req).toLowerCase();
+    const reader = (await wallet(req)).toLowerCase();
     const claim = await getClaimView(contracts, parseClaimId(req.params.id));
     if (!claim) throw new HttpError(404, "Claim not found.");
     const jurors = claim.jury?.jurors ?? [];
@@ -354,11 +372,41 @@ export function createApp(deps: AppDeps) {
   });
 
   /**
+   * Opens a sign-in session: send the signed headers once, get a token to send as
+   * `Authorization: Bearer <token>` for SESSION_TTL_SECONDS instead of signing again.
+   */
+  app.post("/api/auth/session", async (req, res) => {
+    const address = authenticate((name) => req.get(name), deployment.chainId);
+    res.status(201).json(await accounts.createSession(address));
+  });
+
+  /** Signs out: the token stops working everywhere. */
+  app.post("/api/auth/session/end", async (req, res) => {
+    const token = bearer(req);
+    if (token) await accounts.endSession(token);
+    res.status(204).end();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Profile: conveniences that follow the member across browsers. Private to the wallet.
+  // ---------------------------------------------------------------------------
+
+  app.get("/api/profile", async (req, res) => {
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(await accounts.getProfile(await wallet(req)));
+  });
+
+  app.post("/api/profile", async (req, res) => {
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(await accounts.updateProfile(await wallet(req), req.body));
+  });
+
+  /**
    * A one-time code to show in the photos about to be taken. Upload them with it as `captureCode`
    * within CAPTURE_CODE_TTL_SECONDS.
    */
-  app.post("/api/capture/code", (req, res) => {
-    res.status(201).json(captures.issue(wallet(req)));
+  app.post("/api/capture/code", async (req, res) => {
+    res.status(201).json(captures.issue(await wallet(req)));
   });
 
   /**
@@ -369,7 +417,7 @@ export function createApp(deps: AppDeps) {
    * and total are passed to submitReceipt. A receipt is a document, so it needs no capture code.
    */
   app.post("/api/evidence", async (req, res) => {
-    const uploader = wallet(req);
+    const uploader = await wallet(req);
     const body = req.body as { kind?: unknown; receipt?: { claimId?: unknown } } | undefined;
     const kind = body?.kind ?? "claim";
     if (kind === "claim" && !(await contracts.registry.isActive(uploader))) {
@@ -437,7 +485,7 @@ export function createApp(deps: AppDeps) {
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     void _next;
-    if (err instanceof HttpError || err instanceof EvidenceError || err instanceof AuthError || err instanceof CaptureError) {
+    if (err instanceof HttpError || err instanceof EvidenceError || err instanceof AuthError || err instanceof CaptureError || err instanceof ProfileError) {
       res.status(err.status).json({ error: err.message });
       return;
     }

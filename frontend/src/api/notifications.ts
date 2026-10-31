@@ -1,3 +1,4 @@
+import { getProfileIfSignedIn, updateProfileIfSignedIn } from "./profile";
 import { getAddress } from "ethers";
 import { apiRequest } from "./client";
 
@@ -49,11 +50,29 @@ export function readSeenNotifications(address: string): Set<string> {
 export function markNotificationsSeen(address: string, ids: Iterable<string>, current: readonly MemberNotification[]): Set<string> {
   const live = new Set(current.map((n) => n.id));
   const seen = new Set([...readSeenNotifications(address), ...ids].filter((id) => live.has(id)));
+  writeSeen(address, seen);
+  // Signed in: keep the profile's copy too, so other browsers agree. Best effort.
+  void updateProfileIfSignedIn(address, { readNotifications: [...seen] }).catch(() => undefined);
+  return seen;
+}
+
+function writeSeen(address: string, seen: ReadonlySet<string>) {
   try {
     localStorage.setItem(seenKey(address), JSON.stringify([...seen]));
   } catch {
     // Private mode or blocked storage: the badge just resets on reload.
   }
+}
+
+/**
+ * Merges what the profile says was read (in another browser, say) into this browser's list. Returns
+ * the merged set, or null when not signed in.
+ */
+export async function syncSeenNotifications(address: string): Promise<Set<string> | null> {
+  const profile = await getProfileIfSignedIn(address);
+  if (!profile) return null;
+  const seen = new Set([...readSeenNotifications(address), ...profile.readNotifications]);
+  writeSeen(address, seen);
   return seen;
 }
 

@@ -65,10 +65,11 @@ cap, policy status, backend block and keeper status through the backend API. Mis
 contract and network errors are shown with a retry action. Values are not simulated. Start the
 backend before the frontend dashboard (`npm run dev:backend`); Vite proxies `/api` to port 3000.
 
-The frontend API client lives in `frontend/src/api`. Select **Sign in** to fetch the backend's
-timestamped authentication message, sign it in MetaMask, and cache the resulting evidence-access
-headers in the browser session until shortly before the 10-minute signature expiry. Read-only
-dashboard routes do not require this signature.
+The frontend API client lives in `frontend/src/api`. Select **Sign in** to sign the backend's
+timestamped message once in the wallet; the backend returns a session token valid for 7 days, kept
+in this browser until it expires or you select **Sign out**. Signed in, your display name, device
+nickname and read notifications are saved to your profile on the backend, so they follow you to
+other browsers. Read-only dashboard routes do not need a sign-in.
 
 For a MetaMask-free local walkthrough, open `http://127.0.0.1:5173/?demo=1`. In development only,
 the frontend offers Hardhat's first well-known test account and forwards its transactions to the
@@ -237,16 +238,21 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `POST /api/claims/:id/notes` 🔒 | A juror's note `{ note }` (up to 500 characters), sent before sealing the vote; returns the `noteHash` to seal. Jurors of the claim only, while voting and before they commit |
 | `GET /api/claims/:id/notes/mine` 🔒 | The notes this juror saved for the claim, each with its `noteHash`, so a juror without the browser copy of their sealed vote only has to re-enter the amount to reveal. The juror only |
 | `GET /api/claims/:id/votes` 🔒 | Each revealed juror's `amount` and `note`. Only the claimant and the claim's jurors |
-| `GET /api/auth/message?address=` | The message to sign with the wallet for the evidence routes |
+| `GET /api/auth/message?address=` | The message to sign with the wallet to sign in |
+| `POST /api/auth/session` 🔒 | Signed headers only: opens a session, returns `{ token, address, expiresAt }` (7 days) |
+| `POST /api/auth/session/end` | Signs out: the bearer token stops working |
+| `GET /api/profile` 🔒 | `{ displayName, deviceNickname, readNotifications, updatedAt }` for the signed-in wallet |
+| `POST /api/profile` 🔒 | Save any of `displayName` (≤40), `deviceNickname` (≤60) and `readNotifications` (ids); others are kept |
 | `POST /api/capture/code` 🔒 | A one-time code (e.g. `TP-7K4Q2M`) to show in the photos about to be taken; valid 15 minutes, for one upload |
 | `POST /api/evidence` 🔒 | Upload `{ kind, captureCode, description, amountReason, device, files: [{ name, contentType, data (base64) }] }`; returns `evidenceHash`. `amountReason` (claims only) explains the amount asked for. `kind: "enrollment"` (signup photos plus `device: { type, imei, serial, make, model, color }`, with `imei` required for a phone and absent or optional for other types) is open to any wallet and its hash goes to `buyPolicy`; `kind: "claim"` (default, optional `device: { imei }` or `{ serial }`) needs an active policy and its hash goes to `submitClaim` |
 | `GET /api/evidence/:hash` 🔒 | Kind, description, device details, capture code and times, and file list |
 | `GET /api/evidence/:hash/raw` 🔒 | Exact stored bytes; `keccak256` of these equals the on-chain hash |
 | `GET /api/evidence/:hash/files/:index` 🔒 | One file, for display (fetch it, then show it from a blob URL) |
 
-🔒 routes need three headers: `x-trustpool-address`, `x-trustpool-issued-at` (unix seconds) and
-`x-trustpool-signature`, the wallet's `personal_sign` of the message from `/api/auth/message`. A
-signature is valid for 10 minutes, so the frontend signs once, not per request.
+🔒 routes need a sign-in: either `Authorization: Bearer <token>` from `POST /api/auth/session`, or
+three headers: `x-trustpool-address`, `x-trustpool-issued-at` (unix seconds) and
+`x-trustpool-signature`, the wallet's `personal_sign` of the message from `/api/auth/message`, valid
+for 10 minutes. The frontend signs once to open a session; scripts can keep using the headers.
 
 Claims can end `Paid`, `Rejected` (most jurors voted 0, a tie, or fewer than 3 votes; the API's
 `jury.outcomeReason` says which), `Withdrawn` (the claimant turned the offer down) or `Cancelled`
@@ -271,6 +277,7 @@ Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 | `EVIDENCE_DIR` | `data/evidence` | |
 | `EVIDENCE_ENCRYPTION_KEY` | unset | 32 bytes as hex or base64. Required off the local chain |
 | `EVIDENCE_KEY_FILE` | `data/evidence.key` | Local chain only: generated on first start when no key is set |
+| `ACCOUNTS_DIR` | `data/accounts` | Sign-in sessions and member profiles |
 | `CORS_ORIGIN` | `*` | |
 | `KEEPER_ENABLED` | `true` | |
 | `KEEPER_PRIVATE_KEY` | unset | Required off the local chain; must own `MockRandomness` to select juries |

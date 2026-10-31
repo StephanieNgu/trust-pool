@@ -8,6 +8,19 @@ export class ApiError extends Error {
   }
 }
 
+let onUnauthorized: ((token: string) => void) | null = null;
+
+/** Called with the bearer token of any request the backend answers with 401. */
+export function setUnauthorizedHandler(handler: (token: string) => void) {
+  onUnauthorized = handler;
+}
+
+function bearerToken(headers: HeadersInit | undefined): string | null {
+  if (!headers) return null;
+  const value = new Headers(headers).get("authorization");
+  return value?.match(/^Bearer\s+(\S+)$/i)?.[1] ?? null;
+}
+
 interface ApiRequestOptions extends RequestInit {
   timeoutMs?: number;
 }
@@ -32,6 +45,8 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       const message = body && typeof body === "object" && "error" in body && body.error
         ? body.error
         : `Request failed with status ${response.status}.`;
+      const token = response.status === 401 ? bearerToken(headers) : null;
+      if (token) onUnauthorized?.(token);
       throw new ApiError(message, response.status);
     }
     if (body === null) throw new ApiError("The backend returned an empty response.", response.status);
