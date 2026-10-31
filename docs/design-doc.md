@@ -56,7 +56,7 @@ flowchart LR
 | Component | Responsibility | Holds funds? |
 |---|---|---|
 | **MockStablecoin** | ERC-20 for the demo; stands in for USDC | n/a |
-| **PolicyRegistry** | Creates policies, tracks status (Active, Lapsed), enforces one policy per wallet, exposes the eligible-juror list | No |
+| **PolicyRegistry** | Creates policies, collects monthly premiums (with a grace period), tracks status (Active, Lapsed), enforces one policy per wallet, exposes the eligible-juror list | No |
 | **Pool** | Accepts contributions, holds the stablecoin, executes payouts (callable only by ClaimManager) | **Yes** |
 | **ClaimManager** | Owns the claim state machine, validates eligibility, triggers jury selection, finalizes outcomes, requests payout | No |
 | **JuryModule** | Requests randomness, selects jurors, runs commit-reveal voting, tallies revealed votes | No |
@@ -177,7 +177,7 @@ stateDiagram-v2
 
 | Transition | Guard |
 |---|---|
-| Submit | Policy is Active, waiting period elapsed, amount at most the coverage limit, no other open claim on this policy. The claimant posts a bond (5% of the amount, at least 5 mUSDC), held by the Pool outside the reserve |
+| Submit | Policy is Active with premiums paid or in their grace period, waiting period elapsed, amount at most the coverage limit, no other open claim on this policy. The claimant posts a bond (5% of the amount, at least 5 mUSDC), held by the Pool outside the reserve |
 | Submitted to JuryPending | Called by ClaimManager after submission |
 | JuryPending to Voting | Only the randomness provider can call the fulfill callback, and only the first callback seats a jury |
 | JuryPending to Cancelled | Anyone, once randomness has been pending longer than `randomnessTimeout` (1 day). The policy is freed so the holder can file again, a late callback reverts, and the bond is returned in full |
@@ -295,6 +295,7 @@ sequenceDiagram
 | Agreement band | Within 10% of the requested amount from the median; voting 0 agrees only with a rejection | Measured against the request so the band is the same width whatever the median; a small median would otherwise leave almost no room | Exact median only: too strict for amounts; % of the median: shrinks to nothing on small offers |
 | Claimant bond | 5% of the ask (at least 5), returned at the verdict minus the share of the ask the jury cut; the rest joins the reserve. Returned in full if the jury misses quorum or the claim is cancelled | A fake claim now has a price: one the jury rejects loses the whole bond. Scaling the loss with the cut also makes padding the ask cost something, where before asking 300 for 150 of damage was free (the jury paid 150 either way). An honest claimant the jury pays in full loses nothing, and the bond is small next to the claim. Measured against the median rather than the capped offer, so a thin pool never costs the claimant | Forfeit only on rejection: simpler, but padding stays free. A fixed fee per claim: taxes honest claims as much as fake ones. Paying the forfeit to jurors: would give jurors a reason to cut claims |
 | Claimant's answer | Accept or withdraw within 2 days; silence accepts; no counteroffer | One decision for the claimant and none for jurors, so the jury is not called back. Withdrawing frees the policy to refile with better evidence or a repair quote | A counter round paid to jurors: considered for later if claimants often withdraw |
+| Premiums | Monthly (30 days): the first on purchase, each next one extends coverage from the end of the paid period, at most one period ahead. 7-day grace period after a missed one, then the policy stops counting as active and anyone can close it (`lapseOverdue`; the keeper does) | Spreads the cost the way device cover is normally sold, and keeps money flowing into the pool. The grace period stops a late payment from wiping out cover immediately. Closing is permissionless so no admin is needed, and a claim already open blocks it, the same rule as cancelling | Upfront annual premium: simpler, but a large first payment and no ongoing inflow. Auto-debit via a standing allowance: smoother, but pulling funds without a fresh signature surprises users |
 | Payout cap timing | Fixed when the jury decides | The claimant's payout cannot move after the verdict | At payout time: simpler, but other claims or contributions could change the amount |
 | Stalled randomness | Cancel after 1 day, policy freed to refile | Claims never get stuck; a late callback cannot seat a second jury | Retry the request: keeps the claim alive but needs the provider to accept duplicates |
 | Evidence access | Uploader plus that claim's jurors, wallet-signed requests | Jurors can review without making personal media public | Public IPFS: simpler but exposes photos to everyone |
@@ -302,7 +303,7 @@ sequenceDiagram
 | Token | Mock ERC-20 | Free and controllable for demos | Real USDC on testnet: extra setup with little benefit at this stage |
 | Access control | OpenZeppelin `Ownable` and role checks between contracts | Battle-tested primitives | Custom modifiers: more bug risk |
 
-**Why these parameters.** They are demo values chosen so the whole flow fits in a test run and a small class demo, not actuarial figures. 5% premium makes premiums visible against a 2,000 mUSDC coverage maximum. 7-day waiting period is short enough to fast-forward in tests while still blocking "buy then claim immediately". A jury of 5 with quorum 3 works with the 6 to 8 wallets a local Hardhat demo has; odd size avoids ties when everyone votes. A 2-day commit and 1-day reveal window (3 days in all) give jurors time without stalling the demo; once every juror has committed, reveals open immediately. 20% per-claim cap means no single claim can take more than a fifth of the pool. 1-day randomness timeout is far longer than VRF normally takes.
+**Why these parameters.** They are demo values chosen so the whole flow fits in a test run and a small class demo, not actuarial figures. 5% monthly premium makes premiums visible against a 2,000 mUSDC coverage maximum. 7-day waiting period is short enough to fast-forward in tests while still blocking "buy then claim immediately". A jury of 5 with quorum 3 works with the 6 to 8 wallets a local Hardhat demo has; odd size avoids ties when everyone votes. A 2-day commit and 1-day reveal window (3 days in all) give jurors time without stalling the demo; once every juror has committed, reveals open immediately. 20% per-claim cap means no single claim can take more than a fifth of the pool. 1-day randomness timeout is far longer than VRF normally takes.
 
 ## 8. Trust Assumptions and Threats (Prototype)
 

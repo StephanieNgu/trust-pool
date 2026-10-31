@@ -120,6 +120,7 @@ const ClaimState = { None: 0n, Submitted: 1n, JuryPending: 2n, Voting: 3n, Appro
 const JuryPhase = { None: 0n, AwaitingRandomness: 1n, Voting: 2n, Tallied: 3n, Cancelled: 4n };
 const Outcome = { None: 0n, Approved: 1n, Rejected: 2n };
 const PolicyStatus = { None: 0n, Active: 1n, Lapsed: 2n };
+const PremiumState = { None: 0n, Paid: 1n, Grace: 2n, Overdue: 3n, Lapsed: 4n };
 
 module.exports = {
   DAY,
@@ -146,4 +147,5 @@ module.exports = {
   JuryPhase,
   Outcome,
   PolicyStatus,
+  PremiumState,
 };

@@ -14,7 +14,7 @@ import {
   MAX_FILES,
 } from "./evidence";
 import type { Keeper } from "./keeper";
-import { getClaimView, getMemberView, getPoolView, listClaims } from "./protocol";
+import { getClaimView, getMemberView, getPoolView, getPremiumView, listClaims } from "./protocol";
 
 export interface AppDeps {
   deployment: Deployment;
@@ -141,6 +141,14 @@ export function createApp(deps: AppDeps) {
 
   app.get("/api/members/:address", async (req, res) => {
     res.json(await getMemberView(contracts, parseAddress(req.params.address, "address")));
+  });
+
+  /**
+   * Just the member's premium schedule: status, amount, due date and grace deadline. Light enough to
+   * poll for reminders. `premium` is null for a wallet that never held a policy.
+   */
+  app.get("/api/members/:address/premium", async (req, res) => {
+    res.json({ premium: await getPremiumView(contracts, parseAddress(req.params.address, "address")) });
   });
 
   // ---------------------------------------------------------------------------

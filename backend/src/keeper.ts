@@ -7,7 +7,10 @@
 //   Offered      -> calls acceptOffer once the claimant's response window has passed without an answer
 //   Approved     -> calls executePayout, so approved claims are paid automatically
 //
-// finalize, acceptOffer (after the deadline), executePayout and cancelStalledClaim are permissionless on-chain, so the keeper only saves users a
+// It also closes policies whose premium grace period ended unpaid (PolicyRegistry.lapseOverdue),
+// freeing their devices. A policy with an open claim stays open until the claim is decided.
+//
+// finalize, acceptOffer (after the deadline), executePayout, cancelStalledClaim and lapseOverdue are permissionless on-chain, so the keeper only saves users a
 // transaction; it cannot change an outcome.
 import { randomBytes } from "node:crypto";
 import type { Signer } from "ethers";
@@ -29,12 +32,22 @@ export interface KeeperOptions {
   seed?: () => bigint;
 }
 
-export interface KeeperAction {
-  claimId: number;
-  action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "acceptOffer" | "executePayout";
-  txHash?: string;
-  error?: string;
-}
+export type KeeperAction =
+  | {
+      claimId: number;
+      action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "acceptOffer" | "executePayout";
+      txHash?: string;
+      error?: string;
+    }
+  | {
+      /** The holder whose overdue policy was closed. */
+      holder: string;
+      action: "lapseOverdue";
+      txHash?: string;
+      error?: string;
+    };
+
+type Target = { claimId: number } | { holder: string };
 
 export interface KeeperStatus {
   address: string;
@@ -179,9 +192,22 @@ export class Keeper {
       if (TERMINAL.includes(state)) this.done.add(id);
     }
 
+    if (this.options.autoResolve) await this.lapseOverduePolicies(actions);
+
     this.lastTickAt = Date.now();
     this.lastError = null;
     return actions;
+  }
+
+  /** Closes policies past their premium grace period, skipping any with a claim still open. */
+  private async lapseOverduePolicies(actions: KeeperAction[]): Promise<void> {
+    const { registry, claimManager } = this.contracts;
+    const overdue: string[] = [...(await registry.overdueHolders())];
+    for (const holder of overdue) {
+      const policy = await registry.getPolicy(holder);
+      if ((await claimManager.openClaimOfPolicy(policy.id)) !== 0n) continue;
+      await this.attempt(actions, { holder }, "lapseOverdue", () => registry.lapseOverdue(holder));
+    }
   }
 
   private async chainTime(): Promise<number> {
@@ -192,23 +218,25 @@ export class Keeper {
   /** Sends one transaction and waits for it. Failures are recorded and retried on the next tick. */
   private async attempt(
     actions: KeeperAction[],
-    claimId: number,
+    target: number | Target,
     action: KeeperAction["action"],
     send: () => Promise<{ hash: string; wait(): Promise<unknown> }>,
   ): Promise<boolean> {
-    const key = `${action}:${claimId}`;
+    const subject: Target = typeof target === "number" ? { claimId: target } : target;
+    const label = "claimId" in subject ? `Claim #${subject.claimId}` : `Policy of ${subject.holder}`;
+    const key = `${action}:${"claimId" in subject ? subject.claimId : subject.holder}`;
     try {
       const tx = await send();
       await tx.wait();
-      actions.push({ claimId, action, txHash: tx.hash });
+      actions.push({ ...subject, action, txHash: tx.hash } as KeeperAction);
       this.lastErrors.delete(key);
-      this.logger.info(`Claim #${claimId}: ${action} (${tx.hash})`);
+      this.logger.info(`${label}: ${action} (${tx.hash})`);
       return true;
     } catch (err) {
       const error = message(err);
-      actions.push({ claimId, action, error });
+      actions.push({ ...subject, action, error } as KeeperAction);
       // Log a failure once, not on every tick while it keeps failing.
-      if (this.lastErrors.get(key) !== error) this.logger.warn(`Claim #${claimId}: ${action} failed: ${error}`);
+      if (this.lastErrors.get(key) !== error) this.logger.warn(`${label}: ${action} failed: ${error}`);
       this.lastErrors.set(key, error);
       return false;
     }
