@@ -77,6 +77,21 @@ wallet-specific dashboard, authentication, claims and jury assignments refresh a
 send real funds to these test accounts or use their public development mnemonic outside the local
 prototype.
 
+To skip the setup clicks before a demo, run `npm run seed:demo` once the chain, the deployment and
+the backend are up. It signs demo accounts 1 to 5 up for coverage (device details and placeholder
+signup photos, uploaded through the backend like the app does) and stakes each for jury duty, so a
+claim can be filed straight away. Account 0 is left for a live signup; set `SEED_CLAIMANT=1` to sign
+it up too. Running it again skips members already covered or staked. `TRUSTPOOL_API` overrides the
+backend URL (default `http://localhost:3000`).
+
+```powershell
+npm run chain         # terminal 1
+npm run deploy:local  # terminal 2: deploys, funds dev accounts and seeds the pool
+npm run dev:backend   # terminal 3
+npm run seed:demo     # terminal 2 again: five covered, staked members
+npm run dev           # terminal 4: open http://127.0.0.1:5173/?demo=1 as Account 0
+```
+
 ### Notifications
 
 The bell in the top bar and the **Needs your attention** list on the dashboard show what each wallet

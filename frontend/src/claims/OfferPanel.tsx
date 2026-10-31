@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getJuryVotes, type ClaimDetailView, type JuryVote } from "../api";
 import { acceptOffer, withdrawClaim } from "../contracts/claims";
-import { dateTime, shortHash, formatAmount } from "./presentation";
+import { dateTime, jurorLabel, formatAmount } from "./presentation";
 import { contractErrorMessage } from "../contracts/errors";
 
 function errorText(error: unknown) {
@@ -61,7 +61,7 @@ export function JuryReasoning({ claim, account, tokenDecimals, tokenSymbol, onAu
       : <ul className="reasoning-list">{[...votes].sort((a, b) => (BigInt(a.amount) < BigInt(b.amount) ? -1 : 1)).map((vote) => <li key={vote.juror}>
         <span className="reasoning-amount">{vote.amount === "0" ? "Reject" : money(vote.amount)}</span>
         <span className="reasoning-note">{vote.note ?? <em className="muted">{vote.amount === claim.amount ? "Paid in full, no note." : "No note."}</em>}</span>
-        <code title={vote.juror}>{shortHash(vote.juror)}</code>
+        <span className="reasoning-juror">{jurorLabel(claim.jury?.jurors.findIndex((juror) => juror.address.toLowerCase() === vote.juror.toLowerCase()) ?? -1)}</span>
       </li>)}</ul>}
     {error && <p className="notice warning" role="alert">{error}</p>}
   </div>;

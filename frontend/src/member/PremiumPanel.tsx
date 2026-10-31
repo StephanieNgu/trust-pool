@@ -1,3 +1,4 @@
+import { displayAmount } from "../claims/presentation";
 import { useEffect, useState } from "react";
 import type { PremiumOverview } from "../api";
 import { payPremium } from "../contracts/member";
@@ -12,7 +13,7 @@ interface PremiumPanelProps {
 }
 
 const day = (seconds: number) => new Date(seconds * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-const money = (value: string) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
+const money = displayAmount;
 
 function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {

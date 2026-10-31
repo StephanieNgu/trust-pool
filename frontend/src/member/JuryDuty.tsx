@@ -1,3 +1,4 @@
+import { displayAmount } from "../claims/presentation";
 import { useEffect, useState } from "react";
 import type { DashboardOverview } from "../api";
 import { stakeAsJuror, withdrawJurorStake } from "../contracts/member";
@@ -20,7 +21,7 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : "The transaction could not be completed.";
 }
 
-const money = (value: string) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
+const money = displayAmount;
 
 /**
  * Opting in to jury duty. A member locks a small stake to be picked for juries. Jurors whose amount
