@@ -49,6 +49,12 @@ function DeviceCheck({ check }: { check: ClaimDetailView["deviceCheck"] }) {
   return <div className="imei-checks" aria-label="Automatic device checks">
     {badge(check.enrollmentMatchesPolicy, "Signup details match the policy", "Signup details do not match the policy", "No signup details on record")}
     {badge(check.claimMatchesEnrollment, "Claim IMEI or serial matches signup", "Claim IMEI or serial differs from signup", "No IMEI or serial given with the claim")}
+    {check.filedFromDevice === null
+      ? <span>No device key on record (signed up from another device)</span>
+      : check.filedFromDevice
+        ? <span className="match">✓ Filed from the insured device</span>
+        : <span>Not filed from the insured device (it may be broken or lost)</span>}
+    {check.purchaseProof !== null && <span className={check.purchaseProof ? "match" : ""}>{check.purchaseProof ? "✓ Proof of purchase given at signup" : "No proof of purchase given"}</span>}
   </div>;
 }
 

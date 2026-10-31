@@ -174,6 +174,13 @@ export interface ClaimDetailView extends ClaimView {
     enrollmentMatchesPolicy: boolean | null;
     /** The IMEI or serial given with the claim is the enrolled one. */
     claimMatchesEnrollment: boolean | null;
+    /**
+     * The claim was signed by the key made when signing up from the device. null when signup was not
+     * done from the device (no key on record), which is normal for devices without a browser.
+     */
+    filedFromDevice: boolean | null;
+    /** Signup included proof of purchase; null without signup details. */
+    purchaseProof: boolean | null;
   };
   receiptFile: {
     available: boolean;
@@ -246,6 +253,9 @@ export interface EvidenceSummary {
   amountReason: string;
   device: DeviceDetails | null;
   receipt?: ReceiptDetails | null;
+  /** Enrollment: whether signup was done from the device (a device key was made), and proof-of-purchase file indexes. */
+  deviceKey?: { kty: "EC"; crv: "P-256"; x: string; y: string } | null;
+  purchaseProof?: number[];
   capture: CaptureStamp | null;
   size: number;
   files: EvidenceFileInfo[];

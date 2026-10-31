@@ -189,7 +189,14 @@ describe("frontend claim workflow", () => {
     assert.ok(enrollmentHash);
     assert.equal(enrollmentHash, (await t.registry.getPolicy(claimant)).enrollmentHash);
     assert.deepEqual(claim.enrollment, { available: true, url: `/api/evidence/${enrollmentHash}` });
-    assert.deepEqual(claim.deviceCheck, { enrollmentMatchesPolicy: true, claimMatchesEnrollment: true });
+    // The test claimant signed up from the device (a device key, plus proof of purchase) but filed
+    // this claim without the key's signature, so jurors see it was not filed from the device.
+    assert.deepEqual(claim.deviceCheck, {
+      enrollmentMatchesPolicy: true,
+      claimMatchesEnrollment: true,
+      filedFromDevice: false,
+      purchaseProof: true,
+    });
 
     const signup = await getEvidence(jurors[0], enrollmentHash);
     assert.equal(signup.kind, "enrollment");

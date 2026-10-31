@@ -1,6 +1,6 @@
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,9 @@ import {
   loadOrCreateKeyFile,
   parseEvidenceKey,
   noteHash,
+  deviceProofMessage,
+  verifyDeviceSignature,
+  type DeviceKey,
 } from "../src/evidence";
 
 const ALICE = "0x00000000000000000000000000000000000000A1";
@@ -95,10 +98,47 @@ describe("LocalEvidenceStore", async () => {
   });
 
   it("gives different evidence different hashes", async () => {
-    const a = await store.put({ files: [file("one")] }, ALICE);
-    const b = await store.put({ files: [file("one")], description: "with a note" }, ALICE);
-    const c = await store.put({ files: [file("one", "renamed.jpg")] }, ALICE);
-    assert.equal(new Set([a.evidenceHash, b.evidenceHash, c.evidenceHash]).size, 3);
+    const a = keccak256(encodeBundle({ files: [file("one")] }));
+    const b = keccak256(encodeBundle({ files: [file("one")], description: "with a note" }));
+    const c = keccak256(encodeBundle({ files: [file("one", "renamed.jpg")] }));
+    assert.equal(new Set([a, b, c]).size, 3);
+  });
+
+  it("takes each photo in one bundle only, but lets the same bundle be retried", async () => {
+    const first = await store.put({ files: [file("fresh photo")] }, ALICE);
+    assert.equal((await store.put({ files: [file("fresh photo")] }, ALICE)).evidenceHash, first.evidenceHash);
+    for (const reuse of [
+      { files: [file("fresh photo")], description: "again" },
+      { files: [file("another"), file("fresh photo", "b.jpg")] },
+      { kind: "enrollment", device: { type: "camera", serial: "S1", make: "M", model: "X", color: "Black" }, files: [file("fresh photo")] },
+    ]) {
+      await assert.rejects(store.put(reuse, BOB), (err: unknown) => err instanceof EvidenceError && err.status === 409);
+    }
+  });
+
+  it("checks a device key's signature over the claimant's wallet and capture code", () => {
+    const pair = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const { kty, crv, x, y } = pair.publicKey.export({ format: "jwk" });
+    const key = { kty, crv, x, y } as DeviceKey;
+    const signature = sign("sha256", Buffer.from(deviceProofMessage(ALICE, "TP-ABC234")), {
+      key: pair.privateKey,
+      dsaEncoding: "ieee-p1363",
+    }).toString("base64");
+    assert.equal(verifyDeviceSignature(key, ALICE.toUpperCase(), "TP-ABC234", signature), true);
+    assert.equal(verifyDeviceSignature(key, BOB, "TP-ABC234", signature), false, "another wallet");
+    assert.equal(verifyDeviceSignature(key, ALICE, "TP-ABC235", signature), false, "another code");
+    const other = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "jwk" });
+    assert.equal(verifyDeviceSignature({ ...key, x: other.x!, y: other.y! }, ALICE, "TP-ABC234", signature), false, "another key");
+
+    // Device keys go only in enrollments, signatures only in claims, and both must be well formed.
+    const enrollment = { kind: "enrollment", device: { type: "camera", serial: "S", make: "M", model: "X", color: "C" }, files: [file("k")] };
+    assert.ok(encodeBundle({ ...enrollment, deviceKey: key, purchaseProof: [0] }));
+    assert.throws(() => encodeBundle({ ...enrollment, deviceKey: { ...key, crv: "P-384" } }), EvidenceError);
+    assert.throws(() => encodeBundle({ ...enrollment, purchaseProof: [1] }), EvidenceError);
+    assert.throws(() => encodeBundle({ files: [file("k")], deviceKey: key }), EvidenceError);
+    assert.ok(encodeBundle({ files: [file("k")], deviceSignature: signature }));
+    assert.throws(() => encodeBundle({ files: [file("k")], deviceSignature: "short" }), EvidenceError);
+    assert.throws(() => encodeBundle({ ...enrollment, deviceSignature: signature }), EvidenceError);
   });
 
   it("encrypts files at rest", async () => {

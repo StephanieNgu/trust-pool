@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Keeper } from "../src/keeper";
-import { PHOTO, USDC, setup, testDevice, testImei } from "./helpers";
+import { PHOTO, photo, USDC, setup, testDevice, testImei } from "./helpers";
 
 describe("API", () => {
   let t: Awaited<ReturnType<typeof setup>>;
@@ -56,7 +56,7 @@ describe("API", () => {
 
   it("stores evidence and serves it back byte for byte", async () => {
     const files = [
-      { name: "front.jpg", contentType: "image/jpeg", data: PHOTO },
+      { name: "front.jpg", contentType: "image/jpeg", data: photo() },
       { name: "back.png", contentType: "image/png", data: Buffer.from("png bytes").toString("base64") },
     ];
     const res = await t.post("/api/evidence", { description: "Both sides", files }, t.claimant);
@@ -64,9 +64,10 @@ describe("API", () => {
     const hash = res.body.evidenceHash;
     assert.match(hash, /^0x[0-9a-f]{64}$/);
 
-    // Each upload is stamped with its own capture code, so the same photos sent again are a new bundle.
+    // Photos must be fresh: the same files sent again under a new capture code are refused.
     const again = await t.post("/api/evidence", { description: "Both sides", files }, t.claimant);
-    assert.notEqual(again.body.evidenceHash, hash, "new capture, new hash");
+    assert.equal(again.status, 409);
+    assert.match(again.body.error, /uploaded before/);
 
     const summary = (await t.getAs(`/api/evidence/${hash}`, t.claimant)).body;
     assert.equal(summary.description, "Both sides");
@@ -77,7 +78,7 @@ describe("API", () => {
     assert.deepEqual(
       summary.files.map((f: { name: string; size: number; url: string }) => [f.name, f.size, f.url]),
       [
-        ["front.jpg", Buffer.from(PHOTO, "base64").length, `/api/evidence/${hash}/files/0`],
+        ["front.jpg", Buffer.from(files[0].data, "base64").length, `/api/evidence/${hash}/files/0`],
         ["back.png", 9, `/api/evidence/${hash}/files/1`],
       ],
     );
@@ -94,7 +95,7 @@ describe("API", () => {
   });
 
   describe("capture codes", () => {
-    const files = [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }];
+    const files = () => [{ name: "front.jpg", contentType: "image/jpeg", data: photo() }];
 
     it("issues a code only to a signed-in wallet", async () => {
       assert.equal((await t.postRaw("/api/capture/code", {})).status, 401);
@@ -105,7 +106,7 @@ describe("API", () => {
     });
 
     it("requires an unused code issued to the uploading wallet", async () => {
-      const upload = (json: object, signer = t.claimant) => t.postRaw("/api/evidence", { files, ...json }, signer);
+      const upload = (json: object, signer = t.claimant) => t.postRaw("/api/evidence", { files: files(), ...json }, signer);
       assert.equal((await upload({})).status, 400, "no code");
       assert.equal((await upload({ captureCode: "TP-AAAAAA" })).status, 400, "never issued");
 
@@ -122,16 +123,16 @@ describe("API", () => {
     it("keeps the code when the upload is rejected for another reason", async () => {
       const code = await t.captureCode(t.claimant);
       assert.equal((await t.postRaw("/api/evidence", { files: [], captureCode: code }, t.claimant)).status, 400);
-      assert.equal((await t.postRaw("/api/evidence", { files, captureCode: code }, t.claimant)).status, 201);
+      assert.equal((await t.postRaw("/api/evidence", { files: files(), captureCode: code }, t.claimant)).status, 201);
     });
   });
 
   describe("enrollment", () => {
-    const files = [{ name: "front.jpg", contentType: "image/jpeg", data: PHOTO }];
+    const files = () => [{ name: "front.jpg", contentType: "image/jpeg", data: photo() }];
 
     it("lets a wallet without a policy enrol a device", async () => {
       const newcomer = t.signers[15];
-      const res = await t.post("/api/evidence", { kind: "enrollment", device: testDevice(40), files }, newcomer);
+      const res = await t.post("/api/evidence", { kind: "enrollment", device: testDevice(40), files: files() }, newcomer);
       assert.equal(res.status, 201);
       assert.equal(res.body.kind, "enrollment");
       assert.deepEqual(res.body.device, testDevice(40));
@@ -153,19 +154,19 @@ describe("API", () => {
         const res = await t.post("/api/evidence", { kind: "enrollment", files, ...extra }, newcomer);
         assert.equal(res.status, 400, JSON.stringify(extra));
       }
-      assert.equal((await t.post("/api/evidence", { kind: "selfie", files }, newcomer)).status, 400);
+      assert.equal((await t.post("/api/evidence", { kind: "selfie", files: files() }, newcomer)).status, 400);
     });
 
     it("enrols a device without an IMEI by its serial number", async () => {
       const camera = { type: "camera", serial: " 0123 456 ", make: "Canon", model: "EOS R50", color: "Black" };
-      const res = await t.post("/api/evidence", { kind: "enrollment", device: camera, files }, t.signers[15]);
+      const res = await t.post("/api/evidence", { kind: "enrollment", device: camera, files: files() }, t.signers[15]);
       assert.equal(res.status, 201);
       assert.deepEqual(res.body.device, { ...camera, serial: "0123 456" });
       // A tablet may give an IMEI, but it must be a valid one.
       const tablet = { ...testDevice(42), type: "tablet" };
-      assert.equal((await t.post("/api/evidence", { kind: "enrollment", device: tablet, files }, t.signers[15])).status, 201);
+      assert.equal((await t.post("/api/evidence", { kind: "enrollment", device: tablet, files: files() }, t.signers[15])).status, 201);
       const badTablet = { ...tablet, imei: "12345" };
-      assert.equal((await t.post("/api/evidence", { kind: "enrollment", device: badTablet, files }, t.signers[15])).status, 400);
+      assert.equal((await t.post("/api/evidence", { kind: "enrollment", device: badTablet, files: files() }, t.signers[15])).status, 400);
     });
 
     it("shows the policy's enrollment hash in the member view", async () => {
@@ -177,14 +178,14 @@ describe("API", () => {
   });
 
   describe("evidence privacy", () => {
-    const files = [{ name: "private.jpg", contentType: "image/jpeg", data: PHOTO }];
+    const files = () => [{ name: "private.jpg", contentType: "image/jpeg", data: photo() }];
 
     it("requires a valid, fresh wallet signature", async () => {
-      const { hash } = { hash: (await t.post("/api/evidence", { files }, t.claimant)).body.evidenceHash };
+      const { hash } = { hash: (await t.post("/api/evidence", { files: files() }, t.claimant)).body.evidenceHash };
       const path = `/api/evidence/${hash}/raw`;
 
       assert.equal((await t.api(path)).status, 401, "no signature");
-      assert.equal((await t.post("/api/evidence", { files })).status, 401, "anonymous upload");
+      assert.equal((await t.post("/api/evidence", { files: files() })).status, 401, "anonymous upload");
 
       const stale = await t.authHeaders(t.claimant, Math.floor(Date.now() / 1000) - 3600);
       assert.equal((await t.api(path, { headers: stale })).status, 401, "expired");
@@ -197,14 +198,14 @@ describe("API", () => {
     });
 
     it("only lets policyholders upload", async () => {
-      const res = await t.post("/api/evidence", { files }, t.signers[15]);
+      const res = await t.post("/api/evidence", { files: files() }, t.signers[15]);
       assert.equal(res.status, 403);
     });
 
     it("hides evidence from other members, even if they file a claim with the copied hash", async () => {
       const victim = t.holders[5];
       const attacker = t.holders[6];
-      const hash = (await t.post("/api/evidence", { files, description: "victim" }, victim)).body.evidenceHash;
+      const hash = (await t.post("/api/evidence", { files: files(), description: "victim" }, victim)).body.evidenceHash;
       assert.equal((await t.getAs(`/api/evidence/${hash}`, attacker)).status, 403);
 
       // The attacker reads the hash off-chain and files their own claim with it.
@@ -251,9 +252,9 @@ describe("API", () => {
       {},
       { files: [] },
       { files: [{ name: "x.svg", contentType: "image/svg+xml", data: PHOTO }] },
-      { files: [{ name: "", contentType: "image/png", data: PHOTO }] },
+      { files: [{ name: "", contentType: "image/png", data: photo() }] },
       { files: [{ name: "x.png", contentType: "image/png", data: "not base64!" }] },
-      { description: 5, files: [{ name: "x.png", contentType: "image/png", data: PHOTO }] },
+      { description: 5, files: [{ name: "x.png", contentType: "image/png", data: photo() }] },
     ];
     for (const [hashPath, status] of [
       [`/api/evidence/0x${"ab".repeat(32)}`, 404],

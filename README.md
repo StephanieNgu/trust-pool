@@ -150,7 +150,16 @@ retrying the same bundle is safe because evidence is content-addressed and produ
 Select **Get Device Coverage**, enter a device identifier and coverage amount, then select
 **Review premium**. The app reads the premium from PolicyRegistry. **Approve & confirm coverage**
 requests the necessary mUSDC approval for the Pool, waits for confirmation, then requests the
-coverage transaction. The device identifier is hashed locally. After confirmation, the dashboard
+coverage transaction.
+
+**Showing the device is yours** is optional and adds to the photos. Signing up on the insured device
+itself (a checkbox at signup) makes this browser create a key that cannot be copied off the device;
+a claim later filed from the same browser is signed with it, and jurors see "Filed from the insured
+device". Devices without a browser, such as cameras, are signed up from another device and simply have
+no key on record, which jurors are told is normal. Signup can also include a proof of purchase (an
+invoice or carrier bill naming the device), which jurors see marked as such. Separately, the backend
+refuses any signup or claim photo that was uploaded before, so the same pictures cannot insure one
+device twice or back a second claim. The device identifier is hashed locally. After confirmation, the dashboard
 refreshes and the purchase appears in the current session's activity list. Activity is not persisted
 across reloads. The avatar and member name are placeholders; there is no email/password login.
 

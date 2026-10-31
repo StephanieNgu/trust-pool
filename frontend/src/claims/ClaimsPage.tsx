@@ -12,6 +12,7 @@ import {
 } from "../api";
 import { CaptureCodePanel } from "../capture/CapturePanel";
 import { submitClaim } from "../contracts/claims";
+import { hasDeviceKey, signWithDeviceKey } from "../member/deviceKey";
 import { claimBond } from "./bond";
 import { ClaimDetail } from "./ClaimDetail";
 import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
@@ -57,6 +58,14 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   const [captureCode, setCaptureCode] = useState<CaptureCode | null>(null);
   const [deviceId, setDeviceId] = useState("");
   const [amountReason, setAmountReason] = useState("");
+  const [onInsuredDevice, setOnInsuredDevice] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setOnInsuredDevice(false);
+    if (account) void hasDeviceKey(account).then((has) => { if (active) setOnInsuredDevice(has); });
+    return () => { active = false; };
+  }, [account]);
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [loadingClaims, setLoadingClaims] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -121,7 +130,9 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     setError("");
     setFeedback("Preparing evidence for secure upload…");
     try {
-      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId, amountReason);
+      // Filing from the insured device: sign the capture code with the key made at signup, if any.
+      const deviceSignature = captureCode ? (await signWithDeviceKey(account, captureCode.code)) ?? undefined : undefined;
+      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId, amountReason, deviceSignature);
       onAuthenticated();
       setFeedback(`Evidence uploaded (${shortHash(evidence.evidenceHash)}).`);
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
@@ -182,6 +193,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
 
       <label>Photos of the damage</label>
       <CaptureCodePanel account={account} code={captureCode} disabled={busy || !ready} onCode={setCaptureCode} onAuthenticated={onAuthenticated} />
+      {onInsuredDevice && <small className="device-proof-note">✓ This browser holds the key made when you signed up, so jurors will see this claim was filed from the insured device.</small>}
       {captureCode && <>
         <small>Jurors compare these with the photos you took at signup, so show the whole device, the damage, and your code.</small>
         <div className="capture-buttons">

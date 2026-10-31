@@ -1,5 +1,7 @@
 import { DEVICE_TYPES, type CaptureCode, type DeviceDetails, type DeviceType } from "../api";
+import { ALLOWED_EVIDENCE_TYPES } from "../api";
 import { CaptureCodePanel, PhotoSlot } from "../capture/CapturePanel";
+import { deviceKeysSupported } from "./deviceKey";
 
 export type EnrollmentPhoto = "front" | "back" | "serial";
 
@@ -7,12 +9,18 @@ export interface EnrollmentDraft {
   device: Required<DeviceDetails>;
   captureCode: CaptureCode | null;
   photos: Record<EnrollmentPhoto, File | null>;
+  /** Signing up on the insured device itself: this browser then makes a device key (optional). */
+  onThisDevice: boolean;
+  /** An invoice, receipt or carrier bill naming the device (optional). */
+  purchaseProof: File | null;
 }
 
 export const EMPTY_ENROLLMENT: EnrollmentDraft = {
   device: { type: "phone", imei: "", serial: "", make: "", model: "", color: "" },
   captureCode: null,
   photos: { front: null, back: null, serial: null },
+  onThisDevice: false,
+  purchaseProof: null,
 };
 
 const TYPE_LABELS: Record<DeviceType, string> = {
@@ -112,5 +120,15 @@ export function DeviceEnrollment({ account, draft, disabled = false, onChange, o
     {draft.captureCode && <div className="photo-slots">
       {photosFor(draft.device.type).map(({ key, label, hint }) => <PhotoSlot key={key} id={`enroll-${key}`} label={label} hint={hint} file={draft.photos[key]} disabled={disabled} onChange={(file) => onChange({ ...draft, photos: { ...draft.photos, [key]: file } })} />)}
     </div>}
+    <div className="ownership-options">
+      <span className="eyebrow">PROOF IT'S YOURS (OPTIONAL)</span>
+      {deviceKeysSupported() && <label className="check-row" htmlFor="enroll-on-device">
+        <input id="enroll-on-device" type="checkbox" checked={draft.onThisDevice} disabled={disabled} onChange={(event) => onChange({ ...draft, onThisDevice: event.target.checked })} />
+        <span><strong>I'm signing up on the device I'm insuring</strong><small>This browser keeps a key that can't be copied off the device. Claims you later file from it show jurors they came from the insured device. Leave this off for a camera, or anything you're registering from another device.</small></span>
+      </label>}
+      <label htmlFor="enroll-purchase-proof">Proof of purchase</label>
+      <small>An invoice, receipt or carrier bill that names the device. Jurors see whether one was given.</small>
+      <input id="enroll-purchase-proof" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} disabled={disabled} onChange={(event) => onChange({ ...draft, purchaseProof: event.target.files?.[0] ?? null })} />
+    </div>
   </div>;
 }
