@@ -48,6 +48,8 @@ describe("API", () => {
     assert.equal(member.policy.coverageLimit, USDC(1_000).toString());
     assert.equal(member.policy.pastWaitingPeriod, true);
     assert.equal(member.policy.claimEligibleAt, member.policy.startTime + 7 * 24 * 3600);
+    // Six other covered, staked holders could sit on a jury for this member's claim; a jury takes five.
+    assert.deepEqual(member.jury, { available: 6, required: 5 });
 
     const stranger = (await t.api(`/api/members/${t.signers[15].address}`)).body;
     assert.equal(stranger.policy, null);

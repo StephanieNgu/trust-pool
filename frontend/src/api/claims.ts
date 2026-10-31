@@ -282,6 +282,13 @@ export async function submitJuryNote(address: string, claimId: string, note: str
   return noteHash;
 }
 
+/** The notes this juror stored for a claim, each with the hash a sealed vote would carry. */
+export async function getMyJuryNotes(address: string, claimId: string): Promise<{ noteHash: string; note: string }[]> {
+  if (!/^\d+$/.test(claimId) || claimId === "0") throw new Error("Claim id must be a positive integer.");
+  const headers = await getWalletAuthHeaders(address);
+  return (await apiRequest<{ notes: { noteHash: string; note: string }[] }>(`/api/claims/${claimId}/notes/mine`, { headers })).notes;
+}
+
 /** Every revealed juror's amount and note. Only the claimant and the claim's jurors may read them. */
 export async function getJuryVotes(address: string, claimId: string): Promise<JuryVote[]> {
   if (!/^\d+$/.test(claimId) || claimId === "0") throw new Error("Claim id must be a positive integer.");

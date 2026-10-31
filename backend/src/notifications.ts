@@ -67,7 +67,7 @@ const OUTCOME_COPY: Record<string, string> = {
 export function buildNotifications(input: NotificationInput): Notification[] {
   const { address, now, token, claims, policy, juror, commitPeriod, responsePeriod, receiptPeriod } = input;
   const me = address.toLowerCase();
-  const amount = (value: string) => `${Number(formatUnits(value, token.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })} ${token.symbol}`;
+  const amount = (value: string) => `${Number(formatUnits(value, token.decimals)).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${token.symbol}`;
   const soon = (deadline: number) => deadline - now <= DUE_SOON_SECONDS;
   const out: Notification[] = [];
 
@@ -266,7 +266,8 @@ export function buildNotifications(input: NotificationInput): Notification[] {
   if (policy?.status === "Active" && policy.covered) {
     if (now < policy.claimEligibleAt) {
       out.push({ id: `policy:${policy.id}:waiting`, kind: "policy", severity: "info", title: "Your coverage is in its waiting period", body: "You can file claims once the waiting period ends.", at: policy.startTime, deadline: policy.claimEligibleAt, claimId: null });
-    } else {
+    } else if (!claims.some((c) => c.claimant.toLowerCase() === me && c.policyId === policy.id)) {
+      // Only news until the member files a first claim on this policy.
       out.push({ id: `policy:${policy.id}:eligible`, kind: "policy", severity: "success", title: "You can now file claims", body: "Your coverage is past its waiting period.", at: policy.claimEligibleAt, deadline: null, claimId: null });
     }
     if (BigInt(juror.stake) > 0n && !juror.staked) {

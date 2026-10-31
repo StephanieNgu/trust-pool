@@ -327,7 +327,7 @@ export async function getPremiumView(c: ProtocolContracts, address: string): Pro
 }
 
 export async function getMemberView(c: ProtocolContracts, address: string) {
-  const [policy, pastWaitingPeriod, waitingPeriod, balance, contributed, stake, activeJuries, minStake, premium, active] = await Promise.all([
+  const [policy, pastWaitingPeriod, waitingPeriod, balance, contributed, stake, activeJuries, minStake, premium, active, otherJurors, jurySize] = await Promise.all([
     c.registry.getPolicy(address),
     c.registry.isPastWaitingPeriod(address),
     c.registry.waitingPeriod(),
@@ -338,6 +338,8 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
     c.jury.minStake() as Promise<bigint>,
     getPremiumView(c, address),
     c.registry.isActive(address) as Promise<boolean>,
+    c.jury.eligibleJurors(address) as Promise<string[]>,
+    c.jury.jurySize() as Promise<bigint>,
   ]);
   const status = POLICY_STATUSES[Number(policy.status)];
   const openClaimId = status === "None" ? 0n : await c.claimManager.openClaimOfPolicy(policy.id);
@@ -353,6 +355,11 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
       /** Has enough staked to be picked (they also need an active policy past its waiting period). */
       staked: stake >= minStake,
     },
+    /**
+     * Could a claim from this wallet get a jury right now? `available` counts the other members who
+     * are covered, past their waiting period and staked; a claim reverts below `required`.
+     */
+    jury: { available: otherJurors.length, required: Number(jurySize) },
     policy:
       status === "None"
         ? null

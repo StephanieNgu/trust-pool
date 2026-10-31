@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PremiumOverview } from "../api";
 import { payPremium } from "../contracts/member";
+import { contractErrorMessage } from "../contracts/errors";
 
 interface PremiumPanelProps {
   account: string;
@@ -11,12 +12,14 @@ interface PremiumPanelProps {
 }
 
 const day = (seconds: number) => new Date(seconds * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-const money = (value: string) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 6 });
+const money = (value: string) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet. Your premium was not paid.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "The premium payment could not be completed.";
 }

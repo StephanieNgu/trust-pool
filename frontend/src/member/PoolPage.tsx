@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type { DashboardOverview } from "../api";
 import { contributeToPool } from "../contracts/member";
+import { contractErrorMessage } from "../contracts/errors";
 
 interface PoolPageProps {
   account: string | null;
@@ -10,13 +11,15 @@ interface PoolPageProps {
 }
 
 function money(value?: string) {
-  return value === undefined ? "—" : Number(value).toLocaleString("en-US", { maximumFractionDigits: 6 });
+  return value === undefined ? "—" : Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet. No contribution was made.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "The contribution could not be completed.";
 }

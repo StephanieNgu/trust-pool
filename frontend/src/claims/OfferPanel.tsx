@@ -1,13 +1,15 @@
-import { formatUnits } from "ethers";
 import { useEffect, useState } from "react";
 import { getJuryVotes, type ClaimDetailView, type JuryVote } from "../api";
 import { acceptOffer, withdrawClaim } from "../contracts/claims";
-import { dateTime, shortHash } from "./presentation";
+import { dateTime, shortHash, formatAmount } from "./presentation";
+import { contractErrorMessage } from "../contracts/errors";
 
 function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
@@ -52,7 +54,7 @@ export function JuryReasoning({ claim, account, tokenDecimals, tokenSymbol, onAu
     }
   }
 
-  const money = (value: string) => `${formatUnits(value, tokenDecimals)} ${tokenSymbol}`;
+  const money = (value: string) => `${formatAmount(value, tokenDecimals)} ${tokenSymbol}`;
   return <div className="jury-reasoning">
     <div className="detail-section-heading"><div><span className="eyebrow">JURORS' REASONING</span><h3>What each juror would pay, and why</h3></div></div>
     {votes === null ? <button className="text-button" type="button" disabled={busy} onClick={() => void load()}>{busy ? "Loading…" : `Show ${revealed} revealed vote${revealed === 1 ? "" : "s"}`}</button>
@@ -82,8 +84,8 @@ export function OfferPanel({ claim, account, chainTimestamp, tokenDecimals, toke
 
   if (claim.state !== "Offered" || claim.claimant.toLowerCase() !== account.toLowerCase()) return null;
 
-  const offer = `${formatUnits(claim.payoutAmount, tokenDecimals)} ${tokenSymbol}`;
-  const asked = `${formatUnits(claim.amount, tokenDecimals)} ${tokenSymbol}`;
+  const offer = `${formatAmount(claim.payoutAmount, tokenDecimals)} ${tokenSymbol}`;
+  const asked = `${formatAmount(claim.amount, tokenDecimals)} ${tokenSymbol}`;
   // The pool's per-claim cap (or the coverage limit) can make the offer smaller than the jury's median.
   const award = claim.jury?.award ?? claim.payoutAmount;
   const capped = BigInt(award) > BigInt(claim.payoutAmount);
@@ -110,9 +112,9 @@ export function OfferPanel({ claim, account, chainTimestamp, tokenDecimals, toke
     <span className="eyebrow">THE JURY'S OFFER</span>
     <h3>{offer}{claim.payoutAmount !== claim.amount && <small> of the {asked} you asked for</small>}</h3>
     <p>{capped
-      ? <>The middle amount of the jurors' votes was {formatUnits(award, tokenDecimals)} {tokenSymbol}, but one claim can take at most a fifth of the pool, so the offer is {offer}.</>
+      ? <>The middle amount of the jurors' votes was {formatAmount(award, tokenDecimals)} {tokenSymbol}, but one claim can take at most a fifth of the pool, so the offer is {offer}.</>
       : <>This is the middle amount of the jurors' votes.</>} Read their reasoning below, then accept it or withdraw your claim. The pool pays it back against the receipt for the repair or replacement, up to this amount. {claim.offerDeadline && <>If you do nothing, it is accepted for you after {dateTime(claim.offerDeadline)}.</>}
-      {claim.bond.returned !== null && claim.bond.returned !== "0" && <> {formatUnits(claim.bond.returned, tokenDecimals)} {tokenSymbol} of your bond is already back in your wallet, whichever you choose.</>}</p>
+      {claim.bond.returned !== null && claim.bond.returned !== "0" && <> {formatAmount(claim.bond.returned, tokenDecimals)} {tokenSymbol} of your bond is already back in your wallet, whichever you choose.</>}</p>
     <JuryReasoning claim={claim} account={account} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />
     {open ? <div className="offer-actions">
       <button className="primary" type="button" disabled={busy} onClick={() => void respond("accept")}>Accept {offer}</button>

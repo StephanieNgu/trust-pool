@@ -290,6 +290,19 @@ export function createApp(deps: AppDeps) {
   });
 
   /**
+   * The notes this juror stored for the claim, so they can reveal without the browser copy of their
+   * sealed vote. Only the juror's own notes, and only to them.
+   */
+  app.get("/api/claims/:id/notes/mine", async (req, res) => {
+    const juror = wallet(req);
+    const claim = await getClaimView(contracts, parseClaimId(req.params.id));
+    if (!claim) throw new HttpError(404, "Claim not found.");
+    const seat = claim.jury?.jurors.find((j) => j.address.toLowerCase() === juror.toLowerCase());
+    if (!seat) throw new HttpError(403, "Only the claim's jurors have notes on it.");
+    res.json({ notes: await evidence.listNotes(Number(claim.id), juror) });
+  });
+
+  /**
    * Revealed votes with each juror's amount and note. The amounts are public on-chain; the notes are
    * shown only to the claimant and the claim's jurors, since they may describe the evidence.
    */

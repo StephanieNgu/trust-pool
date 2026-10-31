@@ -85,6 +85,7 @@ export const juryAbi = [
   "function cancelAvailableAt(uint256 claimId) view returns (uint256)",
   "function randomnessTimeout() view returns (uint256)",
   "function jurySize() view returns (uint8)",
+  "function eligibleJurors(address claimant) view returns (address[])",
   "function quorum() view returns (uint8)",
   "function commitPeriod() view returns (uint256)",
   "function revealPeriod() view returns (uint256)",
