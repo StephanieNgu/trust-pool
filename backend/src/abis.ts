@@ -34,6 +34,15 @@ export const registryAbi = [
   "function maxCoverageLimit() view returns (uint256)",
   "function policyCount() view returns (uint256)",
   "function holderCount() view returns (uint256)",
+  "function premiumPeriod() view returns (uint256)",
+  "function gracePeriod() view returns (uint256)",
+  "function paidThrough(address holder) view returns (uint256)",
+  "function premiumStatus(address holder) view returns (uint8 state, uint256 paidUntil, uint256 graceEndsAt, uint256 amount)",
+  "function isOverdue(address holder) view returns (bool)",
+  "function overdueHolders() view returns (address[])",
+  "function lapseOverdue(address holder)",
+  "error NotOverdue()",
+  "error OpenClaimExists(uint256 claimId)",
 ] as const;
 
 export const claimManagerAbi = [
@@ -94,6 +103,10 @@ export const CLAIM_STATES = ["None", "Submitted", "JuryPending", "Voting", "Appr
 export const JURY_PHASES = ["None", "AwaitingRandomness", "Voting", "Tallied", "Cancelled"] as const;
 export const OUTCOMES = ["None", "Approved", "Rejected"] as const;
 export const POLICY_STATUSES = ["None", "Active", "Lapsed"] as const;
+/** PolicyRegistry.PremiumState: Paid, Grace (missed, still covered), Overdue (grace over), Lapsed. */
+export const PREMIUM_STATES = ["None", "Paid", "Grace", "Overdue", "Lapsed"] as const;
+
+export type PremiumState = Exclude<(typeof PREMIUM_STATES)[number], "None">;
 
 export type ClaimState = (typeof CLAIM_STATES)[number];
 

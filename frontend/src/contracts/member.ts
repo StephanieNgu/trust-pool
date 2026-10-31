@@ -101,11 +101,44 @@ export async function cancelCoverage(
   progress: (message: string) => void,
 ): Promise<string> {
   const { registry } = await session(account);
-  if (!(await registry.isActive(account))) throw new Error("This wallet does not have active coverage to cancel.");
+  // An overdue policy no longer counts as active but is still open, so read the stored status.
+  if (Number((await registry.getPolicy(account)).status) !== 1) throw new Error("This wallet does not have active coverage to cancel.");
   progress("Confirm the coverage cancellation in your wallet.");
   const transaction = await registry.cancelPolicy();
   progress("Your cancellation is confirming on-chain…");
   const receipt = await transaction.wait();
   if (!receipt || receipt.status !== 1) throw new Error("The coverage cancellation did not succeed.");
+  return transaction.hash as string;
+}
+
+/**
+ * Pays the next monthly premium of the wallet's policy, approving the pool first if needed. Coverage
+ * is extended by one period from the end of the paid one, so paying early loses nothing.
+ */
+export async function payPremium(account: string, progress: (message: string) => void): Promise<string> {
+  const { token, registry, deployment } = await session(account);
+  const [state, paidUntil, , amount]: [bigint, bigint, bigint, bigint] = await registry.premiumStatus(account);
+  // PolicyRegistry.PremiumState: 1 Paid, 2 Grace, 3 Overdue, 4 Lapsed.
+  if (state === 0n || state === 4n) throw new Error("This wallet does not have coverage to pay for.");
+  if (state === 3n) throw new Error("The grace period has ended, so this coverage can no longer be renewed. Buy new coverage instead.");
+  const period: bigint = await registry.premiumPeriod();
+  const latest = await registry.runner?.provider?.getBlock("latest");
+  const now = BigInt(latest?.timestamp ?? Math.floor(Date.now() / 1000));
+  if (paidUntil > now + period) throw new Error("Your coverage is already paid a full month ahead.");
+  if (await token.balanceOf(account) < amount) throw new Error("Your wallet does not have enough mUSDC for this premium.");
+
+  if (await token.allowance(account, deployment.addresses.pool) < amount) {
+    progress("Approve the mUSDC premium in your wallet.");
+    const approval = await token.approve(deployment.addresses.pool, amount);
+    progress("Waiting for the token approval to confirm…");
+    const approvalReceipt = await approval.wait();
+    if (!approvalReceipt || approvalReceipt.status !== 1) throw new Error("The token approval did not succeed.");
+  }
+
+  progress("Confirm the premium payment in your wallet.");
+  const transaction = await registry.payPremium();
+  progress("Your premium payment is confirming on-chain…");
+  const receipt = await transaction.wait();
+  if (!receipt || receipt.status !== 1) throw new Error("The premium payment did not succeed.");
   return transaction.hash as string;
 }

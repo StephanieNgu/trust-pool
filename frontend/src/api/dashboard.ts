@@ -1,6 +1,19 @@
 import { formatUnits, getAddress } from "ethers";
 import { apiRequest } from "./client";
-import type { ApiConfig, ApiHealth, MemberView, PoolView } from "./types";
+import type { ApiConfig, ApiHealth, MemberPremium, MemberView, PoolView } from "./types";
+
+/** The member's premium schedule, with the amount formatted in whole tokens. */
+export interface PremiumOverview {
+  status: MemberPremium["status"];
+  amount: string;
+  /** Length of one premium period, in days. */
+  periodDays: number;
+  dueAt: number | null;
+  paidThrough: number;
+  graceEndsAt: number;
+  dueSoon: boolean;
+  canPay: boolean;
+}
 
 export interface DashboardOverview {
   balance: string;
@@ -24,7 +37,12 @@ export interface DashboardOverview {
   claimBondBps: number;
   minClaimBond: string;
   coverage: string;
+  /** The policy is open and covered: premiums paid, or missed but still in their grace period. */
   active: boolean;
+  /** The policy is still open on-chain but its premium grace period ended unpaid. */
+  overdue: boolean;
+  /** Null without a policy. */
+  premium: PremiumOverview | null;
   policyId: string;
   startTime: number;
   waitingPeriod: number;
@@ -92,7 +110,20 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     claimBondBps: pool.claimBondBps,
     minClaimBond: formatUnits(pool.minClaimBond, decimals),
     coverage: formatUnits(policy?.coverageLimit ?? "0", decimals),
-    active: policy?.status === "Active",
+    active: policy?.status === "Active" && policy.covered,
+    overdue: policy?.status === "Active" && !policy.covered,
+    premium: policy?.premium
+      ? {
+          status: policy.premium.status,
+          amount: formatUnits(policy.premium.amount, decimals),
+          periodDays: Math.round(policy.premium.period / 86_400),
+          dueAt: policy.premium.dueAt,
+          paidThrough: policy.premium.paidThrough,
+          graceEndsAt: policy.premium.graceEndsAt,
+          dueSoon: policy.premium.dueSoon,
+          canPay: policy.premium.canPay,
+        }
+      : null,
     policyId: policy?.id ?? "0",
     startTime: policy?.startTime ?? 0,
     waitingPeriod: policy ? Math.max(0, policy.claimEligibleAt - policy.startTime) : 0,

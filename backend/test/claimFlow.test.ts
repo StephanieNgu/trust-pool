@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256, ZeroHash } from "ethers";
 import { Keeper } from "../src/keeper";
-import { PHOTO, photo, USDC, commit, increaseTime, reveal, setup, signerFor, testImei } from "./helpers";
+import { PHOTO, photo, USDC, commit, increaseTime, payPremiums, reveal, setup, signerFor, testImei } from "./helpers";
 
 describe("claim flow through the backend", () => {
   let t: Awaited<ReturnType<typeof setup>>;
@@ -306,6 +306,8 @@ describe("claim flow through the backend", () => {
     // after that, it expires the claim: nothing is paid and the policy is free again.
     const silent = await fileAndApprove(holders[4]);
     await increaseTime(Number(params.responsePeriod) + 1);
+    // A month passes below waiting for the receipt; members keep paying their premiums meanwhile.
+    await payPremiums(t.registry, holders);
     const before = await token.balanceOf(holders[4].address);
     let actions = await keeper.tick();
     assert.deepEqual(

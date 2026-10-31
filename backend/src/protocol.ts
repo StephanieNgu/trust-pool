@@ -1,6 +1,6 @@
 // Read-side views of on-chain state, shaped for the frontend. Amounts are returned as decimal
 // strings in token base units (mUSDC has 6 decimals) so they survive JSON without losing precision.
-import { CLAIM_STATES, JURY_PHASES, OUTCOMES, POLICY_STATUSES, type ClaimState } from "./abis";
+import { CLAIM_STATES, JURY_PHASES, OUTCOMES, POLICY_STATUSES, PREMIUM_STATES, type ClaimState, type PremiumState } from "./abis";
 import type { ProtocolContracts } from "./chain";
 
 const ZERO_HASH = `0x${"0".repeat(64)}`;
@@ -264,8 +264,70 @@ export async function getPoolView(c: ProtocolContracts) {
   };
 }
 
+/** Premiums due within this long (or already missed) are flagged `dueSoon` for reminders. */
+export const PREMIUM_REMINDER_SECONDS = 7 * 24 * 60 * 60;
+
+export interface PremiumView {
+  /**
+   * Paid: covered by a paid premium. Grace: the due date passed unpaid, coverage continues until
+   * `graceEndsAt`. Overdue: the grace period ended; the policy no longer covers anything and the keeper
+   * will close it. Lapsed: the policy is closed.
+   */
+  status: PremiumState;
+  /** Premium for one period, in token base units. */
+  amount: string;
+  /** Length of one premium period, in seconds. */
+  period: number;
+  /** End of the paid coverage, which is also when the next premium is due. */
+  paidThrough: number;
+  /** When the next premium is due; null once the policy is overdue or lapsed and cannot be paid. */
+  dueAt: number | null;
+  /** When an unpaid policy stops counting as active. */
+  graceEndsAt: number;
+  /** Seconds from `asOf` until `dueAt` (negative once missed); null when nothing can be paid. */
+  secondsUntilDue: number | null;
+  /** The next premium is due within PREMIUM_REMINDER_SECONDS, or was missed and is in grace. */
+  dueSoon: boolean;
+  /** PolicyRegistry.payPremium would accept a payment now (it allows at most one period ahead). */
+  canPay: boolean;
+  /** Chain time the view was computed at. */
+  asOf: number;
+}
+
+async function chainTime(c: ProtocolContracts): Promise<number> {
+  const block = await c.registry.runner?.provider?.getBlock("latest");
+  return block?.timestamp ?? Math.floor(Date.now() / 1000);
+}
+
+/** Where a member's premiums stand, or null if they never held a policy. */
+export async function getPremiumView(c: ProtocolContracts, address: string): Promise<PremiumView | null> {
+  const [[state, paidUntil, graceEndsAt, amount], period, now] = await Promise.all([
+    c.registry.premiumStatus(address) as Promise<[bigint, bigint, bigint, bigint]>,
+    c.registry.premiumPeriod() as Promise<bigint>,
+    chainTime(c),
+  ]);
+  const status = PREMIUM_STATES[Number(state)];
+  if (status === "None") return null;
+  const paidThrough = Number(paidUntil);
+  const payable = status === "Paid" || status === "Grace";
+  const dueAt = payable ? paidThrough : null;
+  const secondsUntilDue = dueAt === null ? null : dueAt - now;
+  return {
+    status,
+    amount: amount.toString(),
+    period: Number(period),
+    paidThrough,
+    dueAt,
+    graceEndsAt: Number(graceEndsAt),
+    secondsUntilDue,
+    dueSoon: secondsUntilDue !== null && secondsUntilDue <= PREMIUM_REMINDER_SECONDS,
+    canPay: payable && paidThrough <= now + Number(period),
+    asOf: now,
+  };
+}
+
 export async function getMemberView(c: ProtocolContracts, address: string) {
-  const [policy, pastWaitingPeriod, waitingPeriod, balance, contributed, stake, activeJuries, minStake] = await Promise.all([
+  const [policy, pastWaitingPeriod, waitingPeriod, balance, contributed, stake, activeJuries, minStake, premium, active] = await Promise.all([
     c.registry.getPolicy(address),
     c.registry.isPastWaitingPeriod(address),
     c.registry.waitingPeriod(),
@@ -274,6 +336,8 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
     c.pool.stakeOf(address) as Promise<bigint>,
     c.pool.activeJuriesOf(address) as Promise<bigint>,
     c.jury.minStake() as Promise<bigint>,
+    getPremiumView(c, address),
+    c.registry.isActive(address) as Promise<boolean>,
   ]);
   const status = POLICY_STATUSES[Number(policy.status)];
   const openClaimId = status === "None" ? 0n : await c.claimManager.openClaimOfPolicy(policy.id);
@@ -299,6 +363,12 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
             coverageLimit: policy.coverageLimit.toString(),
             startTime: Number(policy.startTime),
             status,
+            /**
+             * Covered right now: the policy is open and its premiums are paid or in grace. A policy
+             * can be "Active" on-chain but not covered once its grace period ends, until it is closed.
+             */
+            covered: active,
+            premium,
             claimEligibleAt: Number(policy.startTime + waitingPeriod),
             pastWaitingPeriod: pastWaitingPeriod as boolean,
             openClaimId: openClaimId === 0n ? null : openClaimId.toString(),

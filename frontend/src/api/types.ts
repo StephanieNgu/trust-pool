@@ -61,6 +61,31 @@ export interface MemberJuror {
   staked: boolean;
 }
 
+/** Where a member's monthly premiums stand. Times are unix seconds of chain time. */
+export interface MemberPremium {
+  /**
+   * Paid: covered by a paid premium. Grace: the due date passed unpaid; still covered until
+   * `graceEndsAt`. Overdue: the grace period ended and the policy no longer covers anything.
+   * Lapsed: the policy is closed.
+   */
+  status: "Paid" | "Grace" | "Overdue" | "Lapsed";
+  /** Premium for one period, in token base units. */
+  amount: string;
+  /** Length of one premium period, in seconds. */
+  period: number;
+  /** End of the paid coverage, which is also when the next premium is due. */
+  paidThrough: number;
+  /** When the next premium is due; null once it can no longer be paid. */
+  dueAt: number | null;
+  graceEndsAt: number;
+  secondsUntilDue: number | null;
+  /** Due within 7 days, or missed and in grace. */
+  dueSoon: boolean;
+  /** A payment would be accepted now (at most one period ahead). */
+  canPay: boolean;
+  asOf: number;
+}
+
 export interface MemberPolicy {
   id: string;
   deviceIdHash: string;
@@ -69,6 +94,9 @@ export interface MemberPolicy {
   coverageLimit: string;
   startTime: number;
   status: "Active" | "Lapsed";
+  /** Covered right now: open, with premiums paid or in their grace period. */
+  covered: boolean;
+  premium: MemberPremium | null;
   claimEligibleAt: number;
   pastWaitingPeriod: boolean;
   openClaimId: string | null;

@@ -211,7 +211,8 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/health` | Chain id, block number, keeper status |
 | `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
 | `GET /api/pool` | Reserve balance (excluding jurors' stakes and claim bonds), per-claim cap, totals including stakes, juror fees, penalties and bonds, the claim bond rate and minimum, policy and claim counts |
-| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), policy, claim-eligible date, open claim |
+| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below) |
+| `GET /api/members/:address/premium` | Just the premium schedule, light enough to poll for reminders: `{ premium: { status, amount, period, paidThrough, dueAt, graceEndsAt, secondsUntilDue, dueSoon, canPay, asOf } }`, or `{ premium: null }` without a policy. `status` is `Paid`, `Grace` (missed, still covered until `graceEndsAt`), `Overdue` (not covered; the keeper will close it) or `Lapsed`. `dueSoon` is true within 7 days of `dueAt` or once missed |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
 | `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, the `bond` (amount, and once decided what was returned and forfeited), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?), the `receipt` (deadline, hash, total) with `receiptFile` and `receiptCheck` (does the total match, is it dated after the claim?) |
 | `POST /api/claims/:id/notes` 🔒 | A juror's note `{ note }` (up to 500 characters), sent before sealing the vote; returns the `noteHash` to seal. Jurors of the claim only, while voting and before they commit |
@@ -232,6 +233,13 @@ Claims can end `Paid`, `Rejected` (most jurors voted 0, a tie, or fewer than 3 v
 (randomness never arrived). The offer is fixed when voting ends: the median juror amount, capped by
 the coverage limit and the pool's per-claim cap. The keeper accepts an offer the claimant has not
 answered once its deadline passes, then pays it.
+
+Premiums are monthly. Buying a policy pays the first 30 days; `PolicyRegistry.payPremium()` pays the
+next 30, counted from the end of the paid period, at most one period ahead. A missed premium starts a
+7-day grace period in which coverage continues and the member can still pay. After it the policy no
+longer counts as active (no new claims, no jury duty), and the keeper calls the permissionless
+`lapseOverdue` to close it and free the device. A claim already open keeps its policy open until it
+is decided.
 
 Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 
@@ -257,13 +265,13 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | Contract | Role | Holds funds? |
 |---|---|---|
 | `MockStablecoin` | Demo ERC-20 standing in for USDC (6 decimals) | n/a |
-| `PolicyRegistry` | Sells policies, one per wallet and per device; tracks Active/Lapsed; lists eligible jurors | No |
+| `PolicyRegistry` | Sells policies, one per wallet and per device; collects monthly premiums with a grace period; tracks Active/Lapsed; lists eligible jurors | No |
 | `Pool` | Holds all funds; takes premiums and contributions; holds jurors' stakes and claimants' bonds apart from the reserve; pays approved claims up to `maxPayoutBps` of the reserve, and jurors' fees | **Yes** |
 | `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Offered/Rejected → Approved (or Withdrawn) → Paid (or Expired without a receipt); takes the claimant's bond on submit and settles it at the verdict; pays the smaller of the offer and the receipt | No |
 | `JuryModule` | Requests randomness, picks 5 staked jurors (claimant excluded), runs commit-reveal amount voting, takes the median, pays agreeing jurors and penalizes no-shows | No |
 | `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
 
-Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 5% premium per 30-day period (the first paid on purchase), 7-day grace period after a missed premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default.
 
 **Voting is commit-reveal, on amounts.** Each juror votes the amount they think the claim should pay,
 from 0 (reject) up to the amount asked. A juror first calls `commitVote(claimId, commitment)` with

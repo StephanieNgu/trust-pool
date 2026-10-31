@@ -8,6 +8,16 @@ interface IPolicyRegistry {
         Lapsed
     }
 
+    /// @dev Paid: covered by a paid premium. Grace: premium missed, still covered until the grace
+    ///      period ends. Overdue: grace period over, not active, waiting for `lapseOverdue`.
+    enum PremiumState {
+        None,
+        Paid,
+        Grace,
+        Overdue,
+        Lapsed
+    }
+
     struct Policy {
         uint256 id;
         address holder;
