@@ -81,6 +81,11 @@ export interface ClaimView {
    * while the claim is still being decided.
    */
   bond: { amount: string; returned: string | null; forfeited: string | null };
+  /**
+   * Once the offer is accepted the claim pays against a receipt. `deadline` is when it must arrive by
+   * (null before acceptance); `hash` and `amount` are null until the claimant submits it.
+   */
+  receipt: { deadline: number | null; hash: string | null; amount: string | null };
   jury: JuryView | null;
 }
 
@@ -123,7 +128,7 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
     submittedAt: Number(claim.submittedAt),
     offerDeadline: state === "Offered" ? Number(claim.offerDeadline) : null,
     paidAmount: claim.paidAmount.toString(),
-    payoutAmount: state === "Rejected" || state === "Cancelled" || state === "Withdrawn" ? "0" : payoutAmount.toString(),
+    payoutAmount: ["Rejected", "Cancelled", "Withdrawn", "Expired"].includes(state) ? "0" : payoutAmount.toString(),
     bond: BOND_HELD_STATES.includes(state)
       ? { amount: claim.bond.toString(), returned: null, forfeited: null }
       : {
@@ -131,6 +136,11 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
           returned: (claim.bond - claim.bondForfeited).toString(),
           forfeited: claim.bondForfeited.toString(),
         },
+    receipt: {
+      deadline: Number(claim.receiptDeadline) || null,
+      hash: claim.receiptHash === ZERO_HASH ? null : claim.receiptHash,
+      amount: claim.receiptHash === ZERO_HASH ? null : claim.receiptAmount.toString(),
+    },
     jury,
   };
 }

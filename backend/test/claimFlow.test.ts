@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { keccak256, ZeroHash } from "ethers";
 import { Keeper } from "../src/keeper";
-import { PHOTO, USDC, commit, increaseTime, reveal, setup, signerFor, testImei } from "./helpers";
+import { PHOTO, USDC, commit, increaseTime, payPremiums, reveal, setup, signerFor, testImei } from "./helpers";
 
 describe("claim flow through the backend", () => {
   let t: Awaited<ReturnType<typeof setup>>;
@@ -153,18 +153,52 @@ describe("claim flow through the backend", () => {
     assert.equal((await getAs("/api/claims/1/votes", signerFor(signers, jurorAddrs[2]))).status, 200);
     assert.equal((await getAs("/api/claims/1/votes", outsider)).status, 403);
 
-    // 6. The claimant accepts; the keeper pays.
+    // 6. The claimant accepts. Nothing is paid until the receipt is in.
     await (await claimManager.connect(claimant).acceptOffer(1)).wait();
+    assert.deepEqual(await keeper.tick(), [], "no payout without a receipt");
+    claim = (await api("/api/claims/1")).body;
+    assert.equal(claim.state, "Approved");
+    assert.ok(claim.receipt.deadline > claim.submittedAt);
+    assert.equal(claim.receipt.hash, null);
+
+    // 7. The repair cost 180. The claimant uploads the invoice, then submits its hash and total.
+    const today = new Date((await claimManager.runner!.provider!.getBlock("latest"))!.timestamp * 1000).toISOString().slice(0, 10);
+    const receiptBody = (claimId: string, data = PHOTO) => ({
+      kind: "receipt",
+      description: "New screen and labour",
+      receipt: { claimId, shop: "Fix-It Phones", total: USDC(180).toString(), date: today },
+      files: [{ name: "invoice.pdf", contentType: "application/pdf", data }],
+    });
+    assert.equal((await post("/api/evidence", receiptBody("1"), outsider)).status, 403, "only the claimant");
+    assert.equal((await post("/api/evidence", { ...receiptBody("1"), receipt: { claimId: "1" } }, claimant)).status, 400);
+    const receiptUpload = await post("/api/evidence", receiptBody("1"), claimant);
+    assert.equal(receiptUpload.status, 201);
+    assert.equal(receiptUpload.body.kind, "receipt");
+    const receiptHash = receiptUpload.body.evidenceHash;
+    await (await claimManager.connect(claimant).submitReceipt(1, receiptHash, USDC(180))).wait();
+
+    claim = (await api("/api/claims/1")).body;
+    assert.deepEqual(claim.receipt, { deadline: claim.receipt.deadline, hash: receiptHash, amount: USDC(180).toString() });
+    assert.equal(claim.payoutAmount, USDC(180).toString(), "the smaller of the offer and the receipt");
+    assert.deepEqual(claim.receiptCheck, { totalMatches: true, datedAfterClaim: true });
+    assert.deepEqual(claim.receiptFile, { available: true, url: `/api/evidence/${receiptHash}` });
+    assert.equal((await post("/api/evidence", receiptBody("1"), claimant)).status, 409, "the claim has its receipt");
+
+    // 8. The keeper pays the receipt's 180.
     const before = await token.balanceOf(claimant.address);
     resolved = await keeper.tick();
     assert.deepEqual(resolved.map((a) => [a.action, a.error]), [["executePayout", undefined]]);
-    assert.equal((await token.balanceOf(claimant.address)) - before, USDC(200));
+    assert.equal((await token.balanceOf(claimant.address)) - before, USDC(180));
 
     claim = (await api("/api/claims/1")).body;
     assert.equal(claim.state, "Paid");
     assert.equal(claim.jury.outcome, "Approved");
-    assert.equal(claim.paidAmount, USDC(200).toString());
+    assert.equal(claim.paidAmount, USDC(180).toString());
     assert.deepEqual(await keeper.tick(), []);
+
+    // The claim's jurors can see what the payout went to; nobody else can.
+    assert.equal((await getAs(`/api/evidence/${receiptHash}`, signerFor(signers, jurorAddrs[0]))).status, 200);
+    assert.equal((await getAs(`/api/evidence/${receiptHash}`, outsider)).status, 403);
 
     // Jurors only see evidence while voting is open.
     assert.equal((await getAs(`/api/evidence/${evidenceHash}/raw`, signerFor(signers, jurorAddrs[0]))).status, 403);
@@ -176,7 +210,7 @@ describe("claim flow through the backend", () => {
     assert.equal(member.policy.openClaimId, null);
 
     const pool = (await api("/api/pool")).body;
-    assert.equal(pool.totalPaidOut, USDC(200).toString());
+    assert.equal(pool.totalPaidOut, USDC(180).toString());
     assert.equal(pool.claimCount, 1);
   });
 
@@ -256,21 +290,30 @@ describe("claim flow through the backend", () => {
     assert.equal(claim.payoutAmount, "0");
     assert.equal((await api(`/api/members/${holders[3].address}`)).body.policy.openClaimId, null);
 
-    // Silence: once the response window passes, the keeper accepts and pays in one pass.
+    // Silence: once the response window passes, the keeper accepts. With no receipt in the 30 days
+    // after that, it expires the claim: nothing is paid and the policy is free again.
     const silent = await fileAndApprove(holders[4]);
     await increaseTime(Number(params.responsePeriod) + 1);
+    // A month passes below waiting for the receipt; members keep paying their premiums meanwhile.
+    await payPremiums(t.registry, holders);
     const before = await token.balanceOf(holders[4].address);
-    const actions = await keeper.tick();
+    let actions = await keeper.tick();
     assert.deepEqual(
       actions.map((a) => [a.claimId, a.action, a.error]),
-      [
-        [silent, "acceptOffer", undefined],
-        [silent, "executePayout", undefined],
-      ],
+      [[silent, "acceptOffer", undefined]],
     );
-    assert.equal((await token.balanceOf(holders[4].address)) - before, USDC(100));
+    assert.equal((await api(`/api/claims/${silent}`)).body.state, "Approved");
+    await increaseTime(Number(params.receiptPeriod) + 1);
+    actions = await keeper.tick();
+    assert.deepEqual(
+      actions.map((a) => [a.claimId, a.action, a.error]),
+      [[silent, "expireClaim", undefined]],
+    );
+    assert.equal(await token.balanceOf(holders[4].address), before);
     claim = (await api(`/api/claims/${silent}`)).body;
-    assert.equal(claim.state, "Paid");
+    assert.equal(claim.state, "Expired");
+    assert.equal(claim.payoutAmount, "0");
+    assert.equal((await api(`/api/members/${holders[4].address}`)).body.policy.openClaimId, null);
   });
 
   it("cancels a claim whose randomness never arrives", async () => {

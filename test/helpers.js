@@ -100,10 +100,19 @@ async function castVotes(ctx, claimId, jurors, votes) {
   for (const [i, j] of jurors.entries()) await revealVote(ctx, claimId, j, votes[i]);
 }
 
-/** Finalizes and has the claimant accept the jury's offer, leaving the claim Approved. */
-async function finalizeAndAccept(ctx, claimId, claimant) {
+const RECEIPT = ethers.keccak256(ethers.toUtf8Bytes("ipfs://repair-receipt"));
+
+/**
+ * Finalizes, has the claimant accept the jury's offer and submit a receipt for the full offer, leaving
+ * the claim Approved and payable. Pass `receipt: false` to stop before the receipt.
+ */
+async function finalizeAndAccept(ctx, claimId, claimant, { receipt = true } = {}) {
   await ctx.claimManager.finalize(claimId);
   await ctx.claimManager.connect(claimant).acceptOffer(claimId);
+  if (receipt) {
+    const { approvedAmount } = await ctx.claimManager.getClaim(claimId);
+    await ctx.claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, approvedAmount);
+  }
 }
 
 /** Commit plus reveal window: after this long, voting is closed. */
@@ -116,7 +125,7 @@ async function submitClaim(ctx, claimant, amount = USDC(400)) {
 }
 
 // Mirrors of the Solidity enums, for readable assertions.
-const ClaimState = { None: 0n, Submitted: 1n, JuryPending: 2n, Voting: 3n, Approved: 4n, Rejected: 5n, Paid: 6n, Cancelled: 7n, Offered: 8n, Withdrawn: 9n };
+const ClaimState = { None: 0n, Submitted: 1n, JuryPending: 2n, Voting: 3n, Approved: 4n, Rejected: 5n, Paid: 6n, Cancelled: 7n, Offered: 8n, Withdrawn: 9n, Expired: 10n };
 const JuryPhase = { None: 0n, AwaitingRandomness: 1n, Voting: 2n, Tallied: 3n, Cancelled: 4n };
 const Outcome = { None: 0n, Approved: 1n, Rejected: 2n };
 const PolicyStatus = { None: 0n, Active: 1n, Lapsed: 2n };
@@ -128,6 +137,7 @@ module.exports = {
   COVERAGE,
   SEED_LIQUIDITY,
   EVIDENCE,
+  RECEIPT,
   HOLDER_COUNT,
   deviceHash,
   enrollmentHash,

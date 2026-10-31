@@ -10,6 +10,7 @@ export const CLAIM_STATE_COPY: Record<ClaimState, string> = {
   Cancelled: "Cancelled",
   Offered: "Offer made",
   Withdrawn: "Withdrawn",
+  Expired: "Expired",
 };
 
 export function shortHash(value: string) {

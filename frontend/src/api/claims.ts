@@ -12,6 +12,7 @@ import type {
   EvidenceKind,
   EvidenceSummary,
   JuryVote,
+  ReceiptDetails,
 } from "./types";
 
 export const MAX_EVIDENCE_FILES = 10;
@@ -134,7 +135,7 @@ export const MAX_JURY_NOTE_LENGTH = 500;
 
 async function postBundle(
   address: string,
-  body: { kind: EvidenceKind; description: string; amountReason?: string; device?: DeviceDetails; captureCode: string },
+  body: { kind: EvidenceKind; description: string; amountReason?: string; device?: DeviceDetails; receipt?: ReceiptDetails; captureCode?: string },
   files: File[],
 ): Promise<EvidenceSummary> {
   validateEvidenceFiles(files);
@@ -142,7 +143,7 @@ async function postBundle(
   if ((body.amountReason?.length ?? 0) > MAX_AMOUNT_REASON_LENGTH) {
     throw new Error(`The explanation of the amount must be ${MAX_AMOUNT_REASON_LENGTH.toLocaleString()} characters or fewer.`);
   }
-  if (!body.captureCode) throw new Error("Get a capture code before taking the photos.");
+  if (body.kind !== "receipt" && !body.captureCode) throw new Error("Get a capture code before taking the photos.");
   const headers = await getWalletAuthHeaders(address);
   const encoded = await Promise.all(
     files.map(async (file) => ({ name: file.name, contentType: file.type, data: await fileAsBase64(file) })),
@@ -182,6 +183,29 @@ export async function enrollDevice(
 ): Promise<EvidenceSummary> {
   const details = validateDeviceDetails(device);
   return postBundle(address, { kind: "enrollment", description: "", device: details, captureCode }, files);
+}
+
+export const MAX_SHOP_LENGTH = 120;
+
+/**
+ * Uploads the receipt for an accepted claim: the invoice files, the shop, the total in base units
+ * and the invoice date (YYYY-MM-DD). Pass the returned hash and the same total to submitReceipt.
+ */
+export async function uploadReceipt(
+  address: string,
+  claimId: string,
+  details: { shop: string; total: bigint; date: string; description?: string },
+  files: File[],
+): Promise<EvidenceSummary> {
+  const shop = details.shop.trim();
+  if (!shop || shop.length > MAX_SHOP_LENGTH) throw new Error(`Enter the shop's name, up to ${MAX_SHOP_LENGTH} characters.`);
+  if (details.total <= 0n) throw new Error("Enter the receipt's total.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(details.date)) throw new Error("Enter the date on the receipt.");
+  return postBundle(
+    address,
+    { kind: "receipt", description: details.description?.trim() ?? "", receipt: { claimId, shop, total: details.total.toString(), date: details.date } },
+    files,
+  );
 }
 
 export async function getClaimsForMember(address: string, state?: ClaimState): Promise<ClaimView[]> {

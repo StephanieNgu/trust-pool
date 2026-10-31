@@ -42,6 +42,8 @@ export interface NotificationInput {
   commitPeriod: number;
   /** ClaimManager.responsePeriod, to date when an offer was made. */
   responsePeriod: number;
+  /** ClaimManager.receiptPeriod, to date when an offer was accepted. */
+  receiptPeriod: number;
 }
 
 /** A deadline within this many seconds is called out as closing soon. */
@@ -55,7 +57,7 @@ const OUTCOME_COPY: Record<string, string> = {
 };
 
 export function buildNotifications(input: NotificationInput): Notification[] {
-  const { address, now, token, claims, policy, juror, commitPeriod, responsePeriod } = input;
+  const { address, now, token, claims, policy, juror, commitPeriod, responsePeriod, receiptPeriod } = input;
   const me = address.toLowerCase();
   const amount = (value: string) => `${Number(formatUnits(value, token.decimals)).toLocaleString("en-US", { maximumFractionDigits: 6 })} ${token.symbol}`;
   const soon = (deadline: number) => deadline - now <= DUE_SOON_SECONDS;
@@ -172,9 +174,17 @@ export function buildNotifications(input: NotificationInput): Notification[] {
         });
         break;
       }
-      case "Approved":
-        out.push({ ...base, severity: "success", title: `Claim ${n} is approved`, body: `${amount(claim.payoutAmount)} will be paid out from the pool shortly.${bondBack}`, at: jury?.revealDeadline ?? claim.submittedAt, deadline: null });
+      case "Approved": {
+        // The accepted offer pays against a receipt: ask for it until it is in, then say it is coming.
+        const deadline = claim.receipt.deadline;
+        const at = deadline ? deadline - receiptPeriod : jury?.revealDeadline ?? claim.submittedAt;
+        if (!claim.receipt.hash) {
+          out.push({ ...base, severity: "action", title: `Upload your receipt for claim ${n}`, body: `You'll be paid back what the repair or replacement cost, up to ${amount(claim.payoutAmount)}. Upload the receipt from the claim page before the deadline, or the claim closes unpaid.${bondBack}`, at, deadline });
+        } else {
+          out.push({ ...base, id: `${base.id}:receipt`, severity: "success", title: `Claim ${n} is being paid`, body: `Your receipt is in. ${amount(claim.payoutAmount)} will be paid out from the pool shortly.`, at, deadline: null });
+        }
         break;
+      }
       case "Paid":
         out.push({ ...base, severity: "success", title: `Claim ${n} was paid`, body: `${amount(claim.paidAmount)} was sent to your wallet.${bondBack}`, at: jury?.revealDeadline ?? claim.submittedAt, deadline: null });
         break;
@@ -185,6 +195,9 @@ export function buildNotifications(input: NotificationInput): Notification[] {
       }
       case "Withdrawn":
         out.push({ ...base, severity: "info", title: `Claim ${n} was withdrawn`, body: `You turned down the jury's offer, so nothing was paid.${bondBack}`, at: jury?.revealDeadline ?? claim.submittedAt, deadline: null });
+        break;
+      case "Expired":
+        out.push({ ...base, severity: "warning", title: `Claim ${n} closed without a receipt`, body: "No receipt was uploaded in time, so nothing was paid. You can file a new claim.", at: claim.receipt.deadline ?? claim.submittedAt, deadline: null });
         break;
       case "Cancelled":
         out.push({ ...base, severity: "info", title: `Claim ${n} was cancelled`, body: "No jury could be picked in time, so the claim was cancelled and your bond returned. You can file it again.", at: claim.submittedAt, deadline: null });

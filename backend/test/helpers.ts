@@ -78,6 +78,17 @@ export async function increaseTime(seconds: number | bigint) {
   await hre.network.provider.send("evm_mine", []);
 }
 
+/**
+ * Pays the next monthly premium for each holder, as members do, so tests that skip weeks ahead keep
+ * their policies (and their jurors) active.
+ */
+export async function payPremiums(registry: Contract, holders: Signer[]) {
+  for (const h of holders) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (await (registry.connect(h) as any).payPremium()).wait();
+  }
+}
+
 /** Deploys the protocol with seven policyholders past the waiting period and a seeded pool. */
 export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
   await hre.run("compile", { quiet: true });

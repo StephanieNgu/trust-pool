@@ -143,3 +143,5 @@
 .juror-reward,.juror-penalty{margin-left:8px;font-size:10px;font-weight:700}.juror-reward{color:#247952}.juror-penalty{color:#a74f43}
 @media(max-width:640px){.jury-duty{grid-template-columns:1fr}.jury-duty-actions{align-items:flex-start;text-align:left}}
 .claim-bond-note{margin:14px 0 0;padding:12px 14px;border-radius:9px;background:#f4f7fb;border:1px solid #e5eaf2;font-size:11px;line-height:1.6;color:#5e6f87}.claim-bond-note strong{display:block;color:#253047;font-size:12px;margin-bottom:3px}
+.receipt-panel input:not([type=file]){width:100%;padding:12px;border:1px solid #d5dfed;border-radius:8px;background:#fff;color:#253047;font-size:13px}.receipt-panel label{display:block;font-size:12px;font-weight:600;margin:16px 0 8px}.receipt-panel small{display:block;margin-top:8px;font-size:11px;color:#5e6f87}.receipt-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.receipt-panel .amount-input input{padding-right:83px}.receipt-panel .amount-input>span{top:13px}
+@media(max-width:600px){.receipt-row{grid-template-columns:1fr}}

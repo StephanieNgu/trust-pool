@@ -95,7 +95,7 @@ export function OfferPanel({ claim, account, chainTimestamp, tokenDecimals, toke
     try {
       if (action === "accept") await acceptOffer(account, claim.id, setFeedback);
       else await withdrawClaim(account, claim.id, setFeedback);
-      setFeedback(action === "accept" ? "Offer accepted. The payout is sent automatically." : "Claim withdrawn. Nothing was paid.");
+      setFeedback(action === "accept" ? "Offer accepted. Upload your repair or replacement receipt to be paid." : "Claim withdrawn. Nothing was paid.");
       setConfirmWithdraw(false);
       onChanged();
     } catch (cause) {
@@ -111,7 +111,7 @@ export function OfferPanel({ claim, account, chainTimestamp, tokenDecimals, toke
     <h3>{offer}{claim.payoutAmount !== claim.amount && <small> of the {asked} you asked for</small>}</h3>
     <p>{capped
       ? <>The middle amount of the jurors' votes was {formatUnits(award, tokenDecimals)} {tokenSymbol}, but one claim can take at most a fifth of the pool, so the offer is {offer}.</>
-      : <>This is the middle amount of the jurors' votes.</>} Read their reasoning below, then accept it or withdraw your claim. {claim.offerDeadline && <>If you do nothing, it is accepted for you after {dateTime(claim.offerDeadline)}.</>}
+      : <>This is the middle amount of the jurors' votes.</>} Read their reasoning below, then accept it or withdraw your claim. The pool pays it back against the receipt for the repair or replacement, up to this amount. {claim.offerDeadline && <>If you do nothing, it is accepted for you after {dateTime(claim.offerDeadline)}.</>}
       {claim.bond.returned !== null && claim.bond.returned !== "0" && <> {formatUnits(claim.bond.returned, tokenDecimals)} {tokenSymbol} of your bond is already back in your wallet, whichever you choose.</>}</p>
     <JuryReasoning claim={claim} account={account} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />
     {open ? <div className="offer-actions">

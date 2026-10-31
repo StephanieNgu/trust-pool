@@ -107,6 +107,12 @@ async function main() {
   await (await claimManager.connect(claimant).acceptOffer(claimId)).wait();
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
 
+  log("The shop replaces the screen for 175; the claimant uploads the receipt and records it");
+  // In the real app the receipt files are uploaded encrypted and the backend returns this hash.
+  const receiptHash = ethers.keccak256(ethers.toUtf8Bytes("fix-it-phones-invoice-0042.pdf"));
+  await (await claimManager.connect(claimant).submitReceipt(claimId, receiptHash, USDC(175))).wait();
+  console.log(`    The claim pays the smaller of the offer and the receipt: ${fmt(await claimManager.payoutAmount(claimId))}`);
+
   log("Executing payout");
   const before = await token.balanceOf(claimant.address);
   await (await claimManager.executePayout(claimId)).wait();

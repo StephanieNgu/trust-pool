@@ -5,12 +5,13 @@
 //                   randomness is still missing after the timeout, cancels the claim instead.
 //   Voting       -> calls finalize once the voting window has closed or every juror has voted
 //   Offered      -> calls acceptOffer once the claimant's response window has passed without an answer
-//   Approved     -> calls executePayout, so approved claims are paid automatically
+//   Approved     -> calls executePayout once the claimant has submitted the receipt, so the claim is
+//                   paid automatically; or expireClaim if the receipt window passes without one
 //
 // It also closes policies whose premium grace period ended unpaid (PolicyRegistry.lapseOverdue),
 // freeing their devices. A policy with an open claim stays open until the claim is decided.
 //
-// finalize, acceptOffer (after the deadline), executePayout, cancelStalledClaim and lapseOverdue are permissionless on-chain, so the keeper only saves users a
+// finalize, acceptOffer (after the deadline), executePayout, expireClaim, cancelStalledClaim and lapseOverdue are permissionless on-chain, so the keeper only saves users a
 // transaction; it cannot change an outcome.
 import { randomBytes } from "node:crypto";
 import type { Signer } from "ethers";
@@ -35,7 +36,7 @@ export interface KeeperOptions {
 export type KeeperAction =
   | {
       claimId: number;
-      action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "acceptOffer" | "executePayout";
+      action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "acceptOffer" | "executePayout" | "expireClaim";
       txHash?: string;
       error?: string;
     }
@@ -59,7 +60,8 @@ export interface KeeperStatus {
 }
 
 const silent: Logger = { info: () => {}, warn: () => {} };
-const TERMINAL: string[] = ["Rejected", "Paid", "Cancelled", "Withdrawn"];
+const ZERO_HASH = `0x${"0".repeat(64)}`;
+const TERMINAL: string[] = ["Rejected", "Paid", "Cancelled", "Withdrawn", "Expired"];
 
 export class Keeper {
   private readonly logger: Logger;
@@ -183,9 +185,17 @@ export class Keeper {
         }
       }
 
+      // An accepted claim pays once its receipt is in, and expires if the receipt window passes first.
       if (state === "Approved" && this.options.autoResolve) {
-        if (await this.attempt(actions, id, "executePayout", () => claimManager.executePayout(id))) {
-          state = "Paid";
+        const claim = await claimManager.getClaim(id);
+        if (claim.receiptHash !== ZERO_HASH) {
+          if (await this.attempt(actions, id, "executePayout", () => claimManager.executePayout(id))) {
+            state = "Paid";
+          }
+        } else if ((await this.chainTime()) > Number(claim.receiptDeadline)) {
+          if (await this.attempt(actions, id, "expireClaim", () => claimManager.expireClaim(id))) {
+            state = "Expired";
+          }
         }
       }
 
