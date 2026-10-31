@@ -11,6 +11,7 @@ import { AttentionList, NotificationBell, useNotifications } from "./member/Noti
 import type { MemberNotification } from "./api";
 import { createDeviceKey } from "./member/deviceKey";
 import { purchaseCoverage, quoteCoverage } from "./contracts/insurance";
+import { contractErrorMessage } from "./contracts/errors";
 
 type IconName = "grid" | "shield" | "wallet" | "pool" | "arrow" | "check";
 function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
@@ -18,9 +19,11 @@ function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
 }
 const short = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
-const money = (value?: string) => value === undefined ? "—" : Number(value).toLocaleString("en-US", { maximumFractionDigits: 6 });
+const money = (value?: string) => value === undefined ? "—" : Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
 function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) return "Request cancelled in your wallet. You can try again.";
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }

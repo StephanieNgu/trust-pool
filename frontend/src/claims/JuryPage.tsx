@@ -1,9 +1,8 @@
-import { formatUnits } from "ethers";
 import { useEffect, useState } from "react";
 import { getClaimsForJuror, type ClaimState, type ClaimView, type DashboardOverview } from "../api";
 import { JuryDuty } from "../member/JuryDuty";
 import { ClaimDetail } from "./ClaimDetail";
-import { CLAIM_STATE_COPY, dateTime } from "./presentation";
+import { CLAIM_STATE_COPY, dateTime, formatAmount } from "./presentation";
 
 interface JuryPageProps {
   account: string | null;
@@ -81,7 +80,7 @@ export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated
     <div className="jury-queue">{account && claims.map((claim) => {
       const task = jurorTask(claim, account);
       return <article className="jury-card" key={claim.id}>
-        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatUnits(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
+        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatAmount(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
         <p>Submitted {dateTime(claim.submittedAt)}</p>
         <div className={task.includes("required") ? "jury-action required" : "jury-action"}>{task}</div>
         <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>Review claim →</button>

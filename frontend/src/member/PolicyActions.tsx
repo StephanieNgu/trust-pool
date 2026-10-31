@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DashboardOverview } from "../api";
 import { cancelCoverage } from "../contracts/member";
+import { contractErrorMessage } from "../contracts/errors";
 
 interface PolicyActionsProps {
   account: string;
@@ -13,6 +14,8 @@ function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet. Your coverage remains active.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "The coverage cancellation could not be completed.";
 }

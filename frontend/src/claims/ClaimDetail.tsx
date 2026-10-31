@@ -1,13 +1,13 @@
-import { formatUnits } from "ethers";
 import { useEffect, useState } from "react";
 import { getClaim, type ClaimDetailView, type ClaimJury } from "../api";
 import { readChainTimestamp } from "../contracts/jury";
 import { cancelStalledClaim, executeClaimPayout, finalizeClaim } from "../contracts/claims";
+import { contractErrorMessage } from "../contracts/errors";
 import { JuryVotePanel } from "./JuryVotePanel";
 import { JuryReasoning, OfferPanel } from "./OfferPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { EvidenceViewer } from "./EvidenceViewer";
-import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
+import { CLAIM_STATE_COPY, dateTime, shortHash, formatAmount } from "./presentation";
 
 interface ClaimDetailProps {
   claimId: string;
@@ -21,6 +21,9 @@ interface ClaimDetailProps {
 }
 
 function errorText(error: unknown) {
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
+  if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "Could not load this claim.";
 }
 
@@ -60,7 +63,7 @@ function DeviceCheck({ check }: { check: ClaimDetailView["deviceCheck"] }) {
 
 /** The bond's state: held while the jury decides, then what came back and what the pool kept. */
 function bondText(claim: ClaimDetailView, decimals: number, symbol: string) {
-  const money = (value: string) => `${formatUnits(value, decimals)} ${symbol}`;
+  const money = (value: string) => `${formatAmount(value, decimals)} ${symbol}`;
   const { amount, returned, forfeited } = claim.bond;
   if (returned === null || forfeited === null) return `${money(amount)}, held until the jury decides`;
   if (forfeited === "0") return `${money(amount)}, returned in full`;
@@ -111,7 +114,8 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
   const jury = claim.jury;
   const currentJuror = jury?.jurors.find((juror) => juror.address.toLowerCase() === account.toLowerCase());
   const canFinalize = claim.state === "Voting" && Boolean(jury?.canTally);
-  const canExecutePayout = claim.state === "Approved";
+  // The contract pays only against a receipt (ReceiptRequired otherwise), so offer the fallback once there is one.
+  const canExecutePayout = claim.state === "Approved" && Boolean(claim.receipt?.hash);
   const canCancelStalled = claim.state === "JuryPending" && chainTimestamp !== null && Boolean(jury?.cancelAvailableAt && chainTimestamp > jury.cancelAvailableAt);
 
   async function resolve(action: "finalize" | "payout" | "cancel") {
@@ -135,17 +139,17 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
   return <section className="claims-panel claim-detail" aria-label={`Claim ${claim.id} details`}>
     <div className="claims-panel-heading"><div><button className="text-button detail-back" type="button" onClick={onBack}>← Back to list</button><h2>Claim #{claim.id}</h2></div><button className="text-button" type="button" disabled={loading} onClick={() => setRefresh((value) => value + 1)}>Refresh</button></div>
     {error && <p className="notice warning" role="alert">{error}</p>}
-    <div className="detail-hero"><div><span className="eyebrow">REQUESTED PAYOUT</span><strong>{formatUnits(claim.amount, tokenDecimals)} <small>{tokenSymbol}</small></strong></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
+    <div className="detail-hero"><div><span className="eyebrow">REQUESTED PAYOUT</span><strong>{formatAmount(claim.amount, tokenDecimals)} <small>{tokenSymbol}</small></strong></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
 
     <dl className="detail-grid">
       <div><dt>Policy</dt><dd>#{claim.policyId}</dd></div>
       <div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div>
-      <div><dt>Coverage limit</dt><dd>{formatUnits(claim.coverageLimit, tokenDecimals)} {tokenSymbol}</dd></div>
-      <div><dt>{claim.state === "Paid" ? "Paid out" : claim.receipt.amount ? "Payout (offer or receipt, if less)" : claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatUnits(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
+      <div><dt>Coverage limit</dt><dd>{formatAmount(claim.coverageLimit, tokenDecimals)} {tokenSymbol}</dd></div>
+      <div><dt>{claim.state === "Paid" ? "Paid out" : claim.receipt.amount ? "Payout (offer or receipt, if less)" : claim.jury?.phase === "Tallied" ? "Jury's offer" : "Payout if approved in full"}</dt><dd>{formatAmount(claim.payoutAmount, tokenDecimals)} {tokenSymbol}</dd></div>
       <div><dt>Claim bond</dt><dd>{bondText(claim, tokenDecimals, tokenSymbol)}</dd></div>
       {claim.offerDeadline && <div><dt>Claimant responds by</dt><dd>{dateTime(claim.offerDeadline)}</dd></div>}
       {claim.state === "Approved" && !claim.receipt.hash && <div><dt>Receipt due by</dt><dd>{dateTime(claim.receipt.deadline)}</dd></div>}
-      {claim.receipt.amount && <div><dt>Receipt total</dt><dd>{formatUnits(claim.receipt.amount, tokenDecimals)} {tokenSymbol}</dd></div>}
+      {claim.receipt.amount && <div><dt>Receipt total</dt><dd>{formatAmount(claim.receipt.amount, tokenDecimals)} {tokenSymbol}</dd></div>}
       <div className="detail-wide"><dt>Evidence hash</dt><dd title={claim.evidenceHash}>{claim.evidenceHash}</dd></div>
       <div><dt>Evidence stored</dt><dd>{claim.evidence.available ? "Available to authorized wallets" : "Not found in backend"}</dd></div>
       <div><dt>Your role</dt><dd>{claim.claimant.toLowerCase() === account.toLowerCase() ? "Claimant" : currentJuror ? "Selected juror" : "Observer"}</dd></div>
@@ -170,7 +174,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>
       <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Quorum</dt><dd>{jury.approvals + jury.rejections} / {jury.quorum} revealed</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} would pay · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
       {chainTimeError && <p className="notice warning">Could not synchronize blockchain time: {chainTimeError}</p>}
-      <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? (juror.amount === "0" ? "Rejects" : `Pays ${formatUnits(juror.amount ?? "0", tokenDecimals)}`) : juror.committed ? "Sealed" : "Waiting"}{juror.reward && juror.reward !== "0" && <small className="juror-reward">+{formatUnits(juror.reward, tokenDecimals)} fee</small>}{juror.penalty && juror.penalty !== "0" && <small className="juror-penalty">−{formatUnits(juror.penalty, tokenDecimals)} no-show</small>}</span></div>)}</div>
+      <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{index + 1}</b><code title={juror.address}>{shortHash(juror.address)}</code>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? (juror.amount === "0" ? "Rejects" : `Pays ${formatAmount(juror.amount ?? "0", tokenDecimals)}`) : juror.committed ? "Sealed" : "Waiting"}{juror.reward && juror.reward !== "0" && <small className="juror-reward">+{formatAmount(juror.reward, tokenDecimals)} fee</small>}{juror.penalty && juror.penalty !== "0" && <small className="juror-penalty">−{formatAmount(juror.penalty, tokenDecimals)} no-show</small>}</span></div>)}</div>
       {enableJurorActions && <JuryVotePanel claim={claim} account={account} chainTimestamp={chainTimestamp} evidenceVerified={evidenceVerified} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />}
       {claim.state !== "Offered" && <JuryReasoning claim={claim} account={account} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />}
     </>}

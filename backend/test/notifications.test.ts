@@ -35,6 +35,8 @@ describe("notifications", () => {
     const { claimant, claimManager, jury, keeper, signers } = t;
     await (await claimManager.connect(claimant).submitClaim(USDC(300), `0x${"33".repeat(32)}`)).wait();
     assert.ok((await ids(claimant.address)).includes("claim:1:JuryPending"));
+    const policy = await t.registry.getPolicy(claimant.address);
+    assert.ok(!(await ids(claimant.address)).includes(`policy:${policy.id}:eligible`), "old news once a claim is filed");
 
     await keeper.tick();
     const jurors: string[] = [...(await jury.getJurors(1))];

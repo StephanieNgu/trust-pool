@@ -1,8 +1,10 @@
 import { formatUnits, parseUnits } from "ethers";
 import { useEffect, useState } from "react";
-import { MAX_JURY_NOTE_LENGTH, submitJuryNote, type ClaimDetailView } from "../api";
+import { MAX_JURY_NOTE_LENGTH, getMyJuryNotes, submitJuryNote, type ClaimDetailView } from "../api";
 import { commitJuryVote, computeVoteCommitment, deriveVoteSalt, juryNoteHash, readVoteCommitment, revealJuryVote } from "../contracts/jury";
 import { loadVoteSecret, removeVoteSecret, saveVoteSecret, type VoteSecret } from "./voteSecret";
+import { contractErrorMessage } from "../contracts/errors";
+import { formatAmount } from "./presentation";
 
 interface JuryVotePanelProps {
   claim: ClaimDetailView;
@@ -19,6 +21,8 @@ function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet. Your local reveal data has been kept.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "The jury transaction could not be completed.";
 }
@@ -70,7 +74,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
   function parsedAmount(): bigint | string {
     try {
       const units = parseUnits(amount.trim() || "0", tokenDecimals);
-      if (units < 0n || units > maxAmount) return `Enter an amount from 0 to ${requested} ${tokenSymbol}.`;
+      if (units < 0n || units > maxAmount) return `Enter an amount from 0 to ${formatAmount(maxAmount, tokenDecimals)} ${tokenSymbol}.`;
       return units;
     } catch {
       return `Enter an amount with no more than ${tokenDecimals} decimal places.`;
@@ -121,17 +125,19 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
         vote = { amount: BigInt(storedSecret.amount), noteHash: storedSecret.noteHash, salt: storedSecret.salt };
         setFeedback("Recovered your sealed vote from this browser.");
       } else {
-        // No copy in this browser: re-derive the salt and try the amount and note typed in the form.
+        // No copy in this browser: re-derive the salt, then try the amount typed with the note typed,
+        // every note this juror saved on the backend before sealing, and no note.
         if (typeof units === "string") throw new Error(units);
         setFeedback("Sign the same private message to recover your reveal secret.");
         const salt = await deriveVoteSalt(account, claim.id);
-        const noteHash = juryNoteHash(note);
-        if (computeVoteCommitment(claim.id, account, units, noteHash, salt).toLowerCase() === onChain) {
-          vote = { amount: units, noteHash, salt };
-        }
+        const saved = await getMyJuryNotes(account, claim.id).catch(() => []);
+        onAuthenticated?.();
+        const candidates = [juryNoteHash(note), ...saved.map((item) => item.noteHash), juryNoteHash("")];
+        const noteHash = candidates.find((hash) => computeVoteCommitment(claim.id, account, units, hash, salt).toLowerCase() === onChain);
+        if (noteHash) vote = { amount: units, noteHash, salt };
       }
       if (!vote) {
-        throw new Error("This browser has no copy of your sealed vote. Enter exactly the amount and note you sealed, then reveal again.");
+        throw new Error("That amount doesn't match the vote you sealed. Enter exactly the amount you sealed, then reveal again.");
       }
       await revealJuryVote(account, claim.id, vote.amount, vote.noteHash, vote.salt, setFeedback);
       removeVoteSecret(account, claim.id);
@@ -146,7 +152,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
   }
 
   if (juror.revealed) {
-    return <section className="vote-panel complete"><span className="eyebrow">YOUR JURY VOTE</span><h3>Vote revealed</h3><p>You voted {formatUnits(juror.amount ?? "0", tokenDecimals)} {tokenSymbol}. The offer is the middle amount of all revealed votes.</p></section>;
+    return <section className="vote-panel complete"><span className="eyebrow">YOUR JURY VOTE</span><h3>Vote revealed</h3><p>You voted {formatAmount(juror.amount ?? "0", tokenDecimals)} {tokenSymbol}. The offer is the middle amount of all revealed votes.</p></section>;
   }
 
   const isVoting = claim.state === "Voting" && claim.jury?.phase === "Voting";
@@ -158,7 +164,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
     <div className="vote-panel-heading"><span className="eyebrow">YOUR JURY VOTE</span>{deadlineCopy && <span>{deadlineCopy}</span>}</div>
     {!juror.committed ? <>
       <h3>How much should this claim pay?</h3>
-      <p>The claimant asked for {requested} {tokenSymbol}. Pay it all, part of it, or 0 to reject. The claim gets the middle amount of the jury's votes. Jurors within {formatUnits((maxAmount * 10n) / 100n, tokenDecimals)} {tokenSymbol} of it share a {formatUnits(claim.jury?.fee ?? "0", tokenDecimals)} {tokenSymbol} fee; not revealing costs part of your stake.</p>
+      <p>The claimant asked for {formatAmount(maxAmount, tokenDecimals)} {tokenSymbol}. Pay it all, part of it, or 0 to reject. The claim gets the middle amount of the jury's votes. Jurors within {formatAmount((maxAmount * 10n) / 100n, tokenDecimals)} {tokenSymbol} of it share a {formatAmount(claim.jury?.fee ?? "0", tokenDecimals)} {tokenSymbol} fee; not revealing costs part of your stake.</p>
       <div className="vote-choices">
         <button type="button" className={units === maxAmount ? "selected approve" : ""} disabled={disabled} onClick={() => setAmount(requested)}>Pay in full</button>
         <button type="button" className={units === 0n ? "selected reject" : ""} disabled={disabled} onClick={() => setAmount("0")}>Reject (0)</button>
@@ -175,13 +181,11 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
       {!commitOpen && <p className="notice warning">The voting window is closed.</p>}
     </> : <>
       <h3>{revealOpen ? "Reveal your vote" : "Vote sealed"}</h3>
-      {storedSecret ? <p>You sealed {formatUnits(storedSecret.amount, tokenDecimals)} {tokenSymbol}{storedSecret.note ? <> with the note “{storedSecret.note}”</> : null}. This browser keeps an encrypted copy for the reveal.</p>
+      {storedSecret ? <p>You sealed {formatAmount(storedSecret.amount, tokenDecimals)} {tokenSymbol}{storedSecret.note ? <> with the note “{storedSecret.note}”</> : null}. This browser keeps an encrypted copy for the reveal.</p>
         : <>
-          <p>This browser has no copy of your vote. Enter the amount and note you sealed, and your wallet will re-create the secret.</p>
+          <p>This browser has no copy of your vote. Enter the amount you sealed, and your wallet will re-create the secret. Your note is recovered from the notes you saved before sealing.</p>
           <label htmlFor="vote-amount">Amount you sealed</label>
           <div className="amount-input"><input id="vote-amount" type="number" min="0" step="any" value={amount} disabled={busy} onChange={(event) => setAmount(event.target.value)} /><span>{tokenSymbol}</span></div>
-          <label htmlFor="vote-note">Note you sealed</label>
-          <textarea id="vote-note" rows={3} maxLength={MAX_JURY_NOTE_LENGTH} value={note} disabled={busy} onChange={(event) => setNote(event.target.value)} />
         </>}
       {revealOpen ? <button className="primary full" type="button" disabled={busy} onClick={() => void reveal()}>{busy ? "Revealing…" : "Reveal my vote"}</button> : <p className="notice">Reveal opens once every juror has voted or the voting deadline passes.</p>}
     </>}

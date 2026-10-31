@@ -107,6 +107,8 @@ export interface MemberView {
   balance: string;
   contributed: string;
   juror: MemberJuror;
+  /** Other members who could sit on a jury for this wallet's claim, and how many a jury needs. */
+  jury: { available: number; required: number };
   policy: MemberPolicy | null;
 }
 

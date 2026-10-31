@@ -45,6 +45,7 @@ export {
   isValidImei,
   MAX_AMOUNT_REASON_LENGTH,
   MAX_JURY_NOTE_LENGTH,
+  getMyJuryNotes,
   submitJuryNote,
   requestCaptureCode,
   uploadEvidence,

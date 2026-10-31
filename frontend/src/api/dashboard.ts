@@ -31,6 +31,9 @@ export interface DashboardOverview {
   minJurorStake: string;
   activeJuries: number;
   jurorStaked: boolean;
+  /** Other members who could be picked for a jury on this wallet's claim, and the jury size. */
+  jurorsAvailable: number;
+  jurySize: number;
   totalStaked: string;
   totalJurorFees: string;
   /** A claim's bond: `claimBondBps` of the amount asked, but at least `minClaimBond`. */
@@ -105,6 +108,8 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     minJurorStake: formatUnits(member.juror.minStake, decimals),
     activeJuries: member.juror.activeJuries,
     jurorStaked: member.juror.staked,
+    jurorsAvailable: member.jury.available,
+    jurySize: member.jury.required,
     totalStaked: formatUnits(pool.totalStaked, decimals),
     totalJurorFees: formatUnits(pool.totalJurorFees, decimals),
     claimBondBps: pool.claimBondBps,

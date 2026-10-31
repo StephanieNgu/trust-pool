@@ -32,7 +32,7 @@
 // Only the note's keccak256 goes into the sealed vote on-chain; the text is stored here, encrypted
 // like the bundles, and shown to the claimant and the other jurors once that juror reveals.
 import { createCipheriv, createDecipheriv, createHmac, createPublicKey, randomBytes, verify } from "node:crypto";
-import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getBytes, keccak256, toUtf8Bytes } from "ethers";
 import type { CaptureStamp } from "./capture";
@@ -712,6 +712,29 @@ export class LocalEvidenceStore {
     const text = decrypt(this.key, hash, stored).toString("utf8");
     if (noteHash(text) !== hash) throw new EvidenceError("Stored note does not match its hash.", 500);
     return text;
+  }
+
+  /**
+   * Every note `juror` stored for `claimId`, with its hash. Lets a juror who lost the browser copy of
+   * their sealed vote reveal it without retyping the note word for word.
+   */
+  async listNotes(claimId: number, juror: string): Promise<{ noteHash: string; note: string }[]> {
+    const prefix = `${claimId}.${juror.toLowerCase()}.`;
+    let names: string[];
+    try {
+      names = await readdir(join(this.dir, "notes"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw err;
+    }
+    const notes: { noteHash: string; note: string }[] = [];
+    for (const name of names) {
+      if (!name.startsWith(prefix) || !name.endsWith(".enc")) continue;
+      const hash = name.slice(prefix.length, -".enc".length);
+      const note = await this.getNote(claimId, juror, hash);
+      if (note !== null) notes.push({ noteHash: hash, note });
+    }
+    return notes;
   }
 
   private async read(evidenceHash: string): Promise<Buffer | null> {

@@ -1,4 +1,4 @@
-import { formatUnits, parseUnits } from "ethers";
+import { parseUnits } from "ethers";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ALLOWED_EVIDENCE_TYPES,
@@ -15,7 +15,8 @@ import { submitClaim } from "../contracts/claims";
 import { hasDeviceKey, signWithDeviceKey } from "../member/deviceKey";
 import { claimBond } from "./bond";
 import { ClaimDetail } from "./ClaimDetail";
-import { CLAIM_STATE_COPY, dateTime, shortHash } from "./presentation";
+import { CLAIM_STATE_COPY, dateTime, shortHash, formatAmount } from "./presentation";
+import { contractErrorMessage } from "../contracts/errors";
 
 interface ClaimsPageProps {
   account: string | null;
@@ -31,6 +32,8 @@ function message(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet. You can try again.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
@@ -45,7 +48,7 @@ function bondPreview(amount: string, overview: DashboardOverview | null): string
   try {
     const units = parseUnits(amount, overview.tokenDecimals);
     if (units <= 0n) return null;
-    return formatUnits(claimBond(units, overview.claimBondBps, parseUnits(overview.minClaimBond, overview.tokenDecimals)), overview.tokenDecimals);
+    return formatAmount(claimBond(units, overview.claimBondBps, parseUnits(overview.minClaimBond, overview.tokenDecimals)), overview.tokenDecimals);
   } catch {
     return null;
   }
@@ -113,6 +116,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     if (!overview.active) { setError("Buy device coverage before submitting a claim."); return; }
     if (!overview.pastWaitingPeriod) { setError("Your policy waiting period has not ended yet."); return; }
     if (overview.openClaimId) { setError(`Policy already has open claim #${overview.openClaimId}.`); return; }
+    if (overview.jurorsAvailable < overview.jurySize) { setError(`A jury needs ${overview.jurySize} other members with active coverage and a juror stake; only ${overview.jurorsAvailable} are available right now.`); return; }
     if (!amountReason.trim()) { setError("Explain how you arrived at the amount, so jurors can judge it."); return; }
     try {
       const requested = parseUnits(amount, overview.tokenDecimals);
@@ -156,8 +160,13 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   }
 
   const bond = bondPreview(amount, overview);
+  const tooFewJurors = overview ? overview.jurorsAvailable < overview.jurySize : false;
+  const capBelowAsk = (() => {
+    if (!overview || !amount) return false;
+    try { return parseUnits(amount, overview.tokenDecimals) > parseUnits(overview.cap, overview.tokenDecimals); } catch { return false; }
+  })();
   const canSubmit = Boolean(
-    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && amount && amountReason.trim() && files.length && captureCode,
+    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && !tooFewJurors && amount && amountReason.trim() && files.length && captureCode,
   );
   const accepted = ALLOWED_EVIDENCE_TYPES.join(",");
 
@@ -170,10 +179,12 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
       {!overview?.active && <p className="notice warning">An active device policy is required.</p>}
       {overview?.active && !overview.pastWaitingPeriod && overview.claimEligibleAt && <p className="notice warning">Claims become available on {new Date(overview.claimEligibleAt * 1000).toLocaleString()}.</p>}
       {overview?.openClaimId && <p className="notice warning">Claim #{overview.openClaimId} is already open for this policy.</p>}
+      {overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && tooFewJurors && <p className="notice warning">Claims are paused: a jury needs {overview.jurySize} other members with active coverage and a juror stake, and only {overview.jurorsAvailable} {overview.jurorsAvailable === 1 ? "is" : "are"} available right now.</p>}
 
       <label htmlFor="claim-amount">Requested payout</label>
       <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.coverage} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
       <small>Maximum: {overview?.active ? `${Number(overview.coverage).toLocaleString()} ${overview.tokenSymbol}` : "—"}</small>
+      {overview?.active && capBelowAsk && <p className="notice warning">The pool can pay at most {Number(overview.cap).toLocaleString("en-US", { maximumFractionDigits: 2 })} {overview.tokenSymbol} on one claim right now ({overview.maxPayoutBps / 100}% of its balance). Jurors can agree to more, but the payout stops at the cap when they decide.</p>}
       {overview && <p className="claim-bond-note">
         <strong>Claim bond: {bond ?? `${overview.claimBondBps / 100}% of your claim, at least ${Number(overview.minClaimBond).toLocaleString()}`} {overview.tokenSymbol}</strong>
         You get it back when the jury decides, less the share of your ask they cut. Paid in full, you get it all back; paid half, half; rejected, none.
@@ -217,8 +228,8 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
       {loadingClaims && <p className="muted" role="status">Loading claims from the backend…</p>}
       {!loadingClaims && claims.length === 0 && <div className="empty-claims"><strong>{stateFilter === "All" ? "No claims yet" : `No ${CLAIM_STATE_COPY[stateFilter].toLowerCase()} claims`}</strong><p>{stateFilter === "All" ? "Your submitted claims and their jury status will appear here." : "Choose another status to view the rest of your claim history."}</p></div>}
       <div className="claim-list">{claims.map((claim) => <article className="claim-item" key={claim.id}>
-        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatUnits(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
-        <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Offered" || claim.state === "Approved" || claim.state === "Paid" ? <div><dt>{claim.state === "Offered" ? "Jury's offer" : "Payout"}</dt><dd>{formatUnits(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
+        <div className="claim-item-heading"><div><span>CLAIM #{claim.id}</span><h3>{formatAmount(claim.amount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</h3></div><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>
+        <dl><div><dt>Submitted</dt><dd>{dateTime(claim.submittedAt)}</dd></div><div><dt>Evidence</dt><dd title={claim.evidenceHash}>{shortHash(claim.evidenceHash)}</dd></div>{claim.state === "Offered" || claim.state === "Approved" || claim.state === "Paid" ? <div><dt>{claim.state === "Offered" ? "Jury's offer" : "Payout"}</dt><dd>{formatAmount(claim.payoutAmount, overview?.tokenDecimals ?? 6)} {overview?.tokenSymbol ?? "mUSDC"}</dd></div> : null}{claim.jury && <div><dt>Jury progress</dt><dd>{claim.jury.commits} committed · {claim.jury.approvals + claim.jury.rejections} revealed</dd></div>}</dl>
         {claim.state === "Offered" && <p className="notice">The jury made an offer. Open the claim to accept it or withdraw.</p>}
         <button className="text-button claim-detail-link" type="button" onClick={() => setSelectedClaimId(claim.id)}>{claim.state === "Offered" ? "Review offer →" : "View details →"}</button>
       </article>)}</div>

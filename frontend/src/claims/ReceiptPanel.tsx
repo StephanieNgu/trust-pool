@@ -1,8 +1,9 @@
-import { formatUnits, parseUnits } from "ethers";
+import { parseUnits } from "ethers";
 import { useEffect, useRef, useState } from "react";
 import { ALLOWED_EVIDENCE_TYPES, MAX_SHOP_LENGTH, uploadReceipt, type ClaimDetailView } from "../api";
 import { submitReceipt } from "../contracts/claims";
-import { dateTime, shortHash } from "./presentation";
+import { dateTime, shortHash, formatAmount } from "./presentation";
+import { contractErrorMessage } from "../contracts/errors";
 
 interface ReceiptPanelProps {
   claim: ClaimDetailView;
@@ -18,6 +19,8 @@ function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet. You can try again.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
@@ -45,7 +48,7 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
   if (claim.state !== "Approved" || claim.receipt.hash || claim.claimant.toLowerCase() !== account.toLowerCase()) return null;
 
   const offer = BigInt(claim.payoutAmount);
-  const money = (value: bigint) => `${formatUnits(value, tokenDecimals)} ${tokenSymbol}`;
+  const money = (value: bigint) => `${formatAmount(value, tokenDecimals)} ${tokenSymbol}`;
   let units: bigint | null = null;
   try {
     units = total ? parseUnits(total, tokenDecimals) : null;

@@ -109,6 +109,14 @@ describe("claim flow through the backend", () => {
       noteHashes.push(noteHash);
       await commit(jury, juror, 1, amounts[i], noteHash);
     }
+    // A juror can read back their own saved notes (to reveal from another browser); nobody else can.
+    const firstJuror = signerFor(signers, jurorAddrs[0]);
+    const mine = await getAs("/api/claims/1/notes/mine", firstJuror);
+    assert.equal(mine.status, 200);
+    assert.deepEqual(mine.body.notes, [{ noteHash: noteHashes[0], note: notes[0] }]);
+    assert.deepEqual((await getAs("/api/claims/1/notes/mine", signerFor(signers, jurorAddrs[2]))).body.notes, []);
+    assert.equal((await getAs("/api/claims/1/notes/mine", outsider)).status, 403);
+    assert.equal((await getAs("/api/claims/1/notes/mine", claimant)).status, 403);
     // The note is sealed with the vote, so it cannot be changed afterwards.
     assert.equal((await post("/api/claims/1/notes", { note: "changed my mind" }, signerFor(signers, jurorAddrs[0]))).status, 409);
     // While sealed, the API shows who committed but no tally and no notes.

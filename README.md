@@ -115,7 +115,7 @@ second unverified file response. The vote salt is derived from a private, claim-
 signature and is never displayed or sent to the backend. An exact recovery copy is encrypted with a
 non-exportable browser key so a wallet that produces a different signature later does not strand the
 vote; if that copy is unavailable, the wallet can still try to reproduce the salt. Recovery data is
-deleted after reveal; without it, the juror re-enters the amount and note they sealed. The frontend
+deleted after reveal; without it, the juror re-enters the amount they sealed and the app finds their note among the ones they saved. The frontend
 checks the commitment against the blockchain before submitting the reveal. Claim, jury, dashboard and
 pool state refresh automatically.
 
@@ -213,11 +213,12 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/health` | Chain id, block number, keeper status |
 | `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
 | `GET /api/pool` | Reserve balance (excluding jurors' stakes and claim bonds), per-claim cap, totals including stakes, juror fees, penalties and bonds, the claim bond rate and minimum, policy and claim counts |
-| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below) |
+| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), how many other members could sit on a jury for this wallet's claim (`jury: { available, required }`; a claim cannot be filed below `required`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below) |
 | `GET /api/members/:address/premium` | Just the premium schedule, light enough to poll for reminders: `{ premium: { status, amount, period, paidThrough, dueAt, graceEndsAt, secondsUntilDue, dueSoon, canPay, asOf } }`, or `{ premium: null }` without a policy. `status` is `Paid`, `Grace` (missed, still covered until `graceEndsAt`), `Overdue` (not covered; the keeper will close it) or `Lapsed`. `dueSoon` is true within 7 days of `dueAt` or once missed |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
 | `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, the `bond` (amount, and once decided what was returned and forfeited), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?), the `receipt` (deadline, hash, total) with `receiptFile` and `receiptCheck` (does the total match, is it dated after the claim?) |
 | `POST /api/claims/:id/notes` 🔒 | A juror's note `{ note }` (up to 500 characters), sent before sealing the vote; returns the `noteHash` to seal. Jurors of the claim only, while voting and before they commit |
+| `GET /api/claims/:id/notes/mine` 🔒 | The notes this juror saved for the claim, each with its `noteHash`, so a juror without the browser copy of their sealed vote only has to re-enter the amount to reveal. The juror only |
 | `GET /api/claims/:id/votes` 🔒 | Each revealed juror's `amount` and `note`. Only the claimant and the claim's jurors |
 | `GET /api/auth/message?address=` | The message to sign with the wallet for the evidence routes |
 | `POST /api/capture/code` 🔒 | A one-time code (e.g. `TP-7K4Q2M`) to show in the photos about to be taken; valid 15 minutes, for one upload |

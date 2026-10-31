@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DashboardOverview } from "../api";
 import { stakeAsJuror, withdrawJurorStake } from "../contracts/member";
+import { contractErrorMessage } from "../contracts/errors";
 
 interface JuryDutyProps {
   account: string | null;
@@ -13,11 +14,13 @@ function errorText(error: unknown) {
   if (error && typeof error === "object" && "code" in error && (error.code === "ACTION_REJECTED" || error.code === 4001)) {
     return "Request cancelled in your wallet.";
   }
+  const reverted = contractErrorMessage(error);
+  if (reverted) return reverted;
   if (error && typeof error === "object" && "shortMessage" in error) return String(error.shortMessage);
   return error instanceof Error ? error.message : "The transaction could not be completed.";
 }
 
-const money = (value: string) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 6 });
+const money = (value: string) => Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 /**
  * Opting in to jury duty. A member locks a small stake to be picked for juries. Jurors whose amount
@@ -59,7 +62,11 @@ export function JuryDuty({ account, ready, overview, onChanged }: JuryDutyProps)
   return <section className="jury-duty" aria-label="Jury duty">
     <div>
       <span className="eyebrow">JURY DUTY</span>
-      <h3>{overview.jurorStaked ? "You can be picked for juries" : stake > 0 ? "Top up your stake to keep serving" : "Lock a stake to join juries"}</h3>
+      <h3>{!overview.jurorStaked
+        ? stake > 0 ? "Top up your stake to keep serving" : "Lock a stake to join juries"
+        : !overview.active ? "Your stake is in, but you need active coverage to be picked"
+          : !overview.pastWaitingPeriod ? "You can be picked once your waiting period ends"
+            : "You can be picked for juries"}</h3>
       <p className="muted">
         Jurors lock {money(overview.minJurorStake)} {symbol}. If your amount is close to the jury's final figure (within 10%
         of what was asked: on a 300 claim settling at 180, anything from 150 to 210), or you voted to reject a rejected claim,
