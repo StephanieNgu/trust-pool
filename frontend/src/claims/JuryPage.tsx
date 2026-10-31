@@ -11,6 +11,8 @@ interface JuryPageProps {
   overview: DashboardOverview | null;
   onAuthenticated(): void;
   onStakeChanged(): void;
+  /** A claim to open, e.g. from a notification; a new nonce reopens the same claim. */
+  focusClaim?: { id: string; nonce: number } | null;
 }
 
 function errorText(error: unknown) {
@@ -28,7 +30,7 @@ function jurorTask(claim: ClaimView, account: string) {
   return "Vote revealed";
 }
 
-export function JuryPage({ account, ready, overview, onAuthenticated, onStakeChanged }: JuryPageProps) {
+export function JuryPage({ account, ready, overview, focusClaim, onAuthenticated, onStakeChanged }: JuryPageProps) {
   const [claims, setClaims] = useState<ClaimView[]>([]);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,6 +43,10 @@ export function JuryPage({ account, ready, overview, onAuthenticated, onStakeCha
     setSelectedClaimId(null);
     setError("");
   }, [account]);
+
+  useEffect(() => {
+    if (focusClaim) setSelectedClaimId(focusClaim.id);
+  }, [focusClaim]);
 
   useEffect(() => {
     let active = true;

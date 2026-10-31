@@ -22,6 +22,8 @@ interface ClaimsPageProps {
   overview: DashboardOverview | null;
   onAuthenticated(): void;
   onSubmitted(): void;
+  /** A claim to open, e.g. from a notification; a new nonce reopens the same claim. */
+  focusClaim?: { id: string; nonce: number } | null;
 }
 
 function message(error: unknown): string {
@@ -48,7 +50,7 @@ function bondPreview(amount: string, overview: DashboardOverview | null): string
   }
 }
 
-export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmitted }: ClaimsPageProps) {
+export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticated, onSubmitted }: ClaimsPageProps) {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -73,6 +75,10 @@ export function ClaimsPage({ account, ready, overview, onAuthenticated, onSubmit
     setClaimsError("");
     setCaptureCode(null);
   }, [account]);
+
+  useEffect(() => {
+    if (focusClaim) setSelectedClaimId(focusClaim.id);
+  }, [focusClaim]);
 
   useEffect(() => {
     let active = true;
