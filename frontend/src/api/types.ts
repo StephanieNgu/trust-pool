@@ -93,7 +93,9 @@ export type ClaimState =
   /** The jury voted an amount; the claimant accepts it or withdraws before `offerDeadline`. */
   | "Offered"
   /** The claimant turned the jury's offer down. */
-  | "Withdrawn";
+  | "Withdrawn"
+  /** The offer was accepted but no receipt arrived within the receipt window, so nothing was paid. */
+  | "Expired";
 
 export interface ClaimJuror {
   address: string;
@@ -147,6 +149,12 @@ export interface ClaimView {
   paidAmount: string;
   payoutAmount: string;
   bond: ClaimBond;
+  /**
+   * The claim pays against a receipt for the repair or replacement: the smaller of the offer and the
+   * receipt's total. `deadline` is set once the offer is accepted; `hash` and `amount` (base units) once
+   * the claimant submits the receipt.
+   */
+  receipt: { deadline: number | null; hash: string | null; amount: string | null };
   jury: ClaimJury | null;
 }
 
@@ -167,6 +175,17 @@ export interface ClaimDetailView extends ClaimView {
     /** The IMEI or serial given with the claim is the enrolled one. */
     claimMatchesEnrollment: boolean | null;
   };
+  receiptFile: {
+    available: boolean;
+    url: string | null;
+  };
+  /** Checks on a submitted receipt; null when there is none or it is not stored. */
+  receiptCheck: {
+    /** The total in the uploaded receipt is the one submitted on-chain. */
+    totalMatches: boolean | null;
+    /** The invoice is dated on or after the day the claim was filed. */
+    datedAfterClaim: boolean | null;
+  };
 }
 
 export interface EvidenceFileInfo {
@@ -180,7 +199,15 @@ export interface EvidenceFileAccess extends EvidenceFileInfo {
   url: string;
 }
 
-export type EvidenceKind = "claim" | "enrollment";
+export type EvidenceKind = "claim" | "enrollment" | "receipt";
+
+/** What a receipt says: the claim it is for, the shop, the total (base units) and the invoice date. */
+export interface ReceiptDetails {
+  claimId: string;
+  shop: string;
+  total: string;
+  date: string;
+}
 
 export type DeviceType = "phone" | "tablet" | "laptop" | "camera" | "other";
 
@@ -218,6 +245,7 @@ export interface EvidenceSummary {
   /** Claims: why the claimant asked for this amount, or "". */
   amountReason: string;
   device: DeviceDetails | null;
+  receipt?: ReceiptDetails | null;
   capture: CaptureStamp | null;
   size: number;
   files: EvidenceFileInfo[];

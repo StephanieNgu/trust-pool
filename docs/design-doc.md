@@ -120,6 +120,9 @@ classDiagram
         +uint256 offerDeadline
         +uint256 bond
         +uint256 bondForfeited
+        +uint256 receiptDeadline
+        +bytes32 receiptHash
+        +uint256 receiptAmount
     }
 
     class JuryModule {
@@ -166,8 +169,10 @@ stateDiagram-v2
     Voting --> Rejected : median 0 (most reject), tie, or quorum not met
     Offered --> Approved : claimant accepts, or 2 days pass with no answer
     Offered --> Withdrawn : claimant withdraws
-    Approved --> Paid : executePayout
+    Approved --> Paid : receipt submitted, then executePayout
+    Approved --> Expired : no receipt within 30 days (expireClaim)
     Rejected --> [*]
+    Expired --> [*]
     Withdrawn --> [*]
     Paid --> [*]
     Cancelled --> [*]
@@ -186,7 +191,9 @@ stateDiagram-v2
 | Finalize | Reveal window ended or every juror revealed. Only revealed votes count; a commit that is never revealed counts as no vote. The offer is the median revealed amount (the lower middle one for an even count). Approved only if at least 3 votes were revealed and the median is above 0, which is the same as strictly more jurors paying than rejecting. A tie (for example 2-2) and fewer than 3 votes both end in Rejected; nothing is retried. The bond is settled here: the claimant gets it back minus the share of the ask the jury cut (bond × (asked − median) / asked), measured against the median before any pool cap. Without quorum the whole bond is returned |
 | Offered | The offer is fixed here: the minimum of the median, the coverage limit, and the per-claim cap (`maxPayoutBps`, 20% of the pool balance at this moment). Later pool movements do not change it. The claimant sees every juror's amount and note |
 | Accept / Withdraw | The claimant accepts (to Approved) or withdraws (to Withdrawn, nothing paid, policy freed) within `responsePeriod` (2 days). After it, anyone may accept; the keeper does. There is no counteroffer |
-| Paid | Pays the fixed amount. If the pool holds less than that, the call reverts and the claim stays Approved until funds arrive; approved claims are paid first come, first served (no pro-rata) |
+| Receipt | Only the claimant, once, within `receiptPeriod` (30 days) of accepting: the hash of the encrypted receipt bundle (shop, total, date, invoice files) and its total. The payout becomes the smaller of the offer and the total. The backend takes a receipt only for the claimant's own accepted claim, and refuses a file already used for another claim |
+| Approved to Expired | Anyone, once the receipt window has passed with no receipt; nothing is paid and the policy is freed. The keeper does it |
+| Paid | Needs the receipt. Pays the smaller of the fixed offer and the receipt. If the pool holds less than that, the call reverts and the claim stays Approved until funds arrive; approved claims are paid first come, first served (no pro-rata) |
 
 ## 6. Main Flow
 
@@ -294,6 +301,7 @@ sequenceDiagram
 | Juror incentives | Opt-in stake (20); agreeing jurors share a fee (2% of the claim); no-shows lose 5 of their stake; disagreeing costs nothing | Gives jurors a reason to vote at all (the fee) and to show up once picked (the penalty). Paying for agreement rewards matching the shared evidence, a Schelling point, while sealed votes stop jurors copying each other. Not punishing disagreement keeps an honest minority view safe, so jurors are not pushed to guess the crowd | Kleros-style slashing of every minority vote: stronger push to coherence but punishes honest dissent and makes careful jurors avoid hard cases. No stake: anyone could be picked and ignore the claim for free |
 | Agreement band | Within 10% of the requested amount from the median; voting 0 agrees only with a rejection | Measured against the request so the band is the same width whatever the median; a small median would otherwise leave almost no room | Exact median only: too strict for amounts; % of the median: shrinks to nothing on small offers |
 | Claimant bond | 5% of the ask (at least 5), returned at the verdict minus the share of the ask the jury cut; the rest joins the reserve. Returned in full if the jury misses quorum or the claim is cancelled | A fake claim now has a price: one the jury rejects loses the whole bond. Scaling the loss with the cut also makes padding the ask cost something, where before asking 300 for 150 of damage was free (the jury paid 150 either way). An honest claimant the jury pays in full loses nothing, and the bond is small next to the claim. Measured against the median rather than the capped offer, so a thin pool never costs the claimant | Forfeit only on rejection: simpler, but padding stays free. A fixed fee per claim: taxes honest claims as much as fake ones. Paying the forfeit to jurors: would give jurors a reason to cut claims |
+| Payout | Reimbursement against a receipt, up to the offer; 30 days to submit it | Money goes to the repair or replacement it was meant for, and a claimant who spent less than the offer gets what they spent. Jurors are not asked to check receipts; the backend refuses reused files and flags a total or date that does not fit | Paying repair shops directly: guarantees the use of funds but needs registered shops. Paying the offer up front: simplest, but nothing ties the money to a repair |
 | Claimant's answer | Accept or withdraw within 2 days; silence accepts; no counteroffer | One decision for the claimant and none for jurors, so the jury is not called back. Withdrawing frees the policy to refile with better evidence or a repair quote | A counter round paid to jurors: considered for later if claimants often withdraw |
 | Payout cap timing | Fixed when the jury decides | The claimant's payout cannot move after the verdict | At payout time: simpler, but other claims or contributions could change the amount |
 | Stalled randomness | Cancel after 1 day, policy freed to refile | Claims never get stuck; a late callback cannot seat a second jury | Retry the request: keeps the claim alive but needs the provider to accept duplicates |
@@ -321,6 +329,8 @@ sequenceDiagram
 | Evidence disk or backup is copied | AES-256-GCM encryption at rest | Key management service, key rotation |
 | Device ID guessed from its hash | None: `keccak256(IMEI)` can be brute-forced for known IMEI ranges | Salt the device hash per policy |
 | Fake or padded claims | Bond: a rejected claim loses all of it, and a cut claim loses the same share of it as the jury cut | Bond size by claim history |
+| Payout not spent on the device | Paid only against a receipt, at most what it shows | Shop-signed invoices or paying shops directly |
+| Same receipt used twice | Backend refuses a receipt file already used for another claim | Shop-issued invoice numbers checked with the shop |
 | Jurors don't care | Fee for agreeing with the outcome, penalty for not revealing | Tune fee and penalty from real participation data |
 | Jurors collude | Random selection from staked members and sealed votes make coordination hard; the median limits what a minority can move | Larger juries, appeals |
 

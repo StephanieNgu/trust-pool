@@ -11,12 +11,13 @@ const {
   USDC,
   COVERAGE,
   EVIDENCE,
+  RECEIPT,
   ClaimState,
   noteHashFor,
 } = require("../helpers");
 
 describe("Integration: happy path", function () {
-  it("join -> contribute -> submit -> jury -> vote amounts -> offer -> accept -> payout", async function () {
+  it("join -> contribute -> submit -> jury -> vote amounts -> offer -> accept -> receipt -> payout", async function () {
     const ctx = await loadFixture(deployFixture);
     const { token, pool, registry, randomness, jury, claimManager, deployer, signers, params } = ctx;
     const [claimant, ...others] = signers.slice(1, 8);
@@ -84,17 +85,23 @@ describe("Integration: happy path", function () {
     await claimManager.connect(claimant).acceptOffer(claimId);
     expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.Approved);
 
-    // 8. Payout.
+    // 8. The repair costs 180, a little under the offer. The claimant pays the shop and submits the receipt.
+    await expect(claimManager.executePayout(claimId)).to.be.revertedWithCustomError(claimManager, "ReceiptRequired");
+    await expect(claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(180)))
+      .to.emit(claimManager, "ReceiptSubmitted")
+      .withArgs(claimId, RECEIPT, USDC(180), USDC(180));
+
+    // 9. Payout: the receipt, since it is less than the offer.
     const before = await token.balanceOf(claimant.address);
     await expect(claimManager.executePayout(claimId))
       .to.emit(claimManager, "ClaimPaid")
-      .withArgs(claimId, claimant.address, USDC(200))
+      .withArgs(claimId, claimant.address, USDC(180))
       .and.to.emit(pool, "PaidOut");
-    expect(await token.balanceOf(claimant.address)).to.equal(before + USDC(200));
+    expect(await token.balanceOf(claimant.address)).to.equal(before + USDC(180));
 
     const claim = await claimManager.getClaim(claimId);
     expect(claim.state).to.equal(ClaimState.Paid);
-    expect(claim.paidAmount).to.equal(USDC(200));
+    expect(claim.paidAmount).to.equal(USDC(180));
     expect(await claimManager.openClaimOfPolicy(claim.policyId)).to.equal(0n);
 
     // Only the Pool ever holds tokens.

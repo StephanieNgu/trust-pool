@@ -8,8 +8,10 @@ const {
   submitClaim,
   deviceHash,
   enrollmentHash,
+  DAY,
   USDC,
   COVERAGE,
+  RECEIPT,
   EVIDENCE,
   ClaimState,
   castVotes,
@@ -203,6 +205,7 @@ describe("ClaimManager", function () {
       await expect(claimManager.connect(claimant).acceptOffer(claimId))
         .to.emit(claimManager, "ClaimStateChanged")
         .withArgs(claimId, ClaimState.Offered, ClaimState.Approved);
+      await claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(150));
       await expect(claimManager.executePayout(claimId))
         .to.emit(claimManager, "ClaimPaid")
         .withArgs(claimId, claimant.address, USDC(150));
@@ -243,7 +246,7 @@ describe("ClaimManager", function () {
       const { registry, pool, jury } = await loadFixture(deployFixture);
       const CM = await ethers.getContractFactory("ClaimManager");
       await expect(
-        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 0, 500, USDC(5)),
+        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 0, 500, USDC(5), DAY),
       ).to.be.revertedWithCustomError(CM, "InvalidConfig");
     });
   });
@@ -489,7 +492,104 @@ describe("ClaimManager", function () {
       const { registry, pool, jury } = await loadFixture(deployFixture);
       const CM = await ethers.getContractFactory("ClaimManager");
       await expect(
-        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 1n, 10_001, USDC(5)),
+        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), 1n, 10_001, USDC(5), DAY),
+      ).to.be.revertedWithCustomError(CM, "InvalidConfig");
+    });
+  });
+
+  describe("receipts", function () {
+    // The offer is 150 (the median of 150, 150, 200, 400 and 0 on a 400 claim).
+    async function acceptedFixture() {
+      const ctx = await offeredClaimFixture();
+      await ctx.claimManager.connect(ctx.claimant).acceptOffer(ctx.claimId);
+      return ctx;
+    }
+
+    it("starts the receipt window when the offer is accepted, and pays nothing without a receipt", async function () {
+      const ctx = await loadFixture(acceptedFixture);
+      const { claimManager, claimId, params } = ctx;
+      const claim = await claimManager.getClaim(claimId);
+      expect(claim.receiptDeadline).to.equal(BigInt(await time.latest()) + BigInt(params.receiptPeriod));
+      await expect(claimManager.executePayout(claimId)).to.be.revertedWithCustomError(claimManager, "ReceiptRequired");
+    });
+
+    it("pays the offer when the receipt is for more", async function () {
+      const ctx = await loadFixture(acceptedFixture);
+      const { claimManager, token, claimId, claimant } = ctx;
+      await expect(claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(220)))
+        .to.emit(claimManager, "ReceiptSubmitted")
+        .withArgs(claimId, RECEIPT, USDC(220), USDC(150));
+      await expect(claimManager.executePayout(claimId)).to.changeTokenBalance(token, claimant, USDC(150));
+    });
+
+    it("pays only the receipt when the repair cost less than the offer", async function () {
+      const ctx = await loadFixture(acceptedFixture);
+      const { claimManager, token, claimId, claimant } = ctx;
+      await claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(95));
+      expect(await claimManager.payoutAmount(claimId)).to.equal(USDC(95));
+      await expect(claimManager.executePayout(claimId)).to.changeTokenBalance(token, claimant, USDC(95));
+      const claim = await claimManager.getClaim(claimId);
+      expect(claim.paidAmount).to.equal(USDC(95));
+      expect(await claimManager.payoutAmount(claimId)).to.equal(USDC(95));
+    });
+
+    it("takes one receipt, from the claimant, within the window", async function () {
+      const ctx = await loadFixture(acceptedFixture);
+      const { claimManager, claimId, claimant, holders, params } = ctx;
+      await expect(claimManager.connect(holders[3]).submitReceipt(claimId, RECEIPT, USDC(100))).to.be.revertedWithCustomError(
+        claimManager,
+        "NotClaimant",
+      );
+      await expect(claimManager.connect(claimant).submitReceipt(claimId, ethers.ZeroHash, USDC(100))).to.be.revertedWithCustomError(
+        claimManager,
+        "InvalidEvidence",
+      );
+      await expect(claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, 0n)).to.be.revertedWithCustomError(
+        claimManager,
+        "InvalidAmount",
+      );
+      await claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(100));
+      await expect(claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(50))).to.be.revertedWithCustomError(
+        claimManager,
+        "ReceiptAlreadySubmitted",
+      );
+      // Once in, a receipt keeps the claim payable after the window.
+      await time.increase(params.receiptPeriod + 1);
+      await expect(claimManager.expireClaim(claimId)).to.be.revertedWithCustomError(claimManager, "ReceiptAlreadySubmitted");
+      await expect(claimManager.executePayout(claimId)).to.emit(claimManager, "ClaimPaid");
+    });
+
+    it("expires a claim whose receipt never arrives, and frees the policy", async function () {
+      const ctx = await loadFixture(acceptedFixture);
+      const { claimManager, claimId, claimant, params } = ctx;
+      await expect(claimManager.expireClaim(claimId)).to.be.revertedWithCustomError(claimManager, "ReceiptWindowOpen");
+      await time.increase(params.receiptPeriod + 1);
+      await expect(claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(100))).to.be.revertedWithCustomError(
+        claimManager,
+        "ReceiptWindowClosed",
+      );
+      await expect(claimManager.expireClaim(claimId))
+        .to.emit(claimManager, "ClaimStateChanged")
+        .withArgs(claimId, ClaimState.Approved, ClaimState.Expired);
+      const claim = await claimManager.getClaim(claimId);
+      expect(claim.paidAmount).to.equal(0n);
+      expect(await claimManager.openClaimOfPolicy(claim.policyId)).to.equal(0n);
+      await expect(claimManager.executePayout(claimId)).to.be.revertedWithCustomError(claimManager, "WrongState");
+    });
+
+    it("does not take a receipt before the offer is accepted", async function () {
+      const ctx = await loadFixture(offeredClaimFixture);
+      const { claimManager, claimId, claimant } = ctx;
+      await expect(claimManager.connect(claimant).submitReceipt(claimId, RECEIPT, USDC(100)))
+        .to.be.revertedWithCustomError(claimManager, "WrongState")
+        .withArgs(ClaimState.Approved, ClaimState.Offered);
+    });
+
+    it("rejects a zero receipt period", async function () {
+      const { registry, pool, jury } = await loadFixture(deployFixture);
+      const CM = await ethers.getContractFactory("ClaimManager");
+      await expect(
+        CM.deploy(registry.getAddress(), pool.getAddress(), jury.getAddress(), DAY, 500, USDC(5), 0),
       ).to.be.revertedWithCustomError(CM, "InvalidConfig");
     });
   });

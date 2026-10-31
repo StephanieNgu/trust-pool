@@ -1,4 +1,4 @@
-import { keccak256 } from "ethers";
+import { formatUnits, keccak256 } from "ethers";
 import { useEffect, useRef, useState } from "react";
 import {
   ALLOWED_EVIDENCE_TYPES,
@@ -8,14 +8,18 @@ import {
   type ClaimDetailView,
   type DeviceDetails,
   type EvidenceKind,
+  type ReceiptDetails,
 } from "../api";
 import { dateTime, shortHash } from "./presentation";
 
 interface EvidenceViewerProps {
   account: string;
   claim: ClaimDetailView;
-  /** Which bundle to show: the claim's photos, or the photos taken when the device was enrolled. */
+  /** Which bundle to show: the claim's photos, the photos taken when the device was enrolled, or the receipt. */
   source?: EvidenceKind;
+  /** For showing a receipt's total. */
+  tokenDecimals?: number;
+  tokenSymbol?: string;
   onAuthenticated?(): void;
   onVerificationChange?(verified: boolean): void;
 }
@@ -41,6 +45,7 @@ interface StoredEvidenceBundle {
   description: string;
   amountReason?: string;
   device?: DeviceDetails | null;
+  receipt?: ReceiptDetails;
   capture?: CaptureStamp | null;
   files: StoredEvidenceFile[];
 }
@@ -92,11 +97,23 @@ function decodeFile(data: string, expectedSize: number): Uint8Array<ArrayBuffer>
 const COPY = {
   claim: { eyebrow: "PRIVATE EVIDENCE", title: "Claim photos" },
   enrollment: { eyebrow: "REGISTERED AT SIGNUP", title: "Signup photos" },
+  receipt: { eyebrow: "WHAT THE PAYOUT IS FOR", title: "Repair or replacement receipt" },
 } as const;
 
-export function EvidenceViewer({ account, claim, source = "claim", onAuthenticated, onVerificationChange }: EvidenceViewerProps) {
-  const evidenceHash = (source === "claim" ? claim.evidenceHash : claim.enrollmentHash) ?? "";
-  const available = source === "claim" ? claim.evidence.available : claim.enrollment.available;
+function sourceHash(claim: ClaimDetailView, source: EvidenceKind): string {
+  if (source === "claim") return claim.evidenceHash;
+  return (source === "enrollment" ? claim.enrollmentHash : claim.receipt.hash) ?? "";
+}
+
+function sourceAvailable(claim: ClaimDetailView, source: EvidenceKind): boolean {
+  if (source === "claim") return claim.evidence.available;
+  return source === "enrollment" ? claim.enrollment.available : claim.receiptFile.available;
+}
+
+export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals = 6, tokenSymbol = "mUSDC", onAuthenticated, onVerificationChange }: EvidenceViewerProps) {
+  const evidenceHash = sourceHash(claim, source);
+  const available = sourceAvailable(claim, source);
+  const [receipt, setReceipt] = useState<ReceiptDetails | null>(null);
   const [description, setDescription] = useState("");
   const [amountReason, setAmountReason] = useState("");
   const [device, setDevice] = useState<DeviceDetails | null>(null);
@@ -119,6 +136,7 @@ export function EvidenceViewer({ account, claim, source = "claim", onAuthenticat
     releasePreviews();
     setDescription("");
     setDevice(null);
+    setReceipt(null);
     setCapture(null);
     setKindMismatch(false);
     setFiles([]);
@@ -171,6 +189,7 @@ export function EvidenceViewer({ account, claim, source = "claim", onAuthenticat
       setDescription(bundle.description);
       setAmountReason(typeof bundle.amountReason === "string" ? bundle.amountReason : "");
       setDevice(bundle.device ?? null);
+      setReceipt(bundle.receipt ?? null);
       setCapture(bundle.capture ?? null);
       // A claim filed with the signup bundle as its evidence shows no new photos at all.
       const mismatch = (bundle.kind ?? "claim") !== source;
@@ -187,7 +206,8 @@ export function EvidenceViewer({ account, claim, source = "claim", onAuthenticat
 
   const claimant = claim.claimant.toLowerCase() === account.toLowerCase();
   const selectedJuror = claim.jury?.jurors.some((juror) => juror.address.toLowerCase() === account.toLowerCase()) ?? false;
-  const canRead = claimant || (selectedJuror && claim.state === "Voting");
+  // A claim's jurors can open its receipt at any time, and its photos only while voting.
+  const canRead = claimant || (selectedJuror && (source === "receipt" || claim.state === "Voting"));
   const copy = COPY[source];
 
   if (source === "enrollment" && !claim.enrollmentHash) {
@@ -201,11 +221,12 @@ export function EvidenceViewer({ account, claim, source = "claim", onAuthenticat
       {loading && <p className="muted" role="status">Authenticating wallet, verifying the bundle, and loading evidence…</p>}
       {error && <p className="notice warning" role="alert">{error}<button className="text-button" type="button" onClick={() => void loadEvidence()}>Try again</button></p>}
       {files.length > 0 && <>
-        {kindMismatch && <p className="notice warning" role="alert">{source === "claim" ? "This claim was filed with the signup photos instead of new photos of the damage. Do not approve it." : "This is not an enrollment bundle."}</p>}
+        {kindMismatch && <p className="notice warning" role="alert">{source === "claim" ? "This claim was filed with the signup photos instead of new photos of the damage. Do not approve it." : `This is not a${source === "receipt" ? " receipt" : "n enrollment bundle"}.`}</p>}
         {source === "claim" && <div className="evidence-description"><span>CLAIMANT STATEMENT</span><p>{description || "No written description was provided."}</p></div>}
         {source === "claim" && <div className="evidence-description"><span>WHY THIS AMOUNT</span><p>{amountReason || "The claimant did not explain the amount."}</p></div>}
         {device && <dl className="detail-grid compact">{(["type", "make", "model", "color", "serial", "imei"] as const).filter((key) => device[key]).map((key) => <div key={key}><dt>{key === "imei" ? "IMEI" : key[0].toUpperCase() + key.slice(1)}</dt><dd>{device[key]}</dd></div>)}</dl>}
-        {capture ? <p className="evidence-stamp">The first photo should show the code <code>{capture.code}</code>. Code issued {dateTime(capture.issuedAt)}, photos received {dateTime(capture.receivedAt)}.</p> : <p className="notice warning">These photos were uploaded without a capture code, so nothing shows when they were taken.</p>}
+        {receipt && <dl className="detail-grid compact"><div><dt>Shop</dt><dd>{receipt.shop}</dd></div><div><dt>Date</dt><dd>{receipt.date}</dd></div><div><dt>Total</dt><dd>{formatUnits(receipt.total, tokenDecimals)} {tokenSymbol}</dd></div>{description && <div className="detail-wide"><dt>Work done</dt><dd>{description}</dd></div>}</dl>}
+        {source === "receipt" ? null : capture ? <p className="evidence-stamp">The first photo should show the code <code>{capture.code}</code>. Code issued {dateTime(capture.issuedAt)}, photos received {dateTime(capture.receivedAt)}.</p> : <p className="notice warning">These photos were uploaded without a capture code, so nothing shows when they were taken.</p>}
         {!verified && <p className="notice warning" role="alert">Do not vote on this evidence. Its content hash does not match the hash recorded on-chain.</p>}
         <div className="evidence-files">{files.map((file) => <article className="evidence-file" key={file.index}>
           {file.contentType.startsWith("image/") && file.contentType !== "image/heic" ? <a href={file.objectUrl} target="_blank" rel="noreferrer" title={`Open ${file.name}`}><img src={file.objectUrl} alt={`Evidence: ${file.name}`} /></a> : <div className="evidence-document"><strong>{file.contentType === "image/heic" ? "HEIC" : "PDF"}</strong><span>{file.contentType === "image/heic" ? "Open the original in a compatible viewer" : "Document evidence"}</span></div>}

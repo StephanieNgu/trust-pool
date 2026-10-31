@@ -38,7 +38,7 @@ export const registryAbi = [
 
 export const claimManagerAbi = [
   "function claimCount() view returns (uint256)",
-  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount, uint256 approvedAmount, uint256 offerDeadline, uint256 bond, uint256 bondForfeited))",
+  "function getClaim(uint256 claimId) view returns (tuple(uint256 id, address claimant, uint256 policyId, uint256 amount, uint256 coverageLimit, bytes32 evidenceHash, uint8 state, uint256 submittedAt, uint256 paidAmount, uint256 approvedAmount, uint256 offerDeadline, uint256 bond, uint256 bondForfeited, uint256 receiptDeadline, bytes32 receiptHash, uint256 receiptAmount))",
   "function payoutAmount(uint256 claimId) view returns (uint256)",
   "function openClaimOfPolicy(uint256 policyId) view returns (uint256)",
   "function finalize(uint256 claimId)",
@@ -46,6 +46,8 @@ export const claimManagerAbi = [
   "function cancelStalledClaim(uint256 claimId)",
   "function acceptOffer(uint256 claimId)",
   "function withdrawClaim(uint256 claimId)",
+  "function expireClaim(uint256 claimId)",
+  "function receiptPeriod() view returns (uint256)",
   "function responsePeriod() view returns (uint256)",
   "function bondBps() view returns (uint256)",
   "function minBond() view returns (uint256)",
@@ -88,7 +90,7 @@ export const randomnessAbi = [
 ] as const;
 
 /** Mirrors of the Solidity enums, indexed by their numeric value. */
-export const CLAIM_STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled", "Offered", "Withdrawn"] as const;
+export const CLAIM_STATES = ["None", "Submitted", "JuryPending", "Voting", "Approved", "Rejected", "Paid", "Cancelled", "Offered", "Withdrawn", "Expired"] as const;
 export const JURY_PHASES = ["None", "AwaitingRandomness", "Voting", "Tallied", "Cancelled"] as const;
 export const OUTCOMES = ["None", "Approved", "Rejected"] as const;
 export const POLICY_STATUSES = ["None", "Active", "Lapsed"] as const;

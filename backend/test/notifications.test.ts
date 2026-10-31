@@ -2,6 +2,7 @@
 // on the dashboard: picked for the jury, seal by the deadline, reveal, missed reveal, outcome, offer.
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { keccak256, toUtf8Bytes } from "ethers";
 import { USDC, commit, ethers, increaseTime, reveal, setup, signerFor } from "./helpers";
 
 type Note = { id: string; kind: string; severity: string; title: string; body: string; deadline: number | null; claimId: string | null };
@@ -81,7 +82,16 @@ describe("notifications", () => {
     assert.equal(offer.deadline, Number((await claimManager.getClaim(1)).offerDeadline));
     assert.match(offer.title, /offered 300 mUSDC/);
 
+    // Once accepted, the claimant is asked for the receipt before the receipt window closes.
     await (await claimManager.connect(claimant).acceptOffer(1)).wait();
+    const ask = (await notes(claimant.address)).find((n) => n.claimId === "1");
+    assert.equal(ask?.id, "claim:1:Approved");
+    assert.equal(ask?.severity, "action");
+    assert.equal(ask?.deadline, Number((await claimManager.getClaim(1)).receiptDeadline));
+    assert.match(ask!.title, /Upload your receipt/);
+
+    await (await claimManager.connect(claimant).submitReceipt(1, keccak256(toUtf8Bytes("invoice")), USDC(300))).wait();
+    assert.equal((await notes(claimant.address)).find((n) => n.claimId === "1")?.id, "claim:1:Approved:receipt");
     await (await claimManager.executePayout(1)).wait();
     const paid = (await notes(claimant.address)).find((n) => n.claimId === "1");
     assert.equal(paid?.id, "claim:1:Paid");

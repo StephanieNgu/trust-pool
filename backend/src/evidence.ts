@@ -10,23 +10,26 @@
 // backend's evidence key, so the files on disk (and any backup or copy of them) are unreadable
 // without that key. The hash is taken over the plaintext, so jurors can still verify it.
 //
-// There are two kinds of bundle. An "enrollment" bundle is uploaded at signup: the device's IMEI,
+// There are three kinds of bundle. An "enrollment" bundle is uploaded at signup: the device's IMEI,
 // serial, make, model and colour, plus photos of the phone. Its hash goes on-chain with the policy.
 // A "claim" bundle holds the damage photos. Both carry a capture stamp (see capture.ts) so jurors can
 // check the photos were taken just now, and jurors compare a claim's photos with the enrollment ones
-// to check it is the same phone.
+// to check it is the same phone. A "receipt" bundle is uploaded after the claimant accepts the jury's
+// offer: the invoice for the repair or replacement, with the shop, date and total. Its hash goes
+// on-chain with the total, and the claim pays the smaller of the offer and that total. A receipt file
+// can back only one claim: the store remembers a keyed hash of every receipt file it has taken.
 //
 // The store also keeps jurors' notes: the short reasoning a juror gives with the amount they vote.
 // Only the note's keccak256 goes into the sealed vote on-chain; the text is stored here, encrypted
 // like the bundles, and shown to the claimant and the other jurors once that juror reveals.
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getBytes, keccak256, toUtf8Bytes } from "ethers";
 import type { CaptureStamp } from "./capture";
 
 export const BUNDLE_VERSION = 2;
-export const BUNDLE_KINDS = ["claim", "enrollment"] as const;
+export const BUNDLE_KINDS = ["claim", "enrollment", "receipt"] as const;
 export type BundleKind = (typeof BUNDLE_KINDS)[number];
 export const MAX_DEVICE_FIELD_LENGTH = 64;
 export const MAX_FILES = 10;
@@ -80,8 +83,22 @@ export interface DeviceDetails {
   color?: string;
 }
 
+/** What a receipt bundle says it is for: which claim, from which shop, when, and its total. */
+export interface ReceiptDetails {
+  claimId: string;
+  shop: string;
+  /** The total in token base units, as a decimal string. */
+  total: string;
+  /** The invoice date, YYYY-MM-DD. */
+  date: string;
+}
+
+export const MAX_SHOP_LENGTH = 120;
+
 export interface EvidenceUpload {
   kind?: BundleKind;
+  /** Receipts only. */
+  receipt?: ReceiptDetails;
   description?: string;
   /** Claims only: why the claimant asked for this amount. A repair quote can be one of the files. */
   amountReason?: string;
@@ -103,6 +120,7 @@ interface StoredBundle {
   description: string;
   amountReason?: string;
   device?: DeviceDetails | null;
+  receipt?: ReceiptDetails;
   capture?: CaptureStamp | null;
   files: StoredFile[];
 }
@@ -121,6 +139,8 @@ export interface EvidenceSummary {
   /** Claims: the claimant's explanation of the amount, or "" if they gave none. */
   amountReason: string;
   device: DeviceDetails | null;
+  /** Receipts: what the claimant entered from the invoice; null for other kinds. */
+  receipt: ReceiptDetails | null;
   capture: CaptureStamp | null;
   size: number;
   files: EvidenceFileInfo[];
@@ -221,6 +241,31 @@ function validateDevice(device: unknown, kind: BundleKind): DeviceDetails | null
   return result;
 }
 
+function validateReceipt(receipt: unknown, kind: BundleKind): ReceiptDetails | undefined {
+  if (kind !== "receipt") {
+    if (receipt !== undefined) throw new EvidenceError("receipt details are only for receipt bundles.", 400);
+    return undefined;
+  }
+  if (!receipt || typeof receipt !== "object") {
+    throw new EvidenceError("A receipt needs its details: claimId, shop, total and date.", 400);
+  }
+  const { claimId, shop, total, date } = receipt as Partial<ReceiptDetails>;
+  if (typeof claimId !== "string" || !/^[1-9]\d{0,18}$/.test(claimId)) {
+    throw new EvidenceError("receipt.claimId must be the claim's id.", 400);
+  }
+  if (typeof shop !== "string" || shop.trim().length === 0 || shop.length > MAX_SHOP_LENGTH) {
+    throw new EvidenceError(`receipt.shop must be the shop's name, at most ${MAX_SHOP_LENGTH} characters.`, 400);
+  }
+  if (typeof total !== "string" || !/^[1-9]\d{0,30}$/.test(total)) {
+    throw new EvidenceError("receipt.total must be the total in token base units, above 0.", 400);
+  }
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+    throw new EvidenceError("receipt.date must be the invoice date as YYYY-MM-DD.", 400);
+  }
+  // Fixed key order keeps the serialization deterministic.
+  return { claimId, shop: shop.trim(), total, date };
+}
+
 /**
  * Whether a claim's device details name the enrolled device: by IMEI when both have one, otherwise
  * by serial. null when there is nothing to compare.
@@ -238,7 +283,7 @@ export function sameDevice(claimed: DeviceDetails | null, enrolled: DeviceDetail
  */
 export function encodeBundle(upload: unknown, capture: CaptureStamp | null = null): Buffer {
   if (!upload || typeof upload !== "object") throw new EvidenceError("Body must be a JSON object.", 400);
-  const { kind = "claim", description = "", amountReason, device, files } = upload as Partial<EvidenceUpload>;
+  const { kind = "claim", description = "", amountReason, device, receipt, files } = upload as Partial<EvidenceUpload>;
 
   if (!(BUNDLE_KINDS as readonly unknown[]).includes(kind)) {
     throw new EvidenceError(`kind must be one of ${BUNDLE_KINDS.join(", ")}.`, 400);
@@ -252,6 +297,8 @@ export function encodeBundle(upload: unknown, capture: CaptureStamp | null = nul
       throw new EvidenceError(`amountReason must be a string of at most ${MAX_AMOUNT_REASON_LENGTH} characters.`, 400);
     }
   }
+  if (kind === "receipt" && device !== undefined) throw new EvidenceError("A receipt has no device details.", 400);
+  const receiptDetails = validateReceipt(receipt, kind);
   if (!Array.isArray(files) || files.length === 0 || files.length > MAX_FILES) {
     throw new EvidenceError(`files must be an array of 1 to ${MAX_FILES} files.`, 400);
   }
@@ -282,6 +329,7 @@ export function encodeBundle(upload: unknown, capture: CaptureStamp | null = nul
     // Left out when absent, so bundles without one hash exactly as before.
     ...(amountReason ? { amountReason } : {}),
     device: validateDevice(device, kind),
+    ...(receiptDetails ? { receipt: receiptDetails } : {}),
     capture,
     files: stored,
   };
@@ -307,6 +355,7 @@ function summarize(evidenceHash: string, bytes: Buffer): EvidenceSummary {
     description: bundle.description,
     amountReason: bundle.amountReason ?? "",
     device: bundle.device ?? null,
+    receipt: bundle.receipt ?? null,
     capture: bundle.capture ?? null,
     size: bytes.length,
     files: bundle.files.map((f, index) => ({ index, name: f.name, contentType: f.contentType, size: f.size })),
@@ -391,6 +440,34 @@ export class LocalEvidenceStore {
     return join(this.dir, `${evidenceHash}.uploaders.json`);
   }
 
+  private receiptMarkPathFor(fileData: string): string {
+    // Keyed, so the marker names say nothing about the files to anyone without the evidence key.
+    const id = createHmac("sha256", this.key).update(Buffer.from(fileData, "base64")).digest("hex");
+    return join(this.dir, "receipts", `${id}.json`);
+  }
+
+  /**
+   * Refuses a receipt any of whose files already backs another claim, then records its files as
+   * used by this claim. Re-uploading the same file for the same claim is fine.
+   */
+  private async claimReceiptFiles(bundle: StoredBundle): Promise<void> {
+    const claimId = bundle.receipt?.claimId;
+    if (!claimId) return;
+    const paths = bundle.files.map((f) => this.receiptMarkPathFor(f.data));
+    for (const path of paths) {
+      try {
+        const used = (JSON.parse(await readFile(path, "utf8")) as { claimId: string }).claimId;
+        if (used !== claimId) {
+          throw new EvidenceError(`This receipt was already used for claim #${used}. Each receipt can back one claim.`, 409);
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+    }
+    await mkdir(join(this.dir, "receipts"), { recursive: true });
+    for (const path of paths) await writeAtomic(path, Buffer.from(JSON.stringify({ claimId })));
+  }
+
   /**
    * Stores an upload, records `uploader` as allowed to file a claim with it, and returns its hash.
    * Uploading identical evidence twice stores it once.
@@ -399,6 +476,7 @@ export class LocalEvidenceStore {
     const bytes = encodeBundle(upload, capture);
     const evidenceHash = hashBundle(bytes);
     await mkdir(this.dir, { recursive: true });
+    await this.claimReceiptFiles(JSON.parse(bytes.toString("utf8")) as StoredBundle);
     if (!(await this.has(evidenceHash))) {
       await writeAtomic(this.pathFor(evidenceHash), encrypt(this.key, evidenceHash, bytes));
     }

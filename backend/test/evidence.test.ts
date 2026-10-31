@@ -49,6 +49,44 @@ describe("LocalEvidenceStore", async () => {
     assert.equal(await store.getFile(evidenceHash, 2), null);
   });
 
+  it("lets a receipt file back only one claim", async () => {
+    const receipt = (claimId: string, files = [file("invoice #0042")]) => ({
+      kind: "receipt",
+      receipt: { claimId, shop: "Fix-It Phones", total: "180000000", date: "2026-10-30" },
+      files,
+    });
+    const first = await store.put(receipt("7"), ALICE);
+    assert.equal(first.kind, "receipt");
+    assert.deepEqual(first.receipt, { claimId: "7", shop: "Fix-It Phones", total: "180000000", date: "2026-10-30" });
+    // The same file again for the same claim is fine (a retry); for another claim it is refused,
+    // even bundled with other files.
+    assert.equal((await store.put(receipt("7"), ALICE)).evidenceHash, first.evidenceHash);
+    await assert.rejects(
+      store.put(receipt("8", [file("photo of the shop"), file("invoice #0042")]), BOB),
+      (err: unknown) => err instanceof EvidenceError && err.status === 409 && /claim #7/.test(err.message),
+    );
+    assert.equal((await store.put(receipt("8", [file("invoice #0043")]), BOB)).kind, "receipt");
+  });
+
+  it("checks a receipt's details", async () => {
+    const base = { kind: "receipt", files: [file("x")] };
+    const bad = [
+      {},
+      { claimId: "0", shop: "s", total: "1", date: "2026-10-30" },
+      { claimId: "1", shop: " ", total: "1", date: "2026-10-30" },
+      { claimId: "1", shop: "s", total: "0", date: "2026-10-30" },
+      { claimId: "1", shop: "s", total: "1.5", date: "2026-10-30" },
+      { claimId: "1", shop: "s", total: "1", date: "30/10/2026" },
+    ];
+    for (const receipt of bad) {
+      await assert.rejects(store.put({ ...base, receipt }, ALICE), (err: unknown) => err instanceof EvidenceError && err.status === 400);
+    }
+    await assert.rejects(
+      store.put({ files: [file("x")], receipt: { claimId: "1", shop: "s", total: "1", date: "2026-10-30" } }, ALICE),
+      /only for receipt/,
+    );
+  });
+
   it("records every uploader of the same bundle", async () => {
     const { evidenceHash } = await store.put({ files: [file("shared")] }, ALICE);
     await store.put({ files: [file("shared")] }, BOB);

@@ -10,6 +10,8 @@ const CLAIM_MANAGER_ABI = [
   "function acceptOffer(uint256 claimId)",
   "function withdrawClaim(uint256 claimId)",
   "function bondFor(uint256 amount) view returns (uint256)",
+  "function submitReceipt(uint256 claimId, bytes32 receiptHash, uint256 amount)",
+  "function expireClaim(uint256 claimId)",
 ] as const;
 
 function claimNumber(claimId: string): bigint {
@@ -30,7 +32,7 @@ async function claimManagerFor(account: string) {
 async function runResolution(
   account: string,
   claimId: string,
-  method: "finalize" | "executePayout" | "cancelStalledClaim" | "acceptOffer" | "withdrawClaim",
+  method: "finalize" | "executePayout" | "cancelStalledClaim" | "acceptOffer" | "withdrawClaim" | "expireClaim",
   pendingMessage: string,
   progress: (message: string) => void,
 ): Promise<string> {
@@ -58,6 +60,33 @@ export function cancelStalledClaim(account: string, claimId: string, progress: (
 /** Take the jury's offer. The payout follows automatically. */
 export function acceptOffer(account: string, claimId: string, progress: (message: string) => void) {
   return runResolution(account, claimId, "acceptOffer", "Confirm accepting the jury's offer in your wallet.", progress);
+}
+
+/** Close an accepted claim whose receipt window passed without a receipt. Nothing is paid. */
+export function expireClaim(account: string, claimId: string, progress: (message: string) => void) {
+  return runResolution(account, claimId, "expireClaim", "Confirm closing the claim in your wallet.", progress);
+}
+
+/**
+ * Records the receipt on-chain: its bundle hash (from uploadReceipt) and total in base units. The claim
+ * then pays the smaller of the offer and the total; the keeper sends it.
+ */
+export async function submitReceipt(
+  account: string,
+  claimId: string,
+  receiptHash: string,
+  total: bigint,
+  progress: (message: string) => void,
+): Promise<string> {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(receiptHash)) throw new Error("The backend returned an invalid receipt hash.");
+  if (total <= 0n) throw new Error("Enter the receipt's total.");
+  const manager = await claimManagerFor(account);
+  progress("Confirm the receipt in your wallet.");
+  const transaction = await manager.submitReceipt(claimNumber(claimId), receiptHash, total);
+  progress("Waiting for the transaction to confirm…");
+  const receipt = await transaction.wait();
+  if (!receipt || receipt.status !== 1) throw new Error("The transaction did not succeed.");
+  return transaction.hash as string;
 }
 
 /** Turn the jury's offer down. Nothing is paid and the claim closes. */
