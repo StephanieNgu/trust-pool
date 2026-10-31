@@ -76,6 +76,23 @@ wallet-specific dashboard, authentication, claims and jury assignments refresh a
 send real funds to these test accounts or use their public development mnemonic outside the local
 prototype.
 
+### Notifications
+
+The bell in the top bar and the **Needs your attention** list on the dashboard show what each wallet
+needs to know, refreshed every 15 seconds:
+
+* **Jury duty**: picked for a jury and the commit deadline, reveals opening and the reveal deadline,
+  a missed commit or reveal, and the outcome with the fee earned or penalty taken.
+* **Your claims**: each status change (filed, jury reviewing, offer to accept or withdraw before it
+  auto-accepts, approved, paid, rejected, withdrawn, cancelled), with how much of the bond came back.
+* **Your policy**: the waiting period and when claims open, and a juror stake below the minimum.
+
+`GET /api/members/:address/notifications` builds the list from chain state on each request
+(`backend/src/notifications.ts`), so nothing is stored server side. Each notification has an `id` that
+names the state it describes (for example `jury:3:reveal` or `claim:3:Offered`), so a new step shows
+up as new. Which ids a wallet has seen is kept in the browser's localStorage. Action items stay on the
+dashboard until they are done, and deadlines are counted against chain time.
+
 ### Claims and evidence
 
 The **Claims** workspace lets an eligible policyholder request a payout, describe the incident and
