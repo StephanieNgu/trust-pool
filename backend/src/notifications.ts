@@ -3,10 +3,10 @@
 // that state (claim, step, outcome), so the frontend can remember which ids a wallet has already seen
 // and a new step of the same claim shows up as new.
 import { formatUnits } from "ethers";
-import type { ClaimView } from "./protocol";
+import type { ClaimView, PremiumView } from "./protocol";
 
-/** What the notification is about. Premium reminders join this list once monthly premiums land. */
-export type NotificationKind = "jury" | "claim" | "policy";
+/** What the notification is about. */
+export type NotificationKind = "jury" | "claim" | "policy" | "premium";
 
 /**
  * `action`: the wallet has something to do, usually before `deadline`.
@@ -36,7 +36,15 @@ export interface NotificationInput {
   token: { symbol: string; decimals: number };
   /** Every claim the wallet filed or sits on the jury of. */
   claims: ClaimView[];
-  policy: { id: string; status: string; claimEligibleAt: number; startTime: number } | null;
+  policy: {
+    id: string;
+    status: string;
+    claimEligibleAt: number;
+    startTime: number;
+    /** Open and paid up (or in grace). An Active policy past its grace period is not covered. */
+    covered: boolean;
+    premium: PremiumView | null;
+  } | null;
   juror: { stake: string; minStake: string; staked: boolean };
   /** JuryModule.commitPeriod, to date when a jury was picked. */
   commitPeriod: number;
@@ -205,8 +213,57 @@ export function buildNotifications(input: NotificationInput): Notification[] {
     }
   }
 
+  // ----- Monthly premiums -----
+  // Ids carry the paid-through date, so each month's reminder is new even after last month's was seen.
+  const premium = policy?.premium;
+  if (policy && premium) {
+    const base = { kind: "premium" as const, claimId: null };
+    const key = `premium:${policy.id}:${premium.paidThrough}`;
+    if (premium.status === "Paid" && premium.dueSoon && premium.dueAt !== null) {
+      out.push({
+        ...base,
+        id: `${key}:due`,
+        severity: "action",
+        title: "Your monthly premium is due soon",
+        body: `Pay ${amount(premium.amount)} from the dashboard by the due date to keep your device covered without a gap.`,
+        at: premium.dueAt - Math.min(premium.period, 7 * 24 * 60 * 60),
+        deadline: premium.dueAt,
+      });
+    } else if (premium.status === "Grace") {
+      out.push({
+        ...base,
+        id: `${key}:grace`,
+        severity: "action",
+        title: "You missed your premium payment",
+        body: `Your device is still covered for now. Pay ${amount(premium.amount)} from the dashboard before the grace period ends, or your coverage stops.`,
+        at: premium.paidThrough,
+        deadline: premium.graceEndsAt,
+      });
+    } else if (premium.status === "Overdue") {
+      out.push({
+        ...base,
+        id: `premium:${policy.id}:overdue`,
+        severity: "warning",
+        title: "Your coverage has stopped",
+        body: "The grace period ended without a premium payment, so your device is no longer covered and the policy will be closed. You can get new coverage from the dashboard.",
+        at: premium.graceEndsAt,
+        deadline: null,
+      });
+    } else if (premium.status === "Lapsed" && policy.status !== "Active") {
+      out.push({
+        ...base,
+        id: `premium:${policy.id}:lapsed`,
+        severity: "info",
+        title: "Your policy is closed",
+        body: "Your device is no longer covered. Get new coverage from the dashboard to be protected again.",
+        at: premium.graceEndsAt,
+        deadline: null,
+      });
+    }
+  }
+
   // ----- Policy and jury eligibility -----
-  if (policy?.status === "Active") {
+  if (policy?.status === "Active" && policy.covered) {
     if (now < policy.claimEligibleAt) {
       out.push({ id: `policy:${policy.id}:waiting`, kind: "policy", severity: "info", title: "Your coverage is in its waiting period", body: "You can file claims once the waiting period ends.", at: policy.startTime, deadline: policy.claimEligibleAt, claimId: null });
     } else {

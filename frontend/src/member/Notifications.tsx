@@ -94,6 +94,7 @@ const SEVERITY_LABEL: Record<MemberNotification["severity"], string> = {
 function actionLabel(n: MemberNotification) {
   if (n.kind === "jury" && n.claimId) return n.severity === "action" ? "Vote now →" : "Open claim →";
   if (n.kind === "claim" && n.claimId) return n.severity === "action" ? "Review offer →" : "View claim →";
+  if (n.kind === "premium") return n.severity === "action" ? "Pay premium →" : "Go to dashboard →";
   return null;
 }
 
