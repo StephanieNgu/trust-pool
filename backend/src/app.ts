@@ -14,6 +14,7 @@ import {
   MAX_FILES,
 } from "./evidence";
 import type { Keeper } from "./keeper";
+import { buildNotifications } from "./notifications";
 import { getClaimView, getMemberView, getPoolView, listClaims } from "./protocol";
 
 export interface AppDeps {
@@ -141,6 +142,39 @@ export function createApp(deps: AppDeps) {
 
   app.get("/api/members/:address", async (req, res) => {
     res.json(await getMemberView(contracts, parseAddress(req.params.address, "address")));
+  });
+
+  /**
+   * In-app notifications for a wallet: jury duty (picked, commit and reveal deadlines, outcome), its
+   * own claims' status, and its policy. Built from public chain state, so no signature is needed.
+   */
+  app.get("/api/members/:address/notifications", async (req, res) => {
+    const address = parseAddress(req.params.address, "address");
+    const me = address.toLowerCase();
+    const [member, claims, block, symbol, decimals, commitPeriod, responsePeriod] = await Promise.all([
+      getMemberView(contracts, address),
+      listClaims(contracts),
+      provider.getBlock("latest"),
+      contracts.token.symbol() as Promise<string>,
+      contracts.token.decimals(),
+      contracts.jury.commitPeriod() as Promise<bigint>,
+      contracts.claimManager.responsePeriod() as Promise<bigint>,
+    ]);
+    const mine = claims.filter(
+      (c) => c.claimant.toLowerCase() === me || (c.jury?.jurors.some((j) => j.address.toLowerCase() === me) ?? false),
+    );
+    const now = block?.timestamp ?? Math.floor(Date.now() / 1000);
+    const notifications = buildNotifications({
+      address,
+      now,
+      token: { symbol, decimals: Number(decimals) },
+      claims: mine,
+      policy: member.policy,
+      juror: member.juror,
+      commitPeriod: Number(commitPeriod),
+      responsePeriod: Number(responsePeriod),
+    });
+    res.json({ now, notifications });
   });
 
   // ---------------------------------------------------------------------------
