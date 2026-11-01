@@ -8,6 +8,8 @@ export interface Config {
   /** 32-byte evidence encryption key, or null to use (and create if needed) `evidenceKeyFile`. */
   evidenceKey: string | null;
   evidenceKeyFile: string;
+  /** Sign-in sessions and member profiles. */
+  accountsDir: string;
   corsOrigin: string;
   keeper: {
     enabled: boolean;
@@ -40,6 +42,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     evidenceDir: resolve(env.EVIDENCE_DIR || "data/evidence"),
     evidenceKey: env.EVIDENCE_ENCRYPTION_KEY || null,
     evidenceKeyFile: resolve(env.EVIDENCE_KEY_FILE || "data/evidence.key"),
+    accountsDir: resolve(env.ACCOUNTS_DIR || "data/accounts"),
     corsOrigin: env.CORS_ORIGIN || "*",
     keeper: {
       enabled: flag(env.KEEPER_ENABLED, true),

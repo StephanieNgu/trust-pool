@@ -13,6 +13,7 @@ export {
   getNotifications,
   markNotificationsSeen,
   readSeenNotifications,
+  syncSeenNotifications,
   timeLeft,
   unreadCount,
   type MemberNotification,
@@ -20,12 +21,15 @@ export {
   type NotificationKind,
   type NotificationSeverity,
 } from "./notifications";
+export { getProfileIfSignedIn, updateProfileIfSignedIn, type MemberProfile, type ProfileUpdate } from "./profile";
 export {
   authenticateWallet,
   clearWalletAuth,
   getWalletAuthHeaders,
   readCachedWalletAuth,
+  signOutWallet,
   WALLET_AUTH_EVENT,
+  WALLET_SIGNED_OUT_EVENT,
   type WalletAuth,
 } from "./auth";
 export {

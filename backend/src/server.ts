@@ -4,6 +4,7 @@
 //   npm run deploy:local  # terminal 2
 //   npm run dev:backend   # terminal 3, http://localhost:3000/api/health
 import { JsonRpcProvider, Wallet, type Signer } from "ethers";
+import { AccountStore } from "./accounts";
 import { createApp } from "./app";
 import { connectContracts, loadDeployment } from "./chain";
 import { loadConfig } from "./config";
@@ -60,7 +61,8 @@ async function main() {
     throw new Error("Set EVIDENCE_ENCRYPTION_KEY (32 bytes, hex or base64) to store evidence on a non-local chain.");
   }
   const evidence = new LocalEvidenceStore(config.evidenceDir, evidenceKey);
-  const app = createApp({ deployment, provider, contracts, evidence, keeper, corsOrigin: config.corsOrigin });
+  const accounts = new AccountStore(config.accountsDir);
+  const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin });
 
   const server = app.listen(config.port, () => {
     console.log(`TrustPool backend on http://localhost:${config.port} (chain ${chainId}, ${config.rpcUrl})`);

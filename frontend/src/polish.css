@@ -328,3 +328,22 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Device nickname on the coverage card. */
+.device-rename {
+  display: block;
+  padding: 0;
+  margin: -6px 0 10px;
+  font-size: 11px;
+}
+.device-nickname-input {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  margin: -4px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid #c9d8f0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #253047;
+}

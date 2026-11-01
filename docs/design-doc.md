@@ -261,7 +261,7 @@ The Express backend stores evidence, runs a keeper, and serves read-only views o
 **Evidence policy.** Evidence is private, not public IPFS.
 - Uploading claim evidence requires a wallet signature from a holder with an Active policy. Enrollment bundles only need a signature, since they come before the policy exists.
 - A bundle is served only to (a) the wallets that uploaded it and (b) the selected jurors of a claim that one of those uploaders filed with it (as its evidence, or as the enrollment of its policy), and to jurors only while that claim is in Voting. Other members, past jurors and anonymous callers get nothing. Copying a hash from the chain and filing a claim with it grants nothing.
-- Requests are authenticated with a signed, timestamped message (EIP-191, valid 10 minutes); there are no passwords or sessions.
+- Sign-in: the wallet signs a timestamped message (EIP-191, valid 10 minutes) and posts it to `POST /api/auth/session`, which returns a random token valid for 7 days. Requests send it as `Authorization: Bearer …`; the backend stores only its SHA-256, so the sessions file alone can't be used to sign in. Signing out (`POST /api/auth/session/end`) ends it everywhere. The signed headers still work on their own, for scripts. There are no passwords: the wallet is the account.
 - Every bundle is encrypted at rest with AES-256-GCM under the backend's evidence key (`EVIDENCE_ENCRYPTION_KEY`; on a local chain a key file is generated). The evidence hash is bound as authenticated data, so a file swapped or altered on disk fails to decrypt. The hash on-chain is of the plaintext, so jurors still verify it after download.
 - Trust boundary: the backend holds the key and decrypts for authorized readers, so its operator could read evidence. End-to-end encryption to each juror's own key was not chosen because jurors are unknown when evidence is uploaded and MetaMask has deprecated its encryption API; it remains future work #9.
 - Retention: files are kept on the backend's disk for the life of the deployment, so they stay available through the voting window. There is no automatic deletion yet.
@@ -282,6 +282,10 @@ sequenceDiagram
     BE-->>J: bundle bytes
     J->>J: keccak256(bytes) == on-chain evidenceHash
 ```
+
+**Member profiles.** Signed-in members have a small profile on the backend (`GET`/`POST /api/profile`): the name they're greeted by, a nickname for their device, and which notifications they've read. It holds conveniences only, so they follow the member across browsers; nothing in it affects money or claims, which stay on-chain. Sessions and profiles are two JSON files under `ACCOUNTS_DIR` (default `data/accounts`), written atomically.
+
+**Policy terms.** The app shows written terms (covered events: cracked screen, other accidental damage, liquid damage, theft, breakdown after the maker's warranty; and what isn't covered, such as loss and wear), with every figure read from the deployed parameters. A claim names its covered event, stored in the evidence bundle and shown to jurors. The contracts don't enforce the terms; jurors apply them when they vote.
 
 **Keeper.** Polls open claims. It fulfils randomness (as the MockRandomness owner, with a CSPRNG seed), cancels claims whose randomness timed out, finalizes when voting has closed, and pays approved claims. Everything except fulfilment is permissionless, so the keeper saves users transactions but cannot change an outcome.
 
@@ -359,6 +363,12 @@ These are known gaps, deliberately left out of the prototype.
 9. **End-to-end evidence encryption** to each juror's key, so even the backend cannot read evidence (encryption at rest and juror-only access are built)
 10. **Regulatory structure**, since this resembles insurance in most jurisdictions (a discretionary-mutual model is one path)
 11. **Upgradeability,** timelocks, and an emergency pause
+12. **Reinstatement after a lapse:** a policy that passes its grace period ends for good, and the member signs up again with new photos. A reinstatement window (pay the arrears plus a fresh waiting period) needs a PolicyRegistry change
+13. **Deductible per claim:** standard in device cover and a deterrent to small or padded claims; it would be a ClaimManager parameter taken off the payout
+14. **Pricing by device type and value:** every device pays the same rate of its cover; a rate table by type (and age) would price laptops and phones differently
+15. **Off-app reminders:** premium due dates and jury deadlines show in the app only. Email or push would use the member profile (built) for contact details, plus a delivery provider
+16. **Fallback when jurors are short:** claims are paused while fewer than five members are covered and staked; a smaller jury or a queue would keep a young pool usable
+17. **Testnet deployment** with a real stablecoin; the prototype runs on a local chain with mock USDC
 
 ## 11. Repository Layout
 

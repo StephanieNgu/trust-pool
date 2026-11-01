@@ -3,7 +3,9 @@ import {
   getNotifications,
   markNotificationsSeen,
   readSeenNotifications,
+  syncSeenNotifications,
   timeLeft,
+  WALLET_AUTH_EVENT,
   unreadCount,
   type MemberNotification,
   type NotificationFeed,
@@ -38,6 +40,17 @@ export function useNotifications(account: string | null, enabled: boolean, refre
   useEffect(() => {
     setFeed(null);
     setSeen(account ? readSeenNotifications(account) : new Set());
+    if (!account) return;
+    // Signed in: also count what was read in other browsers.
+    let active = true;
+    const sync = () => {
+      void syncSeenNotifications(account)
+        .then((merged) => { if (merged && active && latest.current === account) setSeen(merged); })
+        .catch(() => { /* this browser's list still works */ });
+    };
+    sync();
+    window.addEventListener(WALLET_AUTH_EVENT, sync);
+    return () => { active = false; window.removeEventListener(WALLET_AUTH_EVENT, sync); };
   }, [account]);
 
   useEffect(() => {
