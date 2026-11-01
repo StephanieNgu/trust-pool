@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { Contract, type ContractRunner } from "ethers";
-import { claimManagerAbi, juryAbi, poolAbi, randomnessAbi, registryAbi, tokenAbi } from "./abis";
+import { claimManagerAbi, juryAbi, poolAbi, randomnessAbi, registryAbi, tokenAbi, vrfCoordinatorMockAbi } from "./abis";
 
 export interface DeploymentAddresses {
   token: string;
@@ -9,6 +9,8 @@ export interface DeploymentAddresses {
   randomness: string;
   jury: string;
   claimManager: string;
+  /** Chainlink's VRF coordinator mock, present on local chains only. Public networks use the real one. */
+  vrfCoordinatorMock?: string;
 }
 
 /** Shape of deployments/<network>.json as written by scripts/deploy.js. */
@@ -27,6 +29,8 @@ export interface ProtocolContracts {
   claimManager: Contract;
   jury: Contract;
   randomness: Contract;
+  /** Set on local chains, where the keeper stands in for the Chainlink oracle network. */
+  vrfCoordinatorMock: Contract | null;
 }
 
 const ADDRESS_KEYS: (keyof DeploymentAddresses)[] = ["token", "pool", "registry", "randomness", "jury", "claimManager"];
@@ -54,5 +58,8 @@ export function connectContracts(addresses: DeploymentAddresses, runner: Contrac
     claimManager: new Contract(addresses.claimManager, claimManagerAbi, runner),
     jury: new Contract(addresses.jury, juryAbi, runner),
     randomness: new Contract(addresses.randomness, randomnessAbi, runner),
+    vrfCoordinatorMock: addresses.vrfCoordinatorMock
+      ? new Contract(addresses.vrfCoordinatorMock, vrfCoordinatorMockAbi, runner)
+      : null,
   };
 }

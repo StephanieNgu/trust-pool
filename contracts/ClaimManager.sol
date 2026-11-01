@@ -292,8 +292,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         pool.payout(claim.claimant, amount);
     }
 
-    /// @notice Close a claim whose randomness never arrived, freeing the policy for a new claim.
-    ///         Callable by anyone once the JuryModule's randomness timeout has passed.
+    /// @notice Close a claim whose randomness never arrived, or that was starved of jurors, freeing
+    ///         the policy for a new claim. Callable by anyone once JuryModule.canCancel is true.
     function cancelStalledClaim(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.JuryPending);
         jury.cancel(claimId);

@@ -50,9 +50,22 @@ async function activePoolFixture() {
   return { ...ctx, holders, claimant: holders[0] };
 }
 
+/**
+ * Answers `claimId`'s pending VRF request through the local coordinator mock. With `seed` the mock
+ * delivers that word (fulfillRandomWordsWithOverride) so tests are reproducible; without one it
+ * derives the word itself, as the keeper does on a local chain.
+ */
+async function fulfillRandomness(ctx, claimId, seed) {
+  const requestId = await ctx.randomness.requestIdOf(claimId);
+  const consumer = await ctx.randomness.getAddress();
+  return seed === undefined
+    ? ctx.vrfCoordinator.fulfillRandomWords(requestId, consumer)
+    : ctx.vrfCoordinator.fulfillRandomWordsWithOverride(requestId, consumer, [seed]);
+}
+
 /** Fulfils randomness for `claimId` and returns the selected jurors as signers. */
 async function selectJury(ctx, claimId, seed = 42n) {
-  await ctx.randomness.fulfill(claimId, seed);
+  await fulfillRandomness(ctx, claimId, seed);
   const addresses = await ctx.jury.getJurors(claimId);
   return addresses.map((a) => ctx.signers.find((s) => s.address === a));
 }
@@ -148,6 +161,7 @@ module.exports = {
   deployFixture,
   activePoolFixture,
   stakeAsJuror,
+  fulfillRandomness,
   selectJury,
   submitClaim,
   saltFor,

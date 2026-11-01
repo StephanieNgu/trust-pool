@@ -1,8 +1,10 @@
 // The keeper moves claims along without anyone having to push them by hand:
 //
-//   JuryPending  -> fulfils the pending randomness request, which selects the jury (needs the
-//                   MockRandomness owner key; production swaps this for Chainlink VRF). If the
-//                   randomness is still missing after the timeout, cancels the claim instead.
+//   JuryPending  -> on a local chain, asks Chainlink's VRF coordinator mock to answer the pending
+//                   VRF request, which selects the jury. The mock derives the word from the request
+//                   id; the keeper never picks a seed. On Sepolia or mainnet Chainlink's oracles
+//                   answer by themselves and the keeper does nothing here. If randomness is still
+//                   missing after the timeout (or too few jurors were left), cancels the claim.
 //   Voting       -> calls finalize once the voting window has closed or every juror has voted
 //   Offered      -> calls acceptOffer once the claimant's response window has passed without an answer
 //   Approved     -> calls executePayout once the claimant has submitted the receipt, so the claim is
@@ -13,7 +15,6 @@
 //
 // finalize, acceptOffer (after the deadline), executePayout, expireClaim, cancelStalledClaim and lapseOverdue are permissionless on-chain, so the keeper only saves users a
 // transaction; it cannot change an outcome.
-import { randomBytes } from "node:crypto";
 import type { Signer } from "ethers";
 import { CLAIM_STATES } from "./abis";
 import type { ProtocolContracts } from "./chain";
@@ -24,13 +25,11 @@ export interface Logger {
 }
 
 export interface KeeperOptions {
-  /** Fulfil randomness requests. Requires `signer` to own MockRandomness. */
+  /** Answer pending VRF requests through the local coordinator mock. Ignored without one. */
   fulfillRandomness: boolean;
   /** Finalize claims whose voting has closed and pay approved claims. */
   autoResolve: boolean;
   logger?: Logger;
-  /** Seed source for jury selection; defaults to 32 bytes from the OS CSPRNG. */
-  seed?: () => bigint;
 }
 
 export type KeeperAction =
@@ -65,7 +64,6 @@ const TERMINAL: string[] = ["Rejected", "Paid", "Cancelled", "Withdrawn", "Expir
 
 export class Keeper {
   private readonly logger: Logger;
-  private readonly seed: () => bigint;
   private readonly done = new Set<number>();
   private readonly lastErrors = new Map<string, string>();
   private timer: NodeJS.Timeout | null = null;
@@ -79,27 +77,24 @@ export class Keeper {
     private readonly options: KeeperOptions,
   ) {
     this.logger = options.logger ?? silent;
-    this.seed = options.seed ?? (() => BigInt(`0x${randomBytes(32).toString("hex")}`));
   }
 
   /**
    * Builds a keeper whose contracts send transactions from `signer`. Randomness fulfilment is
-   * switched off, with a warning, when the signer does not own the randomness provider.
+   * switched off, with a warning, when there is no local VRF coordinator mock to drive: on a public
+   * network Chainlink's oracles deliver randomness themselves.
    */
   static async create(contracts: ProtocolContracts, signer: Signer, options: KeeperOptions): Promise<Keeper> {
     const logger = options.logger ?? silent;
     const address = await signer.getAddress();
     const connected = Object.fromEntries(
-      Object.entries(contracts).map(([name, contract]) => [name, contract.connect(signer)]),
+      Object.entries(contracts).map(([name, contract]) => [name, contract ? contract.connect(signer) : null]),
     ) as unknown as ProtocolContracts;
 
     let fulfillRandomness = options.fulfillRandomness;
-    if (fulfillRandomness) {
-      const owner: string = await contracts.randomness.owner();
-      if (owner.toLowerCase() !== address.toLowerCase()) {
-        logger.warn(`Keeper ${address} does not own MockRandomness (${owner}); juries will not be selected automatically.`);
-        fulfillRandomness = false;
-      }
+    if (fulfillRandomness && !contracts.vrfCoordinatorMock) {
+      logger.warn("No local VRF coordinator mock: Chainlink VRF delivers jury randomness, so the keeper will not.");
+      fulfillRandomness = false;
     }
     return new Keeper(connected, address, { ...options, fulfillRandomness });
   }
@@ -153,13 +148,14 @@ export class Keeper {
 
       if (state === "JuryPending") {
         let fulfilled = false;
-        if (this.options.fulfillRandomness) {
-          const pending: string = await this.contracts.randomness.pendingRequester(id);
-          if (pending !== "0x0000000000000000000000000000000000000000") {
-            fulfilled = await this.attempt(actions, id, "fulfillRandomness", () =>
-              this.contracts.randomness.fulfill(id, this.seed()),
-            );
-          }
+        const { randomness, vrfCoordinatorMock } = this.contracts;
+        if (this.options.fulfillRandomness && vrfCoordinatorMock && (await randomness.isPending(id))) {
+          const requestId: bigint = await randomness.requestIdOf(id);
+          const consumer = await randomness.getAddress();
+          // The mock answers with keccak256(requestId, 0); nothing here chooses the word.
+          fulfilled = await this.attempt(actions, id, "fulfillRandomness", () =>
+            vrfCoordinatorMock.fulfillRandomWords(requestId, consumer),
+          );
         }
         if (!fulfilled && this.options.autoResolve && (await this.contracts.jury.canCancel(id))) {
           if (await this.attempt(actions, id, "cancelStalledClaim", () => claimManager.cancelStalledClaim(id))) {

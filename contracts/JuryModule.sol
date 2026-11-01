@@ -101,6 +101,9 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     /// @notice Set at tally: what each juror was paid, and what was taken from their stake.
     mapping(uint256 => mapping(address => uint256)) public rewardOf;
     mapping(uint256 => mapping(address => uint256)) public penaltyOf;
+    /// @notice Set when randomness arrived but too few eligible jurors were left to seat a full jury.
+    ///         The claim waits in AwaitingRandomness and may be cancelled straight away.
+    mapping(uint256 => bool) public starved;
 
     event ClaimManagerSet(address indexed claimManager);
     event JuryRequested(uint256 indexed claimId, address indexed claimant);
@@ -115,6 +118,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     event VoteRevealed(uint256 indexed claimId, address indexed juror, uint256 amount, bytes32 noteHash);
     event Tallied(uint256 indexed claimId, Outcome outcome, uint8 approvals, uint8 rejections, uint256 award);
     event JuryCancelled(uint256 indexed claimId);
+    event JuryStarved(uint256 indexed claimId, uint256 available, uint256 required);
     event JurySettled(uint256 indexed claimId, uint256 agreeing, uint256 feePerJuror, uint256 penalties);
 
     error ZeroAddress();
@@ -223,15 +227,23 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
 
     /// @notice Randomness callback. Picks jurors via a partial Fisher-Yates shuffle seeded by `seed`.
     /// @dev Only the first callback selects a jury; any later one (or one after `cancel`) reverts.
+    ///      Never seats a short jury: if fewer than `jurySize` members are still eligible when the seed
+    ///      arrives, the claim is marked starved and can be cancelled at once (see `canCancel`).
     function fulfillRandomness(uint256 claimId, uint256 seed) external {
         if (msg.sender != address(randomness)) revert NotRandomnessProvider();
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.AwaitingRandomness) revert WrongPhase(Phase.AwaitingRandomness, jury.phase);
+        if (starved[claimId]) revert WrongPhase(Phase.AwaitingRandomness, jury.phase);
 
         // Eligibility is re-read at fulfilment time: policies may have lapsed or stakes been withdrawn.
         address[] memory candidates = eligibleJurors(jury.claimant);
         uint256 n = candidates.length;
-        uint256 k = n < jurySize ? n : jurySize;
+        if (n < jurySize) {
+            starved[claimId] = true;
+            emit JuryStarved(claimId, n, jurySize);
+            return;
+        }
+        uint256 k = jurySize;
 
         for (uint256 i = 0; i < k; i++) {
             uint256 j = i + (uint256(keccak256(abi.encode(seed, i))) % (n - i));
@@ -371,16 +383,20 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         return block.timestamp > jury.revealDeadline || revealed == jury.jurors.length;
     }
 
-    /// @notice True once randomness has been pending for longer than `randomnessTimeout`.
+    /// @notice True once randomness has been pending for longer than `randomnessTimeout`, or as soon
+    ///         as the claim is starved of jurors.
     function canCancel(uint256 claimId) public view returns (bool) {
         Jury storage jury = _juries[claimId];
-        return jury.phase == Phase.AwaitingRandomness && block.timestamp > cancelAvailableAt(claimId);
+        if (jury.phase != Phase.AwaitingRandomness) return false;
+        return starved[claimId] || block.timestamp > cancelAvailableAt(claimId);
     }
 
     /// @notice When a still-pending randomness request becomes cancellable, or 0 if none is pending.
+    ///         A starved claim is cancellable from the moment it was filed.
     function cancelAvailableAt(uint256 claimId) public view returns (uint256) {
         Jury storage jury = _juries[claimId];
         if (jury.phase != Phase.AwaitingRandomness) return 0;
+        if (starved[claimId]) return uint256(jury.requestedAt);
         return uint256(jury.requestedAt) + randomnessTimeout;
     }
 

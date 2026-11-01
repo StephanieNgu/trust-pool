@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 /// @notice Source of randomness for jury selection.
 /// @dev Implementations must later call `IRandomnessConsumer(requester).fulfillRandomness(claimId, seed)`.
-///      The demo uses MockRandomness; production would use a Chainlink VRF adapter.
+///      Implemented by VRFRandomness (Chainlink VRF v2.5).
 interface IRandomnessProvider {
     function requestRandomness(uint256 claimId) external;
 }

@@ -278,9 +278,9 @@ describe("API", () => {
     assert.equal(malformed.status, 400);
   });
 
-  it("turns randomness off for a keeper that does not own MockRandomness", async () => {
+  it("turns randomness off when Chainlink VRF delivers it (no local coordinator mock)", async () => {
     const warnings: string[] = [];
-    const keeper = await Keeper.create(t.contracts, t.signers[9], {
+    const keeper = await Keeper.create({ ...t.contracts, vrfCoordinatorMock: null }, t.signers[9], {
       fulfillRandomness: true,
       autoResolve: true,
       logger: { info: () => {}, warn: (m) => warnings.push(m) },

@@ -141,6 +141,7 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
   for (const name of ["token", "pool", "registry", "randomness", "jury", "claimManager"] as const) {
     addresses[name] = await ctx[name].getAddress();
   }
+  addresses.vrfCoordinatorMock = await ctx.vrfCoordinator.getAddress();
   const deployment: Deployment = {
     network: "hardhat",
     chainId: "31337",
@@ -154,7 +155,6 @@ export async function setup(keeperOptions: Partial<KeeperOptions> = {}) {
   const keeper = await Keeper.create(contracts, ctx.deployer, {
     fulfillRandomness: true,
     autoResolve: true,
-    seed: () => 42n,
     ...keeperOptions,
   });
   const app = createApp({ deployment, provider, contracts, evidence, captures, keeper, corsOrigin: "*" });

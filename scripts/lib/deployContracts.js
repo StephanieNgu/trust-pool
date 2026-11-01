@@ -29,13 +29,57 @@ const DEFAULT_PARAMS = {
   receiptPeriod: 30 * DAY, // after accepting, the claimant uploads the repair or replacement receipt
 };
 
+/** Chainlink VRF v2.5 request settings shared by every network. */
+const VRF_DEFAULTS = {
+  // Seating a jury from 7 policyholders uses about 585k gas, and each extra policyholder adds a
+  // little. Raise this (Sepolia allows up to 2,500,000) for much larger pools; a higher limit makes
+  // Chainlink reserve more of the subscription balance per request.
+  callbackGasLimit: 1_000_000,
+  requestConfirmations: 3,
+  nativePayment: false,
+};
+
+/** Any non-zero key hash works with the mock coordinator; it only matters on real networks. */
+const LOCAL_KEY_HASH = "0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae";
+
+/**
+ * Deploys Chainlink's VRFCoordinatorV2_5Mock and a funded subscription for local chains and tests.
+ * LOCAL ONLY: the mock lets anyone answer a request. Public networks pass `vrf.coordinator`.
+ */
+async function deployLocalVrf() {
+  // Base fee and gas price are kept small, and the subscription well funded, so demos never run dry.
+  const coordinator = await ethers.deployContract("VRFCoordinatorV2_5Mock", [
+    ethers.parseEther("0.001"),
+    1_000_000_000n,
+    ethers.parseEther("0.004"),
+  ]);
+  const receipt = await (await coordinator.createSubscription()).wait();
+  const created = receipt.logs
+    .map((log) => {
+      try {
+        return coordinator.interface.parseLog(log);
+      } catch {
+        return null;
+      }
+    })
+    .find((e) => e && e.name === "SubscriptionCreated");
+  const subscriptionId = created.args.subId;
+  await (await coordinator.fundSubscription(subscriptionId, ethers.parseEther("1000000"))).wait();
+  return { coordinator, subscriptionId, keyHash: LOCAL_KEY_HASH };
+}
+
 /**
  * Deploys and wires every contract from the design doc. Deployment order avoids circular
- * constructor arguments; the remaining links are one-time owner setters.
+ * constructor arguments; the remaining links are one-time setters.
  *
- *   MockStablecoin -> Pool -> PolicyRegistry -> MockRandomness -> JuryModule -> ClaimManager
+ *   MockStablecoin -> Pool -> PolicyRegistry -> VRFRandomness -> JuryModule -> ClaimManager
+ *
+ * Jury randomness comes from Chainlink VRF v2.5. Without `vrf.coordinator` a local
+ * VRFCoordinatorV2_5Mock is deployed and returned as `vrfCoordinator`. With it (e.g. Sepolia), the
+ * caller supplies `vrf.subscriptionId` and `vrf.keyHash` and must add the returned `randomness`
+ * contract as a consumer of that subscription.
  */
-async function deployContracts(overrides = {}) {
+async function deployContracts(overrides = {}, vrf = {}) {
   const params = { ...DEFAULT_PARAMS, ...overrides };
   const [deployer] = await ethers.getSigners();
 
@@ -49,7 +93,26 @@ async function deployContracts(overrides = {}) {
     params.premiumPeriod,
     params.gracePeriod,
   ]);
-  const randomness = await ethers.deployContract("MockRandomness");
+  const vrfSettings = { ...VRF_DEFAULTS, ...vrf };
+  let vrfCoordinator = null;
+  if (!vrfSettings.coordinator) {
+    const local = await deployLocalVrf();
+    vrfCoordinator = local.coordinator;
+    vrfSettings.coordinator = await local.coordinator.getAddress();
+    vrfSettings.subscriptionId = local.subscriptionId;
+    vrfSettings.keyHash = local.keyHash;
+  }
+  const randomness = await ethers.deployContract("VRFRandomness", [
+    vrfSettings.coordinator,
+    vrfSettings.subscriptionId,
+    vrfSettings.keyHash,
+    vrfSettings.callbackGasLimit,
+    vrfSettings.requestConfirmations,
+    vrfSettings.nativePayment,
+  ]);
+  if (vrfCoordinator) {
+    await (await vrfCoordinator.addConsumer(vrfSettings.subscriptionId, await randomness.getAddress())).wait();
+  }
   const jury = await ethers.deployContract("JuryModule", [
     await registry.getAddress(),
     await randomness.getAddress(),
@@ -77,12 +140,13 @@ async function deployContracts(overrides = {}) {
     params.receiptPeriod,
   ]);
 
+  await (await randomness.setConsumer(await jury.getAddress())).wait();
   await (await pool.setRegistry(await registry.getAddress())).wait();
   await (await pool.setClaimManager(await claimManager.getAddress())).wait();
   await (await jury.setClaimManager(await claimManager.getAddress())).wait();
   await (await pool.setJury(await jury.getAddress())).wait();
 
-  return { deployer, params, token, pool, registry, randomness, jury, claimManager };
+  return { deployer, params, token, pool, registry, randomness, vrfCoordinator, vrf: vrfSettings, jury, claimManager };
 }
 
-module.exports = { deployContracts, DEFAULT_PARAMS, DAY, USDC };
+module.exports = { deployContracts, DEFAULT_PARAMS, VRF_DEFAULTS, DAY, USDC };
