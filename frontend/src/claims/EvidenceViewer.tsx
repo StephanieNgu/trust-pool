@@ -243,7 +243,7 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
   }
 
   return <section className="evidence-viewer" aria-label={copy.title}>
-    <div className="detail-section-heading evidence-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h3>{copy.title}</h3></div>{verified !== null && <span className={verified ? "evidence-verified" : "evidence-mismatch"}>{verified ? "✓ Hash verified" : "⚠ Hash mismatch"}</span>}</div>
+    <div className="detail-section-heading evidence-heading"><div><span className="eyebrow">{copy.eyebrow}</span><h3>{copy.title}</h3></div>{verified !== null && <span className={verified ? "evidence-verified" : "evidence-mismatch"} title={verified ? "These files match the fingerprint recorded on-chain when the claim was filed. That shows they were not altered, not that the photos are genuine or the claim is true." : undefined}>{verified ? "✓ Unchanged since filing" : "⚠ Hash mismatch"}</span>}</div>
     {!available ? <p className="notice warning">The evidence bundle is not available in this backend.</p> : !canRead ? <p className="muted">Evidence files are private. Only the claimant and selected jurors during active voting can open them.</p> : <>
       {files.length === 0 && !loading && <div className="evidence-locked"><div><strong>Wallet verification required</strong><p>The backend checks that this wallet is the claimant or a selected juror before decrypting the original files.</p></div><button className="primary" type="button" onClick={() => void loadEvidence()}>Sign in & view evidence</button></div>}
       {loading && <p className="muted" role="status">Authenticating wallet, verifying the bundle, and loading evidence…</p>}
@@ -261,7 +261,8 @@ export function EvidenceViewer({ account, claim, source = "claim", tokenDecimals
           {file.contentType.startsWith("image/") && file.contentType !== "image/heic" ? <a href={file.objectUrl} target="_blank" rel="noreferrer" title={`Open ${file.name}`}><img src={file.objectUrl} alt={`Evidence: ${file.name}`} /></a> : <div className="evidence-document"><strong>{file.contentType === "image/heic" ? "HEIC" : "PDF"}</strong><span>{file.contentType === "image/heic" ? "Open the original in a compatible viewer" : "Document evidence"}</span></div>}
           <div className="evidence-file-meta"><div><strong title={file.name}>{purchaseProof.includes(file.index) ? `Proof of purchase · ${file.name}` : file.name}</strong><span>{file.contentType} · {fileSize(file.size)}</span></div><a href={file.objectUrl} target="_blank" rel="noreferrer">Open original ↗</a></div>
         </article>)}</div>
-        <div className="evidence-integrity"><span>On-chain fingerprint</span><code title={evidenceHash}>{shortHash(evidenceHash)}</code><button className="text-button" type="button" onClick={() => void loadEvidence()}>Verify again</button></div>
+        <div className="evidence-integrity"><span>On-chain fingerprint</span><code title={evidenceHash}>{shortHash(evidenceHash)}</code><button className="text-button" type="button" onClick={() => void loadEvidence()}>Check again</button></div>
+        {verified && <p className="muted evidence-integrity-note">A matching fingerprint only means these are the files that were filed. It does not show the photos are genuine, the device is the claimant's, or the damage happened.</p>}
       </>}
     </>}
   </section>;
