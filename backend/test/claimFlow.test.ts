@@ -365,8 +365,8 @@ describe("claim flow through the backend", () => {
   it("cancels a claim whose randomness never arrives", async () => {
     const { holders, claimManager, api, post, params } = t;
     const claimant = holders[2];
-    // A keeper that does not own MockRandomness cannot fulfil, standing in for a VRF that never answers.
-    const stalledKeeper = await Keeper.create(t.contracts, t.signers[9], { fulfillRandomness: true, autoResolve: true });
+    // A keeper that does not answer VRF requests stands in for a Chainlink VRF that never responds.
+    const stalledKeeper = await Keeper.create(t.contracts, t.signers[9], { fulfillRandomness: false, autoResolve: true });
     const { evidenceHash } = (
       await post("/api/evidence", { files: [{ name: "a.png", contentType: "image/png", data: photo() }] }, claimant)
     ).body;
@@ -391,7 +391,8 @@ describe("claim flow through the backend", () => {
     assert.equal(claim.bond.returned, claim.bond.amount);
     assert.equal((await api(`/api/members/${claimant.address}`)).body.policy.openClaimId, null);
 
-    // The randomness-owning keeper leaves the cancelled claim alone.
+    // The VRF request was never answered; a late answer now cannot seat a jury, and the main keeper
+    // leaves the cancelled claim alone.
     assert.deepEqual(await t.keeper.tick(), []);
   });
 });

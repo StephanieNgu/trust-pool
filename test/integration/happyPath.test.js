@@ -14,6 +14,7 @@ const {
   RECEIPT,
   ClaimState,
   noteHashFor,
+  fulfillRandomness,
 } = require("../helpers");
 
 describe("Integration: happy path", function () {
@@ -53,7 +54,8 @@ describe("Integration: happy path", function () {
     expect((await claimManager.getClaim(claimId)).state).to.equal(ClaimState.JuryPending);
 
     // 4. Randomness fulfilled: 5 jurors picked, claimant excluded, claim now in Voting.
-    await expect(randomness.fulfill(claimId, 1234n)).to.emit(jury, "JurySelected");
+    //    Chainlink VRF answers through the coordinator; locally that is the official mock.
+    await expect(fulfillRandomness(ctx, claimId)).to.emit(jury, "JurySelected");
     const jurorAddrs = await jury.getJurors(claimId);
     expect(jurorAddrs).to.have.lengthOf(5);
     expect(jurorAddrs).to.not.include(claimant.address);

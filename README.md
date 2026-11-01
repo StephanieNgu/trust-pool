@@ -207,10 +207,11 @@ holds user keys: members still sign their own transactions in MetaMask. It does 
   not that the claim is true). Jurors lose access once voting ends. Files live in `data/evidence/`,
   encrypted with AES-256-GCM. See
   [design doc §6b](docs/design-doc.md#6b-off-chain-backend-and-evidence-privacy) for the full policy.
-* **Keeper.** Polls open claims and moves them along: fulfils jury randomness (as the
-  `MockRandomness` owner, using a CSPRNG seed), cancels a claim whose randomness is more than a day
-  late, finalizes once voting closes or every juror has voted, and pays approved claims. Everything
-  except randomness is callable by anyone on-chain, so the keeper cannot change an outcome.
+* **Keeper.** Polls open claims and moves them along: on a local chain it asks Chainlink's VRF
+  coordinator mock to answer pending jury randomness requests (it never picks a seed; on Sepolia
+  Chainlink answers by itself), cancels a claim whose randomness is more than a day late or whose
+  jurors dropped out, finalizes once voting closes or every juror has voted, and pays approved
+  claims. Everything it does is callable by anyone on-chain, so the keeper cannot change an outcome.
 * **Read API** for the dashboard: pool stats, a member's policy, claims filtered by claimant, juror or
   state, and each claim's jury and votes.
 
@@ -280,9 +281,9 @@ Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 | `ACCOUNTS_DIR` | `data/accounts` | Sign-in sessions and member profiles |
 | `CORS_ORIGIN` | `*` | |
 | `KEEPER_ENABLED` | `true` | |
-| `KEEPER_PRIVATE_KEY` | unset | Required off the local chain; must own `MockRandomness` to select juries |
+| `KEEPER_PRIVATE_KEY` | unset | Required off the local chain |
 | `KEEPER_INTERVAL_MS` | `5000` | |
-| `KEEPER_FULFILL_RANDOMNESS` | `true` | |
+| `KEEPER_FULFILL_RANDOMNESS` | `true` | Local chain only: answer VRF requests through the coordinator mock |
 | `KEEPER_AUTO_RESOLVE` | `true` | Finalize and pay automatically |
 
 ## Smart Contracts
@@ -296,9 +297,9 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `Pool` | Holds all funds; takes premiums and contributions; holds jurors' stakes and claimants' bonds apart from the reserve; pays approved claims up to `maxPayoutBps` of the reserve, and jurors' fees | **Yes** |
 | `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Offered/Rejected → Approved (or Withdrawn) → Paid (or Expired without a receipt); takes the claimant's bond on submit and settles it at the verdict; pays the smaller of the offer and the receipt | No |
 | `JuryModule` | Requests randomness, picks 5 staked jurors (claimant excluded), runs commit-reveal amount voting, takes the median, pays agreeing jurors and penalizes no-shows | No |
-| `MockRandomness` | **Demo-only** randomness provider behind `IRandomnessProvider` (swap for Chainlink VRF later) | No |
+| `VRFRandomness` | Chainlink VRF v2.5 randomness provider behind `IRandomnessProvider`. No owner; immutable coordinator. Locally it talks to Chainlink's `VRFCoordinatorV2_5Mock`, on Sepolia to the real coordinator. See [docs/vrf.md](docs/vrf.md) | No |
 
-Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 1.5% premium per 30-day period (the first paid on purchase), 7-day grace period after a missed premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` overrides only the local Hardhat waiting period to zero so UI claim flows can be tested immediately; tests and non-local deployments retain the 7-day default. The test suites pin a 5% premium to keep their amounts round.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 1.5% premium per 30-day period (the first paid on purchase), 7-day grace period after a missed premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` sets the waiting period to zero on the local Hardhat chain and on Sepolia so claim flows can be tried immediately; tests and other deployments keep the 7-day default. The test suites pin a 5% premium to keep their amounts round.
 
 **Voting is commit-reveal, on amounts.** Each juror votes the amount they think the claim should pay,
 from 0 (reject) up to the amount asked. A juror first calls `commitVote(claimId, commitment)` with
@@ -329,6 +330,19 @@ Compile only:
 
 ```powershell
 npm run compile
+```
+
+### Jury randomness (Chainlink VRF)
+
+Juries are drawn with Chainlink VRF v2.5, so neither the backend nor the deployer can choose who
+sits on a jury. Locally, `deploy.js` also deploys Chainlink's `VRFCoordinatorV2_5Mock` and the
+keeper asks it to answer each request. To see real, verifiable randomness, deploy to Sepolia and run
+the VRF demo; the steps are in [docs/vrf.md](docs/vrf.md).
+
+```bash
+cp .env.example .env    # fill in SEPOLIA_RPC_URL, DEPLOYER_PRIVATE_KEY, VRF_SUBSCRIPTION_ID
+npx hardhat run scripts/deploy.js --network sepolia
+npx hardhat run scripts/sepolia-vrf-demo.js --network sepolia
 ```
 
 ## Running Tests
@@ -422,9 +436,10 @@ trust-pool/
 │   ├── Pool.sol
 │   ├── ClaimManager.sol
 │   ├── JuryModule.sol
+│   ├── VRFRandomness.sol
 │   ├── interfaces/
-│   └── mocks/
-│       └── MockRandomness.sol
+│   └── test/
+│       └── VRFCoordinatorV2_5Mock.sol  # Chainlink's mock, local chains only
 ├── test/
 │   ├── helpers.js
 │   ├── unit/
@@ -433,6 +448,7 @@ trust-pool/
 ├── scripts/
 │   ├── deploy.js
 │   ├── demo.js
+│   ├── sepolia-vrf-demo.js  # claim on Sepolia with a jury picked by real Chainlink VRF
 │   └── lib/
 │       └── deployContracts.js
 ├── deployments/        # written by deploy.js

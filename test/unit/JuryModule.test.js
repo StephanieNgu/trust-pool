@@ -16,6 +16,7 @@ const {
   USDC,
   EVIDENCE,
   stakeAsJuror,
+  fulfillRandomness,
 } = require("../helpers");
 
 async function awaitingRandomnessFixture() {
@@ -71,13 +72,6 @@ describe("JuryModule", function () {
       await expect(jury.fulfillRandomness(claimId, 1n)).to.be.revertedWithCustomError(jury, "NotRandomnessProvider");
     });
 
-    it("only lets the mock's owner fulfil randomness", async function () {
-      const { randomness, claimant, claimId } = await loadFixture(awaitingRandomnessFixture);
-      await expect(randomness.connect(claimant).fulfill(claimId, 1n)).to.be.revertedWithCustomError(
-        randomness,
-        "OwnableUnauthorizedAccount",
-      );
-    });
 
     it("selects jurySize distinct jurors, never the claimant", async function () {
       const ctx = await loadFixture(awaitingRandomnessFixture);
@@ -103,22 +97,65 @@ describe("JuryModule", function () {
 
     it("cannot be fulfilled twice", async function () {
       const ctx = await loadFixture(awaitingRandomnessFixture);
+      const requestId = await ctx.randomness.requestIdOf(ctx.claimId);
       await selectJury(ctx, ctx.claimId);
-      await expect(ctx.randomness.fulfill(ctx.claimId, 1n)).to.be.revertedWithCustomError(
-        ctx.randomness,
-        "NoPendingRequest",
-      );
+      // The coordinator forgets an answered request, and the provider would refuse it anyway.
+      await expect(
+        ctx.vrfCoordinator.fulfillRandomWordsWithOverride(requestId, await ctx.randomness.getAddress(), [1n]),
+      ).to.be.revertedWithCustomError(ctx.vrfCoordinator, "InvalidRequest");
     });
 
-    it("re-checks eligibility at fulfilment and seats fewer jurors if some lapsed", async function () {
+    it("re-checks eligibility at fulfilment and still seats a full jury when enough remain", async function () {
       const ctx = await loadFixture(awaitingRandomnessFixture);
-      // 6 eligible at request time; two lapse before the callback.
+      // 6 eligible at request time; one lapses before the callback, leaving exactly 5.
+      await ctx.registry.connect(ctx.holders[1]).cancelPolicy();
+      const jurors = await selectJury(ctx, ctx.claimId);
+      expect(jurors).to.have.lengthOf(5);
+      expect(jurors).to.not.include(ctx.holders[1]);
+    });
+  });
+
+  describe("jury starvation (fewer than jurySize eligible)", function () {
+    it("refuses to file a claim when fewer than five jurors are eligible", async function () {
+      const ctx = await loadFixture(activePoolFixture);
+      // 6 eligible jurors besides the claimant; two withdraw their policies, leaving 4.
       await ctx.registry.connect(ctx.holders[1]).cancelPolicy();
       await ctx.registry.connect(ctx.holders[2]).cancelPolicy();
-      const jurors = await selectJury(ctx, ctx.claimId);
-      expect(jurors).to.have.lengthOf(4);
-      expect(jurors).to.not.include(ctx.holders[1]);
-      expect(jurors).to.not.include(ctx.holders[2]);
+      expect(await ctx.jury.eligibleJurors(ctx.claimant.address)).to.have.lengthOf(4);
+      await expect(ctx.claimManager.connect(ctx.claimant).submitClaim(USDC(100), EVIDENCE))
+        .to.be.revertedWithCustomError(ctx.jury, "NotEnoughEligibleJurors")
+        .withArgs(4, 5);
+    });
+
+    it("never seats a short jury if jurors drop out while randomness is pending", async function () {
+      const ctx = await loadFixture(awaitingRandomnessFixture);
+      const { jury, claimManager, claimId } = ctx;
+      // 6 eligible at request time; two lapse before the callback, leaving 4.
+      await ctx.registry.connect(ctx.holders[1]).cancelPolicy();
+      await ctx.registry.connect(ctx.holders[2]).cancelPolicy();
+
+      await expect(fulfillRandomness(ctx, claimId, 42n)).to.emit(jury, "JuryStarved").withArgs(claimId, 4, 5);
+      expect(await jury.getJurors(claimId)).to.have.lengthOf(0);
+      expect((await jury.getJury(claimId)).phase).to.equal(JuryPhase.AwaitingRandomness);
+      expect(await jury.starved(claimId)).to.equal(true);
+      // No stake was locked for a jury that never sat.
+      for (const h of ctx.holders.slice(3)) expect(await jury.isJuror(claimId, h.address)).to.equal(false);
+
+      // The claimant need not wait out the randomness timeout: the claim is cancellable at once.
+      expect(await jury.canCancel(claimId)).to.equal(true);
+      await expect(claimManager.cancelStalledClaim(claimId))
+        .to.emit(claimManager, "ClaimStateChanged")
+        .withArgs(claimId, ClaimState.JuryPending, ClaimState.Cancelled);
+    });
+
+    it("treats an unstaked juror as ineligible and starves rather than seating 4", async function () {
+      const ctx = await loadFixture(awaitingRandomnessFixture);
+      // Two members unstake (their stakes are not locked: they are not on a jury yet).
+      for (const h of [ctx.holders[1], ctx.holders[2]]) {
+        await ctx.pool.connect(h).unstake(await ctx.pool.stakeOf(h.address));
+      }
+      await expect(fulfillRandomness(ctx, ctx.claimId)).to.emit(ctx.jury, "JuryStarved");
+      expect(await ctx.jury.getJurors(ctx.claimId)).to.have.lengthOf(0);
     });
   });
 

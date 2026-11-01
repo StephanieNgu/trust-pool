@@ -92,11 +92,20 @@ export const juryAbi = [
   "error VotingStillOpen()",
 ] as const;
 
+/** VRFRandomness: the Chainlink VRF v2.5 provider JuryModule draws its seeds from. */
 export const randomnessAbi = [
-  "function owner() view returns (address)",
-  "function pendingRequester(uint256 claimId) view returns (address)",
-  "function fulfill(uint256 claimId, uint256 seed)",
-  "error NoPendingRequest()",
+  "function coordinator() view returns (address)",
+  "function isPending(uint256 claimId) view returns (bool)",
+  "function requestIdOf(uint256 claimId) view returns (uint256)",
+] as const;
+
+/**
+ * Chainlink's VRFCoordinatorV2_5Mock, deployed on local chains only. Answering a request derives the
+ * word from the request id; the caller does not choose it.
+ */
+export const vrfCoordinatorMockAbi = [
+  "function fulfillRandomWords(uint256 requestId, address consumer)",
+  "error InvalidRequest()",
 ] as const;
 
 /** Mirrors of the Solidity enums, indexed by their numeric value. */
@@ -118,5 +127,6 @@ export const ARTIFACT_NAMES = {
   registry: "PolicyRegistry",
   claimManager: "ClaimManager",
   jury: "JuryModule",
-  randomness: "MockRandomness",
+  randomness: "VRFRandomness",
+  vrfCoordinatorMock: "VRFCoordinatorV2_5Mock",
 } as const;

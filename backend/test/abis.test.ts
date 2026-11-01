@@ -12,6 +12,7 @@ const BY_NAME = {
   claimManager: abis.claimManagerAbi,
   jury: abis.juryAbi,
   randomness: abis.randomnessAbi,
+  vrfCoordinatorMock: abis.vrfCoordinatorMockAbi,
 } as const;
 
 describe("ABI fragments", () => {

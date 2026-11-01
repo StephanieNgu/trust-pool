@@ -18,7 +18,7 @@ async function main() {
   const policyholders = [claimant, ...members.slice(0, 6)];
 
   log("Deploying contracts");
-  const { token, pool, registry, randomness, jury, claimManager, params } = await deployContracts();
+  const { token, pool, registry, randomness, vrfCoordinator, jury, claimManager, params } = await deployContracts();
   const poolAddr = await pool.getAddress();
   console.log(`    Pool at ${poolAddr}; jury of ${params.jurySize}, quorum ${params.quorum}`);
 
@@ -53,8 +53,10 @@ async function main() {
   console.log(`    Bond posted: ${fmt((await claimManager.getClaim(claimId)).bond)} (back at the verdict, less the share the jury cuts)`);
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);
 
-  log("Randomness provider responds (MOCK: not secure randomness)");
-  await (await randomness.fulfillWithBlockhash(claimId)).wait();
+  log("Chainlink VRF answers the randomness request (local coordinator mock; real oracles on Sepolia)");
+  const requestId = await randomness.requestIdOf(claimId);
+  await (await vrfCoordinator.fulfillRandomWords(requestId, await randomness.getAddress())).wait();
+  console.log(`    VRF request ${requestId}: the word comes from the coordinator, not from this script`);
   const jurorAddrs = await jury.getJurors(claimId);
   console.log(`    Jurors: ${jurorAddrs.map(short).join(", ")}`);
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);

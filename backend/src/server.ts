@@ -35,7 +35,7 @@ async function main() {
     if (config.keeper.privateKey) {
       signer = new Wallet(config.keeper.privateKey, provider);
     } else if (chainId === LOCAL_CHAIN_ID) {
-      // Hardhat node accounts are unlocked, and the deployer owns MockRandomness.
+      // Hardhat node accounts are unlocked; any of them can drive the local VRF coordinator mock.
       signer = await provider.getSigner(deployment.deployer);
     } else {
       console.warn("Keeper disabled: set KEEPER_PRIVATE_KEY to run it on a non-local chain.");

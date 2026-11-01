@@ -18,6 +18,7 @@ const {
   votingPeriod,
   finalizeAndAccept,
   stakeAsJuror,
+  fulfillRandomness,
 } = require("../helpers");
 
 async function castAll(ctx, claimId, jurors, approve) {
@@ -357,8 +358,12 @@ describe("ClaimManager", function () {
         .and.to.emit(jury, "JuryCancelled");
       expect(await claimManager.openClaimOfPolicy((await claimManager.getClaim(claimId)).policyId)).to.equal(0n);
 
-      // A late randomness callback cannot seat a jury for the cancelled claim.
-      await expect(randomness.fulfill(claimId, 1n)).to.be.revertedWithCustomError(jury, "WrongPhase");
+      // A late randomness callback cannot seat a jury for the cancelled claim: the provider reports
+      // the rejection instead of reverting, so the VRF request still completes.
+      await expect(fulfillRandomness(ctx, claimId, 1n))
+        .to.emit(randomness, "RandomnessDeliveryFailed")
+        .and.not.to.emit(jury, "JurySelected");
+      expect(await jury.getJurors(claimId)).to.have.lengthOf(0);
       await expect(claimManager.connect(claimant).submitClaim(USDC(1), EVIDENCE)).to.emit(
         claimManager,
         "ClaimSubmitted",
