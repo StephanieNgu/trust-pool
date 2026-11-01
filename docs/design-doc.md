@@ -2,11 +2,11 @@
 
 ## 1. Overview
 
-A peer-to-peer device insurance protocol on an EVM blockchain. Policyholders contribute stablecoin to a shared pool. When a policyholder files a claim, a randomly selected jury of other policyholders votes on it. If the jury approves, the pool pays out. Payments and votes are recorded on-chain as an immutable audit trail.
+A peer-to-peer device insurance protocol on an EVM blockchain. Policyholders contribute stablecoin to a shared pool. When a policyholder files a claim, a randomly selected jury of other policyholders votes on it. If the jury approves, the pool pays out. Payments and votes are recorded on-chain as an immutable audit trail. A jury approval is the jurors' judgment of the evidence, not proof that the claim is legitimate; there is no oracle feed for claims. See [oracle-and-anti-fraud.md](oracle-and-anti-fraud.md) for the oracle decision and what the anti-fraud measures do and do not show.
 
 **Goals for this milestone:** one working happy-path claim flow, end to end, on a local network.
 
-**Non-goals (see Section 10):** production-grade randomness, Sybil resistance, appeals, solvency modeling, regulatory structure.
+**Non-goals (see Section 10):** a claim oracle (deferred), objective tests of collusion resistance, Sybil resistance, appeals, solvency modeling, regulatory structure.
 
 ## 2. Architecture at a Glance
 
@@ -48,7 +48,7 @@ flowchart LR
 
 - **Separate contracts by responsibility.** Money (Pool), membership (PolicyRegistry), claim workflow (ClaimManager), and jury logic (JuryModule) each change for different reasons. Keeping jury logic separate means we can swap in a better selection or voting scheme without touching the contract that holds funds.
 - **Only the Pool moves money.** Every other contract has zero token custody, which shrinks the attack surface and makes audits easier.
-- **Evidence stays off-chain.** Only a content hash goes on-chain. This keeps gas low, avoids putting personal data on an immutable ledger, and lets jurors verify the file has not been altered since submission.
+- **Evidence stays off-chain.** Only a content hash goes on-chain. This keeps gas low, avoids putting personal data on an immutable ledger, and lets jurors check the file has not been altered since submission. That is integrity only: the hash says nothing about whether the photos are genuine.
 - **Randomness is behind an interface.** `VRFRandomness` implements it with Chainlink VRF v2.5. Local chains use Chainlink's official coordinator mock; Sepolia uses Chainlink's real coordinator. JuryModule does not know which.
 
 ## 3. Component Responsibilities
@@ -261,7 +261,7 @@ The Express backend stores evidence, runs a keeper, and serves read-only views o
 
 **Device photos.** Each claim is checked against the phone registered at signup.
 - At signup the member picks the device type (phone, tablet, laptop, camera or other) and enters the serial number, make, model and colour, plus the IMEI for a phone (checked with its Luhn digit; optional for a tablet). They take three photos: the front, the back, and where the device shows its serial (Settings > About on a phone or tablet, the label on other devices). These go to the backend as an "enrollment" bundle, and its hash is stored on the policy (`enrollmentHash`). The policy's `deviceIdHash` is `keccak256(IMEI)`, or `keccak256("make:SERIAL")` for a device without an IMEI, since serials are only unique per manufacturer.
-- Before taking photos, at signup or for a claim, the app requests a one-time capture code (`POST /api/capture/code`) that should appear in the first photo. The backend stamps the bundle with the code and when it was issued and received, and refuses a code that is missing, expired (15 minutes), used, or issued to another wallet. This shows the photos were taken just now rather than found online.
+- Before taking photos, at signup or for a claim, the app requests a one-time capture code (`POST /api/capture/code`) that should appear in the first photo. The backend stamps the bundle with the code and when it was issued and received, and refuses a code that is missing, expired (15 minutes), used, or issued to another wallet. This shows the photos were taken after the code was issued rather than found online. It does not show the device is the member's or that any damage is real.
 - Jurors see the signup photos and the claim photos side by side, with automatic checks: do the signup details hash to the policy's `deviceIdHash`, and does the IMEI or serial given with the claim (optional) match the signup one. The frontend warns if a claim was filed with the signup bundle instead of new photos.
 - Limits: a web app cannot stop someone uploading an old photo instead of using the camera, so the capture code is the freshness check. A device that is already broken inside but looks fine at signup is not caught; the waiting period is the main defence there.
 
@@ -304,14 +304,15 @@ sequenceDiagram
 |---|---|---|---|
 | Contract structure | 4 focused contracts | Separation of concerns, upgrade path, easier testing | One monolith: simpler, but tangled and harder to audit |
 | Fund custody | Pool only | Smallest attack surface | Escrow per claim: more gas and complexity |
+| Claim decisions | Member jury only; the original proposal's claim oracle feed is deferred | No tamper-resistant feed exists for private device damage, and a mocked feed would look like verification without verifying anything. See [oracle-and-anti-fraud.md](oracle-and-anti-fraud.md) | Oracle-triggered (parametric) payouts; a hybrid where feeds answer narrow facts such as signed shop invoices or IMEI blacklists |
 | Randomness | Chainlink VRF v2.5 behind an interface; official coordinator mock locally | Verifiable, unbiasable seeds on a testnet; tests stay deterministic by overriding the mock's word | Blockhash: manipulable by validators. Keeper-chosen seed (the M2/M3 mock): the operator could bias juries |
 | Jury selection | Fisher-Yates style sampling on the eligible list, seeded by the randomness output | Simple and auditable; fine for a small demo pool | Off-chain selection: cheaper but requires trusting the selector |
 | Voting | Commit-reveal: sealed votes for 2 days, then 1 day to reveal | No juror can see or copy another's vote before committing, which removes herding | Plain on-chain vote: one transaction per juror, but later jurors see earlier votes |
 | Commit-reveal salt | Chosen by the juror's wallet; the frontend should derive it from a wallet signature over the claim id so it can be recovered | A lost salt means a vote cannot be revealed; deriving it avoids storing secrets | Backend stores salts: convenient, but the backend could then read every vote early |
-| What jurors decide | An amount from 0 up to the claim, plus a short note; the offer is the median | The professor's "negotiation" suggestion: jurors can say "you only need 150" against a 300 claim. The median ignores one extreme juror in either direction, so a lone colluder or troll cannot move the payout far. Sealing the note's hash with the amount stops jurors editing their reasoning after seeing others' | Yes/no votes: simpler but all-or-nothing. Mean of amounts: one juror can drag it. Live chat or counteroffers: slower, more steps for jurors, and it reopens herding |
-| Juror incentives | Opt-in stake (20); agreeing jurors share a fee (2% of the claim); no-shows lose 5 of their stake; disagreeing costs nothing | Gives jurors a reason to vote at all (the fee) and to show up once picked (the penalty). Paying for agreement rewards matching the shared evidence, a Schelling point, while sealed votes stop jurors copying each other. Not punishing disagreement keeps an honest minority view safe, so jurors are not pushed to guess the crowd | Kleros-style slashing of every minority vote: stronger push to coherence but punishes honest dissent and makes careful jurors avoid hard cases. No stake: anyone could be picked and ignore the claim for free |
+| What jurors decide | An amount from 0 up to the claim, plus a short note; the offer is the median | The professor's "negotiation" suggestion: jurors can say "you only need 150" against a 300 claim. The median ignores one extreme juror in either direction, so a lone colluder or troll cannot move the payout far. Three colluders out of five decide it outright (see `test/unit/limitations.test.js`). Sealing the note's hash with the amount stops jurors editing their reasoning after seeing others' | Yes/no votes: simpler but all-or-nothing. Mean of amounts: one juror can drag it. Live chat or counteroffers: slower, more steps for jurors, and it reopens herding |
+| Juror incentives | Opt-in stake (20); agreeing jurors share a fee (2% of the claim); no-shows lose 5 of their stake; disagreeing costs nothing | Gives jurors a reason to vote at all (the fee) and to show up once picked (the penalty). The intent is that paying for agreement rewards matching the shared evidence, a Schelling point, while sealed votes stop jurors copying each other. This is untested, and a colluding majority is also "in agreement" and gets the fee. Not punishing disagreement keeps an honest minority view safe, so jurors are not pushed to guess the crowd | Kleros-style slashing of every minority vote: stronger push to coherence but punishes honest dissent and makes careful jurors avoid hard cases. No stake: anyone could be picked and ignore the claim for free |
 | Agreement band | Within 10% of the requested amount from the median; voting 0 agrees only with a rejection | Measured against the request so the band is the same width whatever the median; a small median would otherwise leave almost no room | Exact median only: too strict for amounts; % of the median: shrinks to nothing on small offers |
-| Claimant bond | 5% of the ask (at least 5), returned at the verdict minus the share of the ask the jury cut; the rest joins the reserve. Returned in full if the jury misses quorum or the claim is cancelled | A fake claim now has a price: one the jury rejects loses the whole bond. Scaling the loss with the cut also makes padding the ask cost something, where before asking 300 for 150 of damage was free (the jury paid 150 either way). An honest claimant the jury pays in full loses nothing, and the bond is small next to the claim. Measured against the median rather than the capped offer, so a thin pool never costs the claimant | Forfeit only on rejection: simpler, but padding stays free. A fixed fee per claim: taxes honest claims as much as fake ones. Paying the forfeit to jurors: would give jurors a reason to cut claims |
+| Claimant bond | 5% of the ask (at least 5), returned at the verdict minus the share of the ask the jury cut; the rest joins the reserve. Returned in full if the jury misses quorum or the claim is cancelled | A fake claim the jury catches now has a price: one the jury rejects loses the whole bond. A fake claim the jury approves in full costs nothing. Scaling the loss with the cut also makes padding the ask cost something, where before asking 300 for 150 of damage was free (the jury paid 150 either way). An honest claimant the jury pays in full loses nothing, and the bond is small next to the claim. Measured against the median rather than the capped offer, so a thin pool never costs the claimant | Forfeit only on rejection: simpler, but padding stays free. A fixed fee per claim: taxes honest claims as much as fake ones. Paying the forfeit to jurors: would give jurors a reason to cut claims |
 | Payout | Reimbursement against a receipt, up to the offer; 30 days to submit it | Money goes to the repair or replacement it was meant for, and a claimant who spent less than the offer gets what they spent. Jurors are not asked to check receipts; the backend refuses reused files and flags a total or date that does not fit | Paying repair shops directly: guarantees the use of funds but needs registered shops. Paying the offer up front: simplest, but nothing ties the money to a repair |
 | Claimant's answer | Accept or withdraw within 2 days; silence accepts; no counteroffer | One decision for the claimant and none for jurors, so the jury is not called back. Withdrawing frees the policy to refile with better evidence or a repair quote | A counter round paid to jurors: considered for later if claimants often withdraw |
 | Premiums | Monthly (30 days): the first on purchase, each next one extends coverage from the end of the paid period, at most one period ahead. 7-day grace period after a missed one, then the policy stops counting as active and anyone can close it (`lapseOverdue`; the keeper does) | Spreads the cost the way device cover is normally sold, and keeps money flowing into the pool. The grace period stops a late payment from wiping out cover immediately. Closing is permissionless so no admin is needed, and a claim already open blocks it, the same rule as cancelling | Upfront annual premium: simpler, but a large first payment and no ongoing inflow. Auto-debit via a standing allowance: smoother, but pulling funds without a fresh signature surprises users |
@@ -329,7 +330,7 @@ sequenceDiagram
 
 | Threat | Prototype mitigation | Production plan |
 |---|---|---|
-| One person creates many wallets to dominate juries | One policy per wallet, waiting period | Identity or device attestation, stake-weighted selection |
+| One person creates many wallets to dominate juries | One policy per wallet and per device ID, waiting period, juror stake. Each extra wallet costs premiums and a stake, but nothing ties wallets to people | Identity or device attestation, stake-weighted selection |
 | Claimant sits on their own jury | Claimant excluded from selection | Also exclude linked accounts |
 | Jurors copy each other's votes | Commit-reveal: votes are sealed until every juror has committed or the commit window ends | Keep |
 | Juror never reveals | Unrevealed commits count as no vote; quorum rule rejects the claim if too few reveal; the no-show loses 5 of their 20 stake and drops below the minimum until they top up | Replace no-shows with fresh jurors |
@@ -343,40 +344,43 @@ sequenceDiagram
 | Evidence disk or backup is copied | AES-256-GCM encryption at rest | Key management service, key rotation |
 | Insuring or claiming on a device that is not yours | Signup and claim photos with a fresh capture code; IMEI or serial matched against signup; optional device key (claim "filed from the insured device"); optional proof of purchase; photo files usable once | Native-app device attestation, carrier or maker ownership checks |
 | Device ID guessed from its hash | None: `keccak256(IMEI)` can be brute-forced for known IMEI ranges | Salt the device hash per policy |
-| Fake or padded claims | Bond: a rejected claim loses all of it, and a cut claim loses the same share of it as the jury cut | Bond size by claim history |
+| Fake or padded claims | Bond: a rejected claim loses all of it, and a cut claim loses the same share of it as the jury cut. Only works when jurors spot the problem; nothing on-chain checks the claim | Bond size by claim history; signed shop invoices (oracle, deferred) |
 | Payout not spent on the device | Paid only against a receipt, at most what it shows | Shop-signed invoices or paying shops directly |
 | Same receipt used twice | Backend refuses a receipt file already used for another claim | Shop-issued invoice numbers checked with the shop |
 | Jurors don't care | Fee for agreeing with the outcome, penalty for not revealing | Tune fee and penalty from real participation data |
-| Jurors collude | Random selection from staked members and sealed votes make coordination hard; the median limits what a minority can move | Larger juries, appeals |
+| Jurors collude | Random selection means the claimant cannot choose jurors, and sealed votes stop copying inside the app. Neither stops coordination outside it, and three of five colluders (or two, if two honest jurors do not reveal) decide a claim. Not measured: no objective collusion tests exist (see [oracle-and-anti-fraud.md](oracle-and-anti-fraud.md), Section 3) | Larger juries, appeals, attacker simulations |
 
 ## 9. Testing and CI
 
 - **Unit tests** (Hardhat + Chai) per contract, covering guards and state transitions.
 - **Integration test** that runs the full happy path: join, contribute, submit, vote, payout.
 - **Negative tests:** ineligible claimant, double commit and double reveal, non-juror vote, reveal not matching the commitment, commit or reveal after its window, payout above the pool balance, evidence read by a non-juror or with a wrong key.
+- **Limitation tests** (`test/unit/limitations.test.js`): passing tests that record what the rules do not stop, such as a colluding majority getting a fabricated claim paid. They are not tests of collusion resistance, which is not measured.
 - **CI (GitHub Actions):** install dependencies, compile, run tests, lint (Solhint and ESLint). Branch protection requires a green run before merge.
 
 ## 10. Limitations and Future Work
 
 These are known gaps, deliberately left out of the prototype.
 
-1. **Bribery resistance** beyond commit-reveal (which is built): votes become public on reveal, so a briber can still check them afterwards
-2. **Appeals** with escalating jury sizes
-3. **Juror incentive tuning:** the fee, band and penalty (built) are demo values; tune them from real participation data
-4. **Mainnet randomness:** Chainlink VRF is built and runs on Sepolia; mainnet would raise request confirmations and fund a production subscription
-5. **Sybil resistance:** identity checks or device attestation (IMEI, Apple and Google attestation)
-6. **Claimant bond sizing:** the bond (built) is a flat 5%; it could grow for members with rejected claims
-7. **Solvency modeling:** reserve ratios, pro-rata payouts on shortfall, withdrawal lockups
-8. **Gas-efficient jury selection** for large pools (off-chain selection with on-chain proof)
-9. **End-to-end evidence encryption** to each juror's key, so even the backend cannot read evidence (encryption at rest and juror-only access are built)
-10. **Regulatory structure**, since this resembles insurance in most jurisdictions (a discretionary-mutual model is one path)
-11. **Upgradeability,** timelocks, and an emergency pause
-12. **Reinstatement after a lapse:** a policy that passes its grace period ends for good, and the member signs up again with new photos. A reinstatement window (pay the arrears plus a fresh waiting period) needs a PolicyRegistry change
-13. **Deductible per claim:** standard in device cover and a deterrent to small or padded claims; it would be a ClaimManager parameter taken off the payout
-14. **Pricing by device type and value:** every device pays the same rate of its cover; a rate table by type (and age) would price laptops and phones differently
-15. **Off-app reminders:** premium due dates and jury deadlines show in the app only. Email or push would use the member profile (built) for contact details, plus a delivery provider
-16. **Fallback when jurors are short:** claims are paused while fewer than five members are covered and staked, and a claim whose jurors drop out before the seed arrives is cancelled rather than given a short jury; a queue would keep a young pool usable
-17. **Testnet deployment** with a real stablecoin: contracts deploy to Sepolia with real Chainlink VRF (see [vrf.md](vrf.md)), still with mock USDC; the web app runs against the local chain
+1. **Claim oracle (deferred):** the original proposal's oracle feed is not built; claims are decided by the jury alone. Signed repair invoices and IMEI blacklist lookups are the first feeds we would add. See [oracle-and-anti-fraud.md](oracle-and-anti-fraud.md)
+2. **Objective collusion testing:** no simulation, fuzzing or cost model shows how well juries resist collusion or bribery; current tests check that the rules are enforced, and `test/unit/limitations.test.js` pins down cases they do not stop
+3. **Bribery resistance** beyond commit-reveal (which is built): votes become public on reveal, so a briber can still check them afterwards
+4. **Appeals** with escalating jury sizes
+5. **Juror incentive tuning:** the fee, band and penalty (built) are demo values; tune them from real participation data
+6. **Mainnet randomness:** Chainlink VRF is built and runs on Sepolia; mainnet would raise request confirmations and fund a production subscription
+7. **Sybil resistance:** identity checks or device attestation (IMEI, Apple and Google attestation)
+8. **Claimant bond sizing:** the bond (built) is a flat 5%; it could grow for members with rejected claims
+9. **Solvency modeling:** reserve ratios, pro-rata payouts on shortfall, withdrawal lockups
+10. **Gas-efficient jury selection** for large pools (off-chain selection with on-chain proof)
+11. **End-to-end evidence encryption** to each juror's key, so even the backend cannot read evidence (encryption at rest and juror-only access are built)
+12. **Regulatory structure**, since this resembles insurance in most jurisdictions (a discretionary-mutual model is one path)
+13. **Upgradeability,** timelocks, and an emergency pause
+14. **Reinstatement after a lapse:** a policy that passes its grace period ends for good, and the member signs up again with new photos. A reinstatement window (pay the arrears plus a fresh waiting period) needs a PolicyRegistry change
+15. **Deductible per claim:** standard in device cover and a deterrent to small or padded claims; it would be a ClaimManager parameter taken off the payout
+16. **Pricing by device type and value:** every device pays the same rate of its cover; a rate table by type (and age) would price laptops and phones differently
+17. **Off-app reminders:** premium due dates and jury deadlines show in the app only. Email or push would use the member profile (built) for contact details, plus a delivery provider
+18. **Fallback when jurors are short:** claims are paused while fewer than five members are covered and staked, and a claim whose jurors drop out before the seed arrives is cancelled rather than given a short jury; a queue would keep a young pool usable
+19. **Testnet deployment** with a real stablecoin: contracts deploy to Sepolia with real Chainlink VRF (see [vrf.md](vrf.md)), still with mock USDC; the web app runs against the local chain
 
 ## 11. Repository Layout
 

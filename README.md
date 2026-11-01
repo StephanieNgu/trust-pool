@@ -125,7 +125,7 @@ commit/reveal status.
 
 The **Jury Queue** workspace queries assignments for the connected wallet, separates required commit
 or reveal actions from completed reviews, and opens the same claim detail view. A selected juror can
-open the private evidence, verify its exact raw bundle against the on-chain hash, and only then seal
+open the private evidence, check its exact raw bundle against the on-chain hash, and only then seal
 the amount they would pay (from 0, which rejects, up to the amount asked) with a short note. The note
 is required when paying less than asked. Evidence previews are created from those verified bytes rather than a
 second unverified file response. The vote salt is derived from a private, claim-specific wallet
@@ -135,6 +135,14 @@ vote; if that copy is unavailable, the wallet can still try to reproduce the sal
 deleted after reveal; without it, the juror re-enters the amount they sealed and the app finds their note among the ones they saved. The frontend
 checks the commitment against the blockchain before submitting the reveal. Claim, jury, dashboard and
 pool state refresh automatically.
+
+**What a jury decision means.** A matching hash shows the files are the ones the claimant filed, not
+that the photos are genuine. An approved claim means most of the jurors who voted chose to pay it; it
+is not proof the claim is legitimate, and there is no oracle feed that checks claims. The bond,
+stake, fee and capture code add cost or friction for a dishonest claimant, but none of them stops a
+colluding majority of jurors, and collusion resistance has not been measured. See
+[docs/oracle-and-anti-fraud.md](docs/oracle-and-anti-fraud.md) for the oracle decision, what each
+measure does and does not show, and the tests that record these limits.
 
 The claim form asks how the claimant arrived at the amount, and they can attach a repair quote. When
 voting ends the claim gets the jury's offer: the middle (median) of the revealed amounts. The claimant
@@ -335,7 +343,8 @@ npm run compile
 ### Jury randomness (Chainlink VRF)
 
 Juries are drawn with Chainlink VRF v2.5, so neither the backend nor the deployer can choose who
-sits on a jury. Locally, `deploy.js` also deploys Chainlink's `VRFCoordinatorV2_5Mock` and the
+sits on a jury. Randomness decides who judges a claim, not whether it is true: a member with several
+staked wallets is drawn as several jurors. Locally, `deploy.js` also deploys Chainlink's `VRFCoordinatorV2_5Mock` and the
 keeper asks it to answer each request. To see real, verifiable randomness, deploy to Sepolia and run
 the VRF demo; the steps are in [docs/vrf.md](docs/vrf.md).
 
@@ -453,7 +462,9 @@ trust-pool/
 │       └── deployContracts.js
 ├── deployments/        # written by deploy.js
 ├── docs/
-│   └── design-doc.md
+│   ├── design-doc.md
+│   ├── oracle-and-anti-fraud.md  # oracle decision, anti-fraud limits
+│   └── vrf.md
 ├── frontend/
 │   ├── index.html
 │   ├── tsconfig.json

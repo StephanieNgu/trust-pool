@@ -89,7 +89,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
   async function commit() {
     if (typeof units === "string") { setError(units); return; }
     if (noteMissing) { setError("Add a short note saying why you would pay less than asked."); return; }
-    if (!evidenceVerified) { setError("Open and verify the evidence before voting."); return; }
+    if (!evidenceVerified) { setError("Open the evidence and let the app check its fingerprint before voting."); return; }
     try {
       setBusy(true);
       setError("");
@@ -165,7 +165,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
     <div className="vote-panel-heading"><span className="eyebrow">YOUR JURY VOTE</span>{deadlineCopy && <span>{deadlineCopy}</span>}</div>
     {!juror.committed ? <>
       <h3>How much should this claim pay?</h3>
-      <p>The claimant asked for {formatAmount(maxAmount, tokenDecimals)} {tokenSymbol}. Pay it all, part of it, or 0 to reject. The claim gets the middle amount of the jury's votes. Jurors within {formatAmount((maxAmount * 10n) / 100n, tokenDecimals)} {tokenSymbol} of it share a {formatAmount(claim.jury?.fee ?? "0", tokenDecimals)} {tokenSymbol} fee; not revealing costs part of your stake.</p>
+      <p>The claimant asked for {formatAmount(maxAmount, tokenDecimals)} {tokenSymbol}. Pay it all, part of it, or 0 to reject. The claim gets the middle amount of the jury's votes. Jurors within {formatAmount((maxAmount * 10n) / 100n, tokenDecimals)} {tokenSymbol} of it share a {formatAmount(claim.jury?.fee ?? "0", tokenDecimals)} {tokenSymbol} fee; not revealing costs part of your stake. Nothing checks the claim for you: the app only confirms the files were not changed, so your vote is your own judgment of the evidence.</p>
       <div className="vote-choices">
         <button type="button" className={units === maxAmount ? "selected approve" : ""} disabled={disabled} onClick={() => setAmount(requested)}>Pay in full</button>
         <button type="button" className={units === 0n ? "selected reject" : ""} disabled={disabled} onClick={() => setAmount("0")}>Reject (0)</button>
@@ -175,7 +175,7 @@ export function JuryVotePanel({ claim, account, chainTimestamp, evidenceVerified
       <label htmlFor="vote-note">Why? {paysLess ? <span className="muted">(required when paying less than asked)</span> : <span className="muted">(optional)</span>}</label>
       <textarea id="vote-note" rows={3} maxLength={MAX_JURY_NOTE_LENGTH} value={note} disabled={disabled} placeholder={units === 0n ? "e.g. The claim photos show a different phone from signup." : "e.g. Only the screen is damaged; a screen repair costs about 150."} onChange={(event) => setNote(event.target.value)} />
       <small>The claimant and the other jurors read this once votes are revealed.</small>
-      {!evidenceVerified && <p className="notice warning">Open the evidence above and verify its on-chain hash to unlock voting.</p>}
+      {!evidenceVerified && <p className="notice warning">Open the evidence above so the app can check it against the on-chain fingerprint. That unlocks voting.</p>}
       <button className="primary full" type="button" disabled={disabled || !evidenceVerified || typeof units === "string" || noteMissing} onClick={() => void commit()}>{busy ? "Sealing…" : "Seal my vote"}</button>
       {typeof units === "string" && amount !== "" && <p className="notice warning">{units}</p>}
       {chainTimestamp === null && <p className="notice warning">Synchronizing the latest blockchain time…</p>}
