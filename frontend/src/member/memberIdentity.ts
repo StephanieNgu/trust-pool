@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getEvidence, getProfileIfSignedIn, readCachedWalletAuth, updateProfileIfSignedIn, WALLET_AUTH_EVENT, type DeviceDetails } from "../api";
 
 // Per-wallet conveniences: the insured device's name (its details are stored encrypted on the
@@ -72,45 +72,61 @@ export function useDeviceLabel(account: string | null, enrollmentHash: string | 
  * profile's value wins; if only this browser has one (set before signing in), it is saved up to the
  * profile. Returns the value and a setter (empty clears it).
  */
-function useProfileField(account: string | null, field: "displayName" | "deviceNickname", key: (account: string) => string, max: number): [string | null, (value: string) => void] {
+export type ProfileSyncStatus = "local" | "saving" | "saved" | "error";
+type ProfileField = [string | null, (value: string) => void, ProfileSyncStatus, () => void];
+
+function useProfileField(account: string | null, field: "displayName" | "deviceNickname", key: (account: string) => string, max: number): ProfileField {
   const [value, setValue] = useState<string | null>(null);
+  const [status, setStatus] = useState<ProfileSyncStatus>("local");
+  const accountRef = useRef(account);
+  accountRef.current = account;
+  const saveRemote = useCallback((owner: string, next: string) => {
+    setStatus("saving");
+    void updateProfileIfSignedIn(owner, { [field]: next })
+      .then((profile) => { if (accountRef.current?.toLowerCase() === owner.toLowerCase()) setStatus(profile ? "saved" : "local"); })
+      .catch(() => { if (accountRef.current?.toLowerCase() === owner.toLowerCase()) setStatus("error"); });
+  }, [field]);
+
   useEffect(() => {
     let active = true;
     setValue(account ? read(key(account)) : null);
+    setStatus("local");
     if (!account) return () => { active = false; };
     const sync = () => {
       void getProfileIfSignedIn(account).then((profile) => {
-        if (!profile || !active) return;
+        if (!active) return;
+        if (!profile) { setStatus("local"); return; }
         const local = read(key(account));
         if (profile[field]) {
           write(key(account), profile[field]);
           setValue(profile[field]);
+          setStatus("saved");
         } else if (local) {
-          void updateProfileIfSignedIn(account, { [field]: local }).catch(() => undefined);
-        }
-      }).catch(() => { /* keep this browser's copy */ });
+          saveRemote(account, local);
+        } else setStatus("saved");
+      }).catch(() => { if (active) setStatus(readCachedWalletAuth(account) ? "error" : "local"); });
     };
     sync();
     window.addEventListener(WALLET_AUTH_EVENT, sync);
     return () => { active = false; window.removeEventListener(WALLET_AUTH_EVENT, sync); };
-  }, [account, field, key]);
+  }, [account, field, key, saveRemote]);
   const update = (next: string) => {
     if (!account) return;
     const trimmed = next.trim().replace(/\s+/g, " ").slice(0, max);
     write(key(account), trimmed || null);
     setValue(trimmed || null);
-    void updateProfileIfSignedIn(account, { [field]: trimmed }).catch(() => undefined);
+    saveRemote(account, trimmed);
   };
-  return [value, update];
+  return [value, update, status, () => { if (account) saveRemote(account, value ?? ""); }];
 }
 
 /** The name the member is greeted by, and a setter (empty clears it). */
-export function useDisplayName(account: string | null): [string | null, (name: string) => void] {
+export function useDisplayName(account: string | null): ProfileField {
   return useProfileField(account, "displayName", nameKey, 40);
 }
 
 /** What the member calls their device ("Work phone"), and a setter (empty goes back to make and model). */
-export function useDeviceNickname(account: string | null): [string | null, (name: string) => void] {
+export function useDeviceNickname(account: string | null): ProfileField {
   return useProfileField(account, "deviceNickname", nicknameKey, 60);
 }
 

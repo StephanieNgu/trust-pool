@@ -5,6 +5,10 @@ node_modules/
 # Build output
 dist/
 deployments/localhost.json
+playwright-report/
+test-results/
+blob-report/
+.e2e-data/
 
 # Backend evidence uploads (npm run dev:backend)
 data/

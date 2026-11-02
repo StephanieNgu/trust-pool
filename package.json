@@ -14,6 +14,10 @@
     "test:contracts": "hardhat test",
     "test:backend": "tsx --test --test-concurrency=1 \"backend/test/**/*.test.ts\"",
     "test:frontend": "tsx --test --test-concurrency=1 \"frontend/test/**/*.test.ts\"",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:install": "playwright install chromium",
     "coverage": "hardhat coverage",
     "chain": "hardhat node",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
@@ -22,7 +26,7 @@
     "lint": "npm run lint:js && npm run lint:sol",
     "lint:js": "eslint .",
     "lint:sol": "solhint \"contracts/**/*.sol\"",
-    "build": "hardhat compile && vite build && tsc && tsc -p frontend/tsconfig.json",
+    "build": "hardhat compile && vite build && node scripts/check-production-bundle.js && tsc && tsc -p frontend/tsconfig.json",
     "postinstall": "node scripts/link-chainlink-deps.js"
   },
   "repository": {
@@ -48,6 +52,7 @@
     "@chainlink/contracts": "^1.5.0",
     "@eslint/js": "^10.0.1",
     "@nomicfoundation/hardhat-toolbox": "^6.1.2",
+    "@playwright/test": "^1.64.1",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.6.2",

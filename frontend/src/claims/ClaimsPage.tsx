@@ -6,11 +6,10 @@ import {
   getClaimsForMember,
   uploadEvidence,
   type CaptureCode,
-  type ClaimEvent,
   type ClaimView,
   type DashboardOverview,
 } from "../api";
-import { CaptureCodePanel } from "../capture/CapturePanel";
+import { CaptureCodePanel, PhotoSlot } from "../capture/CapturePanel";
 import { submitClaim } from "../contracts/claims";
 import { hasDeviceKey, signWithDeviceKey } from "../member/deviceKey";
 import { claimBond } from "./bond";
@@ -18,11 +17,15 @@ import { ClaimDetail } from "./ClaimDetail";
 import { CLAIM_FILTERS, CLAIM_STATE_COPY, type ClaimFilter, matchesClaimFilter, dateTime, shortHash, formatAmount } from "./presentation";
 import { contractErrorMessage } from "../contracts/errors";
 import { COVERED_EVENTS, coveredEvent } from "./coverageTerms";
+import { emptyClaimDraft, type ClaimDraft } from "./claimDraft";
+import { appendEvidenceFiles, validateEvidenceFile } from "../evidence/fileSelection";
 
 interface ClaimsPageProps {
   account: string | null;
   ready: boolean;
   overview: DashboardOverview | null;
+  draft: ClaimDraft;
+  onDraftChange(draft: ClaimDraft): void;
   onAuthenticated(): void;
   onSubmitted(): void;
   /** Opens the policy terms page. */
@@ -57,14 +60,9 @@ function bondPreview(amount: string, overview: DashboardOverview | null): string
   }
 }
 
-export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticated, onSubmitted, onOpenTerms }: ClaimsPageProps) {
-  const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
-  const [captureCode, setCaptureCode] = useState<CaptureCode | null>(null);
-  const [deviceId, setDeviceId] = useState("");
-  const [amountReason, setAmountReason] = useState("");
-  const [claimEvent, setClaimEvent] = useState<ClaimEvent | "">("");
+export function ClaimsPage({ account, ready, overview, draft, onDraftChange, focusClaim, onAuthenticated, onSubmitted, onOpenTerms }: ClaimsPageProps) {
+  const { amount, description, files, captureCode, capturePhoto, deviceId, amountReason, claimEvent } = draft;
+  const updateDraft = (update: Partial<ClaimDraft>) => onDraftChange({ ...draft, ...update });
   const [onInsuredDevice, setOnInsuredDevice] = useState(false);
 
   useEffect(() => {
@@ -78,6 +76,7 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [fileError, setFileError] = useState("");
   const [claimsError, setClaimsError] = useState("");
   const [claimRefresh, setClaimRefresh] = useState(0);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
@@ -86,19 +85,11 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
   const cameraInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setClaims([]);
-    setSelectedClaimId(null);
-    setClaimsError("");
-    setCaptureCode(null);
-  }, [account]);
-
-  useEffect(() => {
     if (focusClaim) setSelectedClaimId(focusClaim.id);
   }, [focusClaim]);
 
   // With a claim open, start on it rather than on the list, unless the member went back to the list.
   const userClosedDetail = useRef(false);
-  useEffect(() => { userClosedDetail.current = false; }, [account]);
   const openClaimId = overview?.openClaimId ?? null;
   useEffect(() => {
     if (openClaimId && !userClosedDetail.current) setSelectedClaimId((current) => current ?? openClaimId);
@@ -131,6 +122,8 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     if (overview.jurorsAvailable < overview.jurySize) { setError(`A jury needs ${overview.jurySize} other members with active coverage and a juror stake; only ${overview.jurorsAvailable} are available right now.`); return; }
     if (!claimEvent) { setError("Choose what happened to the device."); return; }
     if (!amountReason.trim()) { setError("Explain how you arrived at the amount, so jurors can judge it."); return; }
+    if (!captureCode || Math.floor(Date.now() / 1_000) > captureCode.expiresAt) { setError("Get a current capture code and retake the required photo."); return; }
+    if (!capturePhoto) { setError("Take a fresh evidence photo with the capture code visible."); return; }
     try {
       const requested = parseUnits(amount, overview.tokenDecimals);
       const coverage = parseUnits(overview.coverage, overview.tokenDecimals);
@@ -148,41 +141,73 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
     setFeedback("Preparing evidence for secure upload…");
     try {
       // Filing from the insured device: sign the capture code with the key made at signup, if any.
-      const deviceSignature = captureCode ? (await signWithDeviceKey(account, captureCode.code)) ?? undefined : undefined;
-      const evidence = await uploadEvidence(account, description.trim(), files, captureCode?.code ?? "", deviceId, amountReason, deviceSignature, claimEvent);
+      const deviceSignature = (await signWithDeviceKey(account, captureCode.code)) ?? undefined;
+      const evidence = await uploadEvidence(account, description.trim(), [capturePhoto, ...files], captureCode.code, deviceId, amountReason, deviceSignature, claimEvent);
       onAuthenticated();
       setFeedback(`Evidence uploaded (${shortHash(evidence.evidenceHash)}).`);
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
       setFeedback("Claim submitted successfully. The keeper will select a jury next.");
-      setAmount("");
-      setDescription("");
-      setFiles([]);
-      setCaptureCode(null);
-      setDeviceId("");
-      setAmountReason("");
-      setClaimEvent("");
+      onDraftChange(emptyClaimDraft());
+      setFileError("");
       if (fileInput.current) fileInput.current.value = "";
+      if (cameraInput.current) cameraInput.current.value = "";
       setClaimRefresh((value) => value + 1);
       onSubmitted();
     } catch (cause) {
       setError(message(cause));
       // The code is used up once the upload succeeds or expires; ask for a new one if it was rejected.
-      if (cause instanceof Error && /capture code/i.test(cause.message)) setCaptureCode(null);
+      if (cause instanceof Error && /capture code/i.test(cause.message)) updateCaptureCode(null);
     } finally {
       setBusy(false);
     }
   }
 
+  function updateCaptureCode(next: CaptureCode | null) {
+    const changed = captureCode?.code !== next?.code;
+    if (!changed) { updateDraft({ captureCode: next }); return; }
+    updateDraft({ captureCode: next, capturePhoto: null, files: [] });
+    setFileError("");
+    if (fileInput.current) fileInput.current.value = "";
+    if (cameraInput.current) cameraInput.current.value = "";
+  }
+
+  async function addFiles(picked: File[]) {
+    if (!picked.length) return;
+    setFileError("");
+    try {
+      const existing = capturePhoto ? [capturePhoto, ...files] : files;
+      const combined = await appendEvidenceFiles(existing, picked);
+      updateDraft({ files: combined.slice(capturePhoto ? 1 : 0) });
+    } catch (cause) {
+      setFileError(message(cause));
+    }
+  }
+
+  async function changeCapturePhoto(file: File | null) {
+    setFileError("");
+    if (!file) { updateDraft({ capturePhoto: null }); return; }
+    try {
+      await validateEvidenceFile(file, files);
+      updateDraft({ capturePhoto: file });
+    } catch (cause) {
+      setFileError(message(cause));
+    }
+  }
+
   const bond = bondPreview(amount, overview);
   const selectedEvent = coveredEvent(claimEvent);
+  const capturePhotoHint = claimEvent === "theft"
+    ? "Photograph the police report, reference number or other theft evidence with the current capture code visible."
+    : "Show the device, the damage or fault, and the current capture code in the same photo.";
   const tooFewJurors = overview ? overview.jurorsAvailable < overview.jurySize : false;
   const capBelowAsk = (() => {
     if (!overview || !amount) return false;
     try { return parseUnits(amount, overview.tokenDecimals) > parseUnits(overview.cap, overview.tokenDecimals); } catch { return false; }
   })();
   const canSubmit = Boolean(
-    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && !tooFewJurors && claimEvent && amount && amountReason.trim() && files.length && captureCode,
+    ready && overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && !tooFewJurors && claimEvent && amount && amountReason.trim() && capturePhoto && captureCode && Math.floor(Date.now() / 1_000) <= captureCode.expiresAt,
   );
+  const draftStarted = Boolean(amount || description || deviceId || amountReason || claimEvent || capturePhoto || files.length);
   const accepted = ALLOWED_EVIDENCE_TYPES.join(",");
 
   if (selectedClaimId && account) {
@@ -226,18 +251,19 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
       <span className="eyebrow">SUBMIT A CLAIM</span>
       <h2>Tell the pool what happened.</h2>
       <p className="muted">Your evidence is encrypted by the backend. Only you and selected jurors can access it.</p>
+      {draftStarted && <p className="notice">Draft text is saved for this wallet in this tab. Selected files stay while you use the app, but refreshing or closing the tab requires selecting them again.</p>}
 
       {overview?.active && overview.pastWaitingPeriod && !overview.openClaimId && tooFewJurors && <p className="notice warning">Claims are paused: a jury needs {overview.jurySize} other members with active coverage and a juror stake, and only {overview.jurorsAvailable} {overview.jurorsAvailable === 1 ? "is" : "are"} available right now.</p>}
 
       <label htmlFor="claim-event">What happened to the device?</label>
-      <select id="claim-event" className="claim-event-select" value={claimEvent} onChange={(event) => setClaimEvent(event.target.value as ClaimEvent | "")} required disabled={busy}>
+      <select id="claim-event" className="claim-event-select" value={claimEvent} onChange={(event) => updateDraft({ claimEvent: event.target.value as ClaimDraft["claimEvent"] })} required disabled={busy}>
         <option value="">Choose a covered event…</option>
         {COVERED_EVENTS.map((covered) => <option key={covered.id} value={covered.id}>{covered.label}</option>)}
       </select>
       <small>{selectedEvent ? <>{selectedEvent.covers} <strong>Include:</strong> {selectedEvent.evidence}</> : "Loss, wear and tear, and deliberate damage aren't covered."} {onOpenTerms && <button className="text-button inline-link" type="button" onClick={onOpenTerms}>What's covered?</button>}</small>
 
       <label htmlFor="claim-amount">Requested payout</label>
-      <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.coverage} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
+      <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.coverage} value={amount} onChange={(event) => updateDraft({ amount: event.target.value })} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
       <small>Maximum: {overview?.active ? `${Number(overview.coverage).toLocaleString()} ${overview.tokenSymbol}` : "—"}</small>
       {overview?.active && capBelowAsk && <p className="notice warning">The pool can pay at most {Number(overview.cap).toLocaleString("en-US", { maximumFractionDigits: 2 })} {overview.tokenSymbol} on one claim right now ({overview.maxPayoutBps / 100}% of its balance). Jurors can agree to more, but the payout stops at the cap when they decide.</p>}
       {overview && <p className="claim-bond-note">
@@ -246,31 +272,33 @@ export function ClaimsPage({ account, ready, overview, focusClaim, onAuthenticat
       </p>}
 
       <label htmlFor="claim-amount-reason">How did you arrive at this amount?</label>
-      <textarea id="claim-amount-reason" value={amountReason} onChange={(event) => setAmountReason(event.target.value)} placeholder="e.g. The repair shop quoted 280 for a new screen. Add the quote below if you have one." maxLength={MAX_AMOUNT_REASON_LENGTH} rows={3} required disabled={busy} />
+      <textarea id="claim-amount-reason" value={amountReason} onChange={(event) => updateDraft({ amountReason: event.target.value })} placeholder="e.g. The repair shop quoted 280 for a new screen. Add the quote below if you have one." maxLength={MAX_AMOUNT_REASON_LENGTH} rows={3} required disabled={busy} />
       <small>Jurors vote how much to pay, from nothing up to what you ask. A repair quote or price for a replacement helps them agree with your amount.</small>
 
       <label htmlFor="claim-description">Tell jurors what happened</label>
-      <textarea id="claim-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe the damage, loss, and when it occurred." maxLength={2000} rows={5} disabled={busy} />
+      <textarea id="claim-description" value={description} onChange={(event) => updateDraft({ description: event.target.value })} placeholder="Describe the damage, loss, and when it occurred." maxLength={2000} rows={5} disabled={busy} />
       <small>{description.length}/2,000 characters</small>
 
       <label htmlFor="claim-device-id">IMEI or serial number <span className="muted">(optional)</span></label>
-      <input id="claim-device-id" value={deviceId} placeholder="As shown on the device or its label" maxLength={64} disabled={busy} onChange={(event) => setDeviceId(event.target.value)} />
+      <input id="claim-device-id" value={deviceId} placeholder="As shown on the device or its label" maxLength={64} disabled={busy} onChange={(event) => updateDraft({ deviceId: event.target.value })} />
       <small>Checked against the device you registered. If it no longer turns on, photograph its serial label or SIM tray instead.</small>
 
-      <label>Photos of the damage</label>
-      <CaptureCodePanel account={account} code={captureCode} disabled={busy || !ready} onCode={setCaptureCode} onAuthenticated={onAuthenticated} />
+      <label>Fresh evidence photo</label>
+      <CaptureCodePanel account={account} code={captureCode} disabled={busy || !ready} onCode={updateCaptureCode} onAuthenticated={onAuthenticated} />
       {onInsuredDevice && <small className="device-proof-note">✓ This browser holds the key made when you signed up, so jurors will see this claim was filed from the insured device.</small>}
       {captureCode && <>
-        <small>Jurors compare these with the photos you took at signup, so show the whole device, the damage, and your code.</small>
+        <PhotoSlot key={captureCode.code} id="claim-capture-photo" label="Required photo with capture code" hint={capturePhotoHint} file={capturePhoto} disabled={busy} onChange={(file) => void changeCapturePhoto(file)} />
+        <small>Jurors compare this required photo with the photos you took at signup. You can add more damage photos or documents below.</small>
         <div className="capture-buttons">
-          <button className="primary" type="button" disabled={busy} onClick={() => cameraInput.current?.click()}>Take a photo</button>
+          <button className="text-button" type="button" disabled={busy} onClick={() => cameraInput.current?.click()}>Add another damage photo</button>
           <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>Add a repair quote or receipt</button>
         </div>
-        <input ref={cameraInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
-        <input ref={fileInput} id="claim-files" className="visually-hidden" type="file" accept={accepted} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
-        <small>1–10 JPEG, PNG, WebP, GIF, HEIC or PDF files. Maximum 5 MB each.</small>
+        <input ref={cameraInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(picked); }} />
+        <input ref={fileInput} id="claim-files" className="visually-hidden" type="file" accept={accepted} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(picked); }} />
+        <small>The required photo plus up to 9 additional JPEG, PNG, WebP, GIF, HEIC or PDF files. Maximum 5 MB each.</small>
       </>}
-      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}-${index}`}><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><button type="button" disabled={busy} onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}>Remove</button></li>)}</ul>}
+      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}-${index}`}><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><button type="button" disabled={busy} onClick={() => { setFileError(""); updateDraft({ files: files.filter((_, i) => i !== index) }); }}>Remove</button></li>)}</ul>}
+      {fileError && <p className="notice warning" role="alert">{fileError}</p>}
 
       <button className="primary full" type="submit" disabled={!canSubmit || busy}>{busy ? "Submitting claim…" : "Upload evidence & submit claim"}</button>
       {feedback && <p className="notice" role="status">{feedback}</p>}

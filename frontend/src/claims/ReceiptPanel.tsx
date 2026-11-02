@@ -1,9 +1,10 @@
 import { parseUnits } from "ethers";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ALLOWED_EVIDENCE_TYPES, MAX_SHOP_LENGTH, uploadReceipt, type ClaimDetailView } from "../api";
 import { submitReceipt } from "../contracts/claims";
 import { dateTime, shortHash, formatAmount } from "./presentation";
 import { contractErrorMessage } from "../contracts/errors";
+import { appendEvidenceFiles } from "../evidence/fileSelection";
 
 interface ReceiptPanelProps {
   claim: ClaimDetailView;
@@ -25,6 +26,11 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
 
+function localToday() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
 /**
  * After accepting the jury's offer, the claimant uploads the receipt for the repair or replacement.
  * The claim pays the smaller of the offer and the receipt's total, and the keeper sends it.
@@ -38,12 +44,8 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [fileError, setFileError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setFeedback("");
-    setError("");
-  }, [account, claim.id]);
 
   if (claim.state !== "Approved" || claim.receipt.hash || claim.claimant.toLowerCase() !== account.toLowerCase()) return null;
 
@@ -56,7 +58,18 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
     units = null;
   }
   const open = chainTimestamp === null || !claim.receipt.deadline || chainTimestamp <= claim.receipt.deadline;
-  const ready = Boolean(shop.trim() && units && units > 0n && date && files.length);
+  const today = localToday();
+  const ready = Boolean(shop.trim() && units && units > 0n && date && date <= today && files.length);
+
+  async function addFiles(picked: File[]) {
+    if (!picked.length) return;
+    setFileError("");
+    try {
+      setFiles(await appendEvidenceFiles(files, picked));
+    } catch (cause) {
+      setFileError(errorText(cause));
+    }
+  }
 
   async function submit() {
     if (!units) return;
@@ -91,7 +104,7 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
         </div>
         <div>
           <label htmlFor="receipt-date">Date on the receipt</label>
-          <input id="receipt-date" type="date" value={date} disabled={busy} onChange={(event) => setDate(event.target.value)} />
+          <input id="receipt-date" type="date" value={date} max={today} disabled={busy} onChange={(event) => setDate(event.target.value)} />
         </div>
       </div>
       {units !== null && units > 0n && <small>{units < offer ? `You'll be paid ${money(units)}, what the receipt shows.` : `You'll be paid ${money(offer)}, the jury's offer.`}</small>}
@@ -99,8 +112,9 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
       <input id="receipt-description" value={description} maxLength={500} disabled={busy} placeholder="e.g. New screen and labour" onChange={(event) => setDescription(event.target.value)} />
       <label>Receipt or invoice</label>
       <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} added. Add more` : "Add a photo or PDF of the receipt"}</button>
-      <input ref={fileInput} className="visually-hidden" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
-      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span><strong>{file.name}</strong></span><button type="button" disabled={busy} onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}>Remove</button></li>)}</ul>}
+      <input ref={fileInput} className="visually-hidden" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(picked); }} />
+      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span><strong>{file.name}</strong></span><button type="button" disabled={busy} onClick={() => { setFileError(""); setFiles((current) => current.filter((_, i) => i !== index)); }}>Remove</button></li>)}</ul>}
+      {fileError && <p className="notice warning" role="alert">{fileError}</p>}
       <button className="primary full" type="button" disabled={!ready || busy} onClick={() => void submit()}>{busy ? "Submitting…" : "Upload receipt & get paid"}</button>
     </> : <p className="notice warning">The time to upload a receipt has passed, so the claim is being closed without a payout.</p>}
     {feedback && <p className="notice" role="status">{feedback}</p>}

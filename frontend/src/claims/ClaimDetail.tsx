@@ -157,7 +157,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
     </dl>
 
     <OfferPanel claim={claim} account={account} chainTimestamp={chainTimestamp} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />
-    <ReceiptPanel claim={claim} account={account} chainTimestamp={chainTimestamp} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />
+    <ReceiptPanel key={`${account.toLowerCase()}:${claim.id}`} claim={claim} account={account} chainTimestamp={chainTimestamp} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} onChanged={() => { setRefresh((value) => value + 1); onClaimChanged?.(); }} />
     {claim.receipt.hash && <>
       <ReceiptCheck check={claim.receiptCheck} />
       <EvidenceViewer account={account} claim={claim} source="receipt" tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />
