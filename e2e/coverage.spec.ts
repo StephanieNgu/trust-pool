@@ -39,6 +39,13 @@ test("a member enrolls a device, reviews the premium, and purchases coverage", a
   await page.getByLabel("Front, screen on").setInputFiles(photo("front.png"));
   await page.getByLabel("Back").setInputFiles(photo("back.png"));
   await page.getByLabel("Settings › About").setInputFiles(photo("about.png"));
+  await page.getByLabel("Proof of purchase").setInputFiles(photo("invoice.png"));
+  const proof = page.locator(".ownership-options .file-list");
+  await expect(proof).toContainText("invoice.png");
+  await proof.getByRole("button", { name: "Remove" }).click();
+  await expect(proof).toHaveCount(0);
+  await page.getByLabel("Proof of purchase").setInputFiles(photo("invoice.png"));
+  await expect(proof).toContainText("invoice.png");
 
   await page.getByRole("button", { name: "Review premium" }).click();
   await expect(page.locator(".premium-total dd")).toContainText("7.5 mUSDC");
