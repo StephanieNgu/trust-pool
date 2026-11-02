@@ -22,7 +22,7 @@
     "lint": "npm run lint:js && npm run lint:sol",
     "lint:js": "eslint .",
     "lint:sol": "solhint \"contracts/**/*.sol\"",
-    "build": "hardhat compile && vite build && tsc && tsc -p frontend/tsconfig.json",
+    "build": "hardhat compile && vite build && node scripts/check-production-bundle.js && tsc && tsc -p frontend/tsconfig.json",
     "postinstall": "node scripts/link-chainlink-deps.js"
   },
   "repository": {
