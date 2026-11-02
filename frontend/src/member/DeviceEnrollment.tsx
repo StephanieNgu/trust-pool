@@ -174,6 +174,7 @@ export function DeviceEnrollment({ account, draft, disabled = false, onChange, o
       <label htmlFor="enroll-purchase-proof">Proof of purchase</label>
       <small>An invoice, receipt or carrier bill that names the device. Jurors see whether one was given.</small>
       <input id="enroll-purchase-proof" className="file-input" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} disabled={disabled} onChange={(event) => { const file = event.target.files?.[0] ?? null; event.target.value = ""; void updatePurchaseProof(file); }} />
+      {draft.purchaseProof && <ul className="file-list"><li><span><strong>{draft.purchaseProof.name}</strong><small>Added as proof of purchase</small></span><button type="button" disabled={disabled} onClick={() => void updatePurchaseProof(null)}>Remove</button></li></ul>}
       {fileError && <p className="notice warning" role="alert">{fileError}</p>}
     </div>
   </div>;
