@@ -364,8 +364,21 @@ in-process Hardhat chain):
 npm test
 npm run test:contracts   # contracts only
 npm run test:backend     # backend only
-npm run test:frontend    #frontend only
+npm run test:frontend    # frontend integration tests only
 ```
+
+Browser E2E tests use Playwright and start an isolated local stack automatically: Hardhat on port
+28545, the backend on 23000, and Vite on 25173. Each run deploys fresh contracts and clears only the
+ignored `.e2e-data/` directory. Install Chromium once, then run the smoke test:
+
+```powershell
+npm run test:e2e:install
+npm run test:e2e
+```
+
+Use `npm run test:e2e:headed` to watch Chromium or `npm run test:e2e:ui` for Playwright UI mode.
+Failure screenshots, video, traces, and the HTML report are written to ignored Playwright output
+directories.
 
 For a coverage report:
 

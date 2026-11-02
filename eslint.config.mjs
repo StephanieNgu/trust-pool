@@ -36,5 +36,11 @@ export default tseslint.config(
         window: "readonly"
       }
     }
+  },
+  {
+    files: ["e2e/**/*.ts", "playwright.config.ts"],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node }
+    }
   }
 );
