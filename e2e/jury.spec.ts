@@ -70,7 +70,7 @@ async function verifyClaimEvidence(page: Page) {
   const evidence = page.getByRole("region", { name: "Claim photos" });
   const load = evidence.getByRole("button", { name: "Sign in & view evidence" });
   if (await load.isVisible()) await load.click();
-  await expect(evidence.getByText("✓ Hash verified", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(evidence.getByText("✓ Unchanged since filing", { exact: true })).toBeVisible({ timeout: 30_000 });
 }
 
 test("jurors complete review and the claimant receives a receipt-based payout", async ({ page, wallet }) => {
@@ -92,7 +92,7 @@ test("jurors complete review and the claimant receives a receipt-based payout", 
   await page.getByLabel("Tell jurors what happened").fill("The camera fell from a table and the body and lens mount were damaged.");
   await page.getByLabel("IMEI or serial number").fill("JURY-E2E-12");
   await page.getByRole("button", { name: "Get capture code" }).click();
-  await page.locator("#claim-files").setInputFiles(photo("jury-claim-damage.png"));
+  await page.locator("#claim-capture-photo").setInputFiles(photo("jury-claim-damage.png"));
   await page.getByRole("button", { name: "Upload evidence & submit claim" }).click();
 
   const claimHeading = page.getByRole("heading", { name: /^Claim #\d+$/ });

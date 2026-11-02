@@ -5,7 +5,8 @@ const PNG = Buffer.from(
   "base64",
 );
 
-const photo = (name: string) => ({ name, mimeType: "image/png", buffer: PNG });
+// Unique bytes per file: the app rejects duplicate photos by content hash.
+const photo = (name: string) => ({ name, mimeType: "image/png", buffer: Buffer.concat([PNG, Buffer.from(name)]) });
 
 test("a member enrolls a device, reviews the premium, and purchases coverage", async ({ page, wallet }) => {
   await page.goto("/");

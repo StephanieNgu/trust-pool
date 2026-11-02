@@ -25,12 +25,15 @@ test("wallet, authentication, network, and transaction errors recover cleanly", 
 
   await page.getByRole("button", { name: "Community Pool", exact: true }).click();
   await page.getByLabel("Contribution amount").fill("1");
-  await wallet.rejectNext("eth_sendTransaction");
   await page.getByRole("button", { name: "Contribute to pool" }).click();
+  await expect(page.getByText(/You are contributing/)).toContainText("1 mUSDC");
+  await wallet.rejectNext("eth_sendTransaction");
+  await page.getByRole("button", { name: "Confirm contribution" }).click();
   await expect(page.getByRole("alert")).toContainText("Request cancelled in your wallet. No contribution was made.");
   await expect(page.getByLabel("Contribution amount")).toHaveValue("1");
 
   await page.getByRole("button", { name: "Contribute to pool" }).click();
+  await page.getByRole("button", { name: "Confirm contribution" }).click();
   await expect(page.getByText("Contribution confirmed. The shared pool balance has been updated.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Contribution amount")).toHaveValue("");
 

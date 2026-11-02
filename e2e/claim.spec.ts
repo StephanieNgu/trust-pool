@@ -68,7 +68,7 @@ test("a covered member submits claim evidence and opens the new claim", async ({
   await page.getByRole("button", { name: "Get capture code" }).click();
   await expect(page.locator(".capture-code-value")).toBeVisible();
   await expect(page.getByText(/This browser holds the key made when you signed up/)).toBeVisible();
-  await page.locator("#claim-files").setInputFiles(photo("cracked-screen.png"));
+  await page.locator("#claim-capture-photo").setInputFiles(photo("cracked-screen.png"));
 
   const submit = page.getByRole("button", { name: "Upload evidence & submit claim" });
   await expect(submit).toBeEnabled();
