@@ -25,6 +25,11 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
 
+function localToday() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
 /**
  * After accepting the jury's offer, the claimant uploads the receipt for the repair or replacement.
  * The claim pays the smaller of the offer and the receipt's total, and the keeper sends it.
@@ -41,8 +46,14 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    setShop("");
+    setTotal("");
+    setDate("");
+    setDescription("");
+    setFiles([]);
     setFeedback("");
     setError("");
+    if (fileInput.current) fileInput.current.value = "";
   }, [account, claim.id]);
 
   if (claim.state !== "Approved" || claim.receipt.hash || claim.claimant.toLowerCase() !== account.toLowerCase()) return null;
@@ -56,7 +67,8 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
     units = null;
   }
   const open = chainTimestamp === null || !claim.receipt.deadline || chainTimestamp <= claim.receipt.deadline;
-  const ready = Boolean(shop.trim() && units && units > 0n && date && files.length);
+  const today = localToday();
+  const ready = Boolean(shop.trim() && units && units > 0n && date && date <= today && files.length);
 
   async function submit() {
     if (!units) return;
@@ -91,7 +103,7 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
         </div>
         <div>
           <label htmlFor="receipt-date">Date on the receipt</label>
-          <input id="receipt-date" type="date" value={date} disabled={busy} onChange={(event) => setDate(event.target.value)} />
+          <input id="receipt-date" type="date" value={date} max={today} disabled={busy} onChange={(event) => setDate(event.target.value)} />
         </div>
       </div>
       {units !== null && units > 0n && <small>{units < offer ? `You'll be paid ${money(units)}, what the receipt shows.` : `You'll be paid ${money(offer)}, the jury's offer.`}</small>}

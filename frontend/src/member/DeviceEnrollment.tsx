@@ -67,6 +67,7 @@ export function enrollmentComplete(draft: EnrollmentDraft): boolean {
   const { type, imei, ...rest } = draft.device;
   return Boolean(
     draft.captureCode &&
+      Math.floor(Date.now() / 1_000) <= draft.captureCode.expiresAt &&
       (imeiField(type) !== "required" || imei.trim()) &&
       Object.values(rest).every((v) => v.trim()) &&
       Object.values(draft.photos).every(Boolean),
@@ -117,7 +118,17 @@ export function DeviceEnrollment({ account, draft, disabled = false, onChange, o
     </div>
     <small>Only a hash of the {imei === "hidden" ? "make and serial number" : "IMEI (or serial number)"} goes on-chain. The details and photos are stored encrypted and shown only to the jurors of a claim you file.</small>
     <span className="eyebrow step-label">02 / PHOTOS OF THE DEVICE</span>
-    <CaptureCodePanel account={account} code={draft.captureCode} disabled={disabled} onCode={(captureCode) => onChange({ ...draft, captureCode })} onAuthenticated={onAuthenticated} />
+    <CaptureCodePanel
+      account={account}
+      code={draft.captureCode}
+      disabled={disabled}
+      onCode={(captureCode) => onChange({
+        ...draft,
+        captureCode,
+        photos: draft.captureCode?.code === captureCode?.code ? draft.photos : { front: null, back: null, serial: null },
+      })}
+      onAuthenticated={onAuthenticated}
+    />
     {draft.captureCode && <div className="photo-slots">
       {photosFor(draft.device.type).map(({ key, label, hint }) => <PhotoSlot key={key} id={`enroll-${key}`} label={label} hint={hint} file={draft.photos[key]} disabled={disabled} onChange={(file) => onChange({ ...draft, photos: { ...draft.photos, [key]: file } })} />)}
     </div>}

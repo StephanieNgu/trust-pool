@@ -33,6 +33,13 @@ export function CaptureCodePanel({ account, code, disabled = false, onCode, onAu
     return () => window.clearInterval(timer);
   }, [code]);
 
+  useEffect(() => {
+    if (!code) return;
+    const delay = Math.max(0, (code.expiresAt + 1) * 1_000 - Date.now());
+    const timer = window.setTimeout(() => onCode(null), delay);
+    return () => window.clearTimeout(timer);
+  }, [code, onCode]);
+
   async function getCode() {
     if (!account) return;
     setBusy(true);
@@ -53,7 +60,7 @@ export function CaptureCodePanel({ account, code, disabled = false, onCode, onAu
     {code && !expired ? <>
       <span className="eyebrow">YOUR CAPTURE CODE</span>
       <strong className="capture-code-value">{code.code}</strong>
-      <p>Write this code on paper and hold it next to the device in the first photo, or show it on another screen. It works for one upload until {clock(code.expiresAt)}.</p>
+      <p>Write this code on paper and hold it next to the device in the first photo, or show it on another screen. It works for one upload until {clock(code.expiresAt)}. Getting a new code clears the files selected for this code.</p>
       <button className="text-button" type="button" disabled={disabled || busy} onClick={() => void getCode()}>Get a new code</button>
     </> : <>
       <span className="eyebrow">FIRST, A ONE-TIME CODE</span>
