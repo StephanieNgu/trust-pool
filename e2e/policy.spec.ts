@@ -16,6 +16,7 @@ test("a member contributes, pays a premium early, and cancels coverage", async (
   await page.getByRole("button", { name: "Community Pool", exact: true }).click();
   await page.getByLabel("Contribution amount").fill("100");
   await page.getByRole("button", { name: "Contribute to pool" }).click();
+  await page.getByRole("button", { name: "Confirm contribution" }).click();
   await expect(page.getByText("Contribution confirmed. The shared pool balance has been updated.", { exact: true })).toBeVisible();
   const contributions = page.locator(".pool-stat-grid > div").filter({ hasText: "Your contributions" });
   await expect(contributions.locator("strong")).toHaveText("100 mUSDC");
