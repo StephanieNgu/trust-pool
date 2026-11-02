@@ -1,9 +1,10 @@
 import { parseUnits } from "ethers";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ALLOWED_EVIDENCE_TYPES, MAX_SHOP_LENGTH, uploadReceipt, type ClaimDetailView } from "../api";
 import { submitReceipt } from "../contracts/claims";
 import { dateTime, shortHash, formatAmount } from "./presentation";
 import { contractErrorMessage } from "../contracts/errors";
+import { appendEvidenceFiles } from "../evidence/fileSelection";
 
 interface ReceiptPanelProps {
   claim: ClaimDetailView;
@@ -43,18 +44,8 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [fileError, setFileError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setShop("");
-    setTotal("");
-    setDate("");
-    setDescription("");
-    setFiles([]);
-    setFeedback("");
-    setError("");
-    if (fileInput.current) fileInput.current.value = "";
-  }, [account, claim.id]);
 
   if (claim.state !== "Approved" || claim.receipt.hash || claim.claimant.toLowerCase() !== account.toLowerCase()) return null;
 
@@ -69,6 +60,16 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
   const open = chainTimestamp === null || !claim.receipt.deadline || chainTimestamp <= claim.receipt.deadline;
   const today = localToday();
   const ready = Boolean(shop.trim() && units && units > 0n && date && date <= today && files.length);
+
+  async function addFiles(picked: File[]) {
+    if (!picked.length) return;
+    setFileError("");
+    try {
+      setFiles(await appendEvidenceFiles(files, picked));
+    } catch (cause) {
+      setFileError(errorText(cause));
+    }
+  }
 
   async function submit() {
     if (!units) return;
@@ -111,8 +112,9 @@ export function ReceiptPanel({ claim, account, chainTimestamp, tokenDecimals, to
       <input id="receipt-description" value={description} maxLength={500} disabled={busy} placeholder="e.g. New screen and labour" onChange={(event) => setDescription(event.target.value)} />
       <label>Receipt or invoice</label>
       <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} added. Add more` : "Add a photo or PDF of the receipt"}</button>
-      <input ref={fileInput} className="visually-hidden" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...picked]); event.target.value = ""; }} />
-      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span><strong>{file.name}</strong></span><button type="button" disabled={busy} onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}>Remove</button></li>)}</ul>}
+      <input ref={fileInput} className="visually-hidden" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(picked); }} />
+      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${index}`}><span><strong>{file.name}</strong></span><button type="button" disabled={busy} onClick={() => { setFileError(""); setFiles((current) => current.filter((_, i) => i !== index)); }}>Remove</button></li>)}</ul>}
+      {fileError && <p className="notice warning" role="alert">{fileError}</p>}
       <button className="primary full" type="button" disabled={!ready || busy} onClick={() => void submit()}>{busy ? "Submitting…" : "Upload receipt & get paid"}</button>
     </> : <p className="notice warning">The time to upload a receipt has passed, so the claim is being closed without a payout.</p>}
     {feedback && <p className="notice" role="status">{feedback}</p>}

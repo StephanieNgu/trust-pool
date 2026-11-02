@@ -18,6 +18,7 @@ import { CLAIM_FILTERS, CLAIM_STATE_COPY, type ClaimFilter, matchesClaimFilter, 
 import { contractErrorMessage } from "../contracts/errors";
 import { COVERED_EVENTS, coveredEvent } from "./coverageTerms";
 import { emptyClaimDraft, type ClaimDraft } from "./claimDraft";
+import { appendEvidenceFiles, validateEvidenceFile } from "../evidence/fileSelection";
 
 interface ClaimsPageProps {
   account: string | null;
@@ -75,6 +76,7 @@ export function ClaimsPage({ account, ready, overview, draft, onDraftChange, foc
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [fileError, setFileError] = useState("");
   const [claimsError, setClaimsError] = useState("");
   const [claimRefresh, setClaimRefresh] = useState(0);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
@@ -83,22 +85,11 @@ export function ClaimsPage({ account, ready, overview, draft, onDraftChange, foc
   const cameraInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setClaims([]);
-    setSelectedClaimId(null);
-    setClaimsError("");
-    setFeedback("");
-    setError("");
-    if (fileInput.current) fileInput.current.value = "";
-    if (cameraInput.current) cameraInput.current.value = "";
-  }, [account]);
-
-  useEffect(() => {
     if (focusClaim) setSelectedClaimId(focusClaim.id);
   }, [focusClaim]);
 
   // With a claim open, start on it rather than on the list, unless the member went back to the list.
   const userClosedDetail = useRef(false);
-  useEffect(() => { userClosedDetail.current = false; }, [account]);
   const openClaimId = overview?.openClaimId ?? null;
   useEffect(() => {
     if (openClaimId && !userClosedDetail.current) setSelectedClaimId((current) => current ?? openClaimId);
@@ -157,6 +148,7 @@ export function ClaimsPage({ account, ready, overview, draft, onDraftChange, foc
       await submitClaim(account, amount, overview.tokenDecimals, evidence.evidenceHash, setFeedback);
       setFeedback("Claim submitted successfully. The keeper will select a jury next.");
       onDraftChange(emptyClaimDraft());
+      setFileError("");
       if (fileInput.current) fileInput.current.value = "";
       if (cameraInput.current) cameraInput.current.value = "";
       setClaimRefresh((value) => value + 1);
@@ -174,8 +166,32 @@ export function ClaimsPage({ account, ready, overview, draft, onDraftChange, foc
     const changed = captureCode?.code !== next?.code;
     if (!changed) { updateDraft({ captureCode: next }); return; }
     updateDraft({ captureCode: next, capturePhoto: null, files: [] });
+    setFileError("");
     if (fileInput.current) fileInput.current.value = "";
     if (cameraInput.current) cameraInput.current.value = "";
+  }
+
+  async function addFiles(picked: File[]) {
+    if (!picked.length) return;
+    setFileError("");
+    try {
+      const existing = capturePhoto ? [capturePhoto, ...files] : files;
+      const combined = await appendEvidenceFiles(existing, picked);
+      updateDraft({ files: combined.slice(capturePhoto ? 1 : 0) });
+    } catch (cause) {
+      setFileError(message(cause));
+    }
+  }
+
+  async function changeCapturePhoto(file: File | null) {
+    setFileError("");
+    if (!file) { updateDraft({ capturePhoto: null }); return; }
+    try {
+      await validateEvidenceFile(file, files);
+      updateDraft({ capturePhoto: file });
+    } catch (cause) {
+      setFileError(message(cause));
+    }
   }
 
   const bond = bondPreview(amount, overview);
@@ -271,17 +287,18 @@ export function ClaimsPage({ account, ready, overview, draft, onDraftChange, foc
       <CaptureCodePanel account={account} code={captureCode} disabled={busy || !ready} onCode={updateCaptureCode} onAuthenticated={onAuthenticated} />
       {onInsuredDevice && <small className="device-proof-note">✓ This browser holds the key made when you signed up, so jurors will see this claim was filed from the insured device.</small>}
       {captureCode && <>
-        <PhotoSlot key={captureCode.code} id="claim-capture-photo" label="Required photo with capture code" hint={capturePhotoHint} file={capturePhoto} disabled={busy} onChange={(file) => updateDraft({ capturePhoto: file })} />
+        <PhotoSlot key={captureCode.code} id="claim-capture-photo" label="Required photo with capture code" hint={capturePhotoHint} file={capturePhoto} disabled={busy} onChange={(file) => void changeCapturePhoto(file)} />
         <small>Jurors compare this required photo with the photos you took at signup. You can add more damage photos or documents below.</small>
         <div className="capture-buttons">
           <button className="text-button" type="button" disabled={busy} onClick={() => cameraInput.current?.click()}>Add another damage photo</button>
           <button className="text-button" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>Add a repair quote or receipt</button>
         </div>
-        <input ref={cameraInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); updateDraft({ files: [...files, ...picked] }); event.target.value = ""; }} />
-        <input ref={fileInput} id="claim-files" className="visually-hidden" type="file" accept={accepted} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); updateDraft({ files: [...files, ...picked] }); event.target.value = ""; }} />
+        <input ref={cameraInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(picked); }} />
+        <input ref={fileInput} id="claim-files" className="visually-hidden" type="file" accept={accepted} multiple disabled={busy} onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(picked); }} />
         <small>The required photo plus up to 9 additional JPEG, PNG, WebP, GIF, HEIC or PDF files. Maximum 5 MB each.</small>
       </>}
-      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}-${index}`}><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><button type="button" disabled={busy} onClick={() => updateDraft({ files: files.filter((_, i) => i !== index) })}>Remove</button></li>)}</ul>}
+      {files.length > 0 && <ul className="file-list">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}-${index}`}><span><strong>{file.name}</strong><small>{fileSize(file.size)}</small></span><button type="button" disabled={busy} onClick={() => { setFileError(""); updateDraft({ files: files.filter((_, i) => i !== index) }); }}>Remove</button></li>)}</ul>}
+      {fileError && <p className="notice warning" role="alert">{fileError}</p>}
 
       <button className="primary full" type="submit" disabled={!canSubmit || busy}>{busy ? "Submitting claim…" : "Upload evidence & submit claim"}</button>
       {feedback && <p className="notice" role="status">{feedback}</p>}

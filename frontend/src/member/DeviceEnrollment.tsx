@@ -1,7 +1,8 @@
-import { DEVICE_TYPES, type CaptureCode, type DeviceDetails, type DeviceType } from "../api";
-import { ALLOWED_EVIDENCE_TYPES } from "../api";
+import { ALLOWED_EVIDENCE_TYPES, DEVICE_TYPES, type CaptureCode, type DeviceDetails, type DeviceType } from "../api";
 import { CaptureCodePanel, PhotoSlot } from "../capture/CapturePanel";
 import { deviceKeysSupported } from "./deviceKey";
+import { useState } from "react";
+import { validateEvidenceFile } from "../evidence/fileSelection";
 
 export type EnrollmentPhoto = "front" | "back" | "serial";
 
@@ -103,8 +104,37 @@ interface DeviceEnrollmentProps {
  * against: jurors see these signup photos next to the claim photos.
  */
 export function DeviceEnrollment({ account, draft, disabled = false, onChange, onAuthenticated }: DeviceEnrollmentProps) {
+  const [fileError, setFileError] = useState("");
   const imei = imeiField(draft.device.type);
   const fields = FIELDS.filter(({ key }) => key !== "imei" || imei !== "hidden");
+
+  async function updatePhoto(key: EnrollmentPhoto, file: File | null) {
+    setFileError("");
+    if (!file) { onChange({ ...draft, photos: { ...draft.photos, [key]: null } }); return; }
+    const others = Object.entries(draft.photos)
+      .filter(([candidate]) => candidate !== key)
+      .flatMap(([, candidate]) => candidate ? [candidate] : []);
+    if (draft.purchaseProof) others.push(draft.purchaseProof);
+    try {
+      await validateEvidenceFile(file, others, 4);
+      onChange({ ...draft, photos: { ...draft.photos, [key]: file } });
+    } catch (cause) {
+      setFileError(cause instanceof Error ? cause.message : "That file could not be selected.");
+    }
+  }
+
+  async function updatePurchaseProof(file: File | null) {
+    setFileError("");
+    if (!file) { onChange({ ...draft, purchaseProof: null }); return; }
+    const photos = Object.values(draft.photos).flatMap((candidate) => candidate ? [candidate] : []);
+    try {
+      await validateEvidenceFile(file, photos, 4);
+      onChange({ ...draft, purchaseProof: file });
+    } catch (cause) {
+      setFileError(cause instanceof Error ? cause.message : "That file could not be selected.");
+    }
+  }
+
   return <div className="device-enrollment">
     <label htmlFor="device-type">Device type</label>
     <select id="device-type" value={draft.device.type} disabled={disabled} onChange={(event) => onChange({ ...draft, device: { ...draft.device, type: event.target.value as DeviceType } })}>
@@ -122,15 +152,18 @@ export function DeviceEnrollment({ account, draft, disabled = false, onChange, o
       account={account}
       code={draft.captureCode}
       disabled={disabled}
-      onCode={(captureCode) => onChange({
-        ...draft,
-        captureCode,
-        photos: draft.captureCode?.code === captureCode?.code ? draft.photos : { front: null, back: null, serial: null },
-      })}
+      onCode={(captureCode) => {
+        setFileError("");
+        onChange({
+          ...draft,
+          captureCode,
+          photos: draft.captureCode?.code === captureCode?.code ? draft.photos : { front: null, back: null, serial: null },
+        });
+      }}
       onAuthenticated={onAuthenticated}
     />
     {draft.captureCode && <div className="photo-slots">
-      {photosFor(draft.device.type).map(({ key, label, hint }) => <PhotoSlot key={key} id={`enroll-${key}`} label={label} hint={hint} file={draft.photos[key]} disabled={disabled} onChange={(file) => onChange({ ...draft, photos: { ...draft.photos, [key]: file } })} />)}
+      {photosFor(draft.device.type).map(({ key, label, hint }) => <PhotoSlot key={key} id={`enroll-${key}`} label={label} hint={hint} file={draft.photos[key]} disabled={disabled} onChange={(file) => void updatePhoto(key, file)} />)}
     </div>}
     <div className="ownership-options">
       <span className="eyebrow">03 / PROOF IT'S YOURS (OPTIONAL)</span>
@@ -140,7 +173,8 @@ export function DeviceEnrollment({ account, draft, disabled = false, onChange, o
       </label>}
       <label htmlFor="enroll-purchase-proof">Proof of purchase</label>
       <small>An invoice, receipt or carrier bill that names the device. Jurors see whether one was given.</small>
-      <input id="enroll-purchase-proof" className="file-input" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} disabled={disabled} onChange={(event) => onChange({ ...draft, purchaseProof: event.target.files?.[0] ?? null })} />
+      <input id="enroll-purchase-proof" className="file-input" type="file" accept={ALLOWED_EVIDENCE_TYPES.join(",")} disabled={disabled} onChange={(event) => { const file = event.target.files?.[0] ?? null; event.target.value = ""; void updatePurchaseProof(file); }} />
+      {fileError && <p className="notice warning" role="alert">{fileError}</p>}
     </div>
   </div>;
 }

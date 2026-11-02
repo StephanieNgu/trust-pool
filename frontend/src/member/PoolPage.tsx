@@ -30,17 +30,20 @@ export function PoolPage({ account, ready, overview, onContributed }: PoolPagePr
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [confirming, setConfirming] = useState(false);
   const tokenSymbol = overview?.tokenSymbol ?? "mUSDC";
 
   useEffect(() => {
     setAmount("");
     setFeedback("");
     setError("");
+    setConfirming(false);
   }, [account]);
 
   async function contribute(event: FormEvent) {
     event.preventDefault();
     if (!account || !overview || !ready) return;
+    if (!confirming) { setConfirming(true); return; }
     setBusy(true);
     setError("");
     setFeedback("");
@@ -48,10 +51,12 @@ export function PoolPage({ account, ready, overview, onContributed }: PoolPagePr
       const hash = await contributeToPool(account, amount, overview.tokenDecimals, setFeedback);
       onContributed(hash, amount);
       setAmount("");
+      setConfirming(false);
       setFeedback("Contribution confirmed. The shared pool balance has been updated.");
     } catch (cause) {
       setError(errorText(cause));
       setFeedback("");
+      setConfirming(false);
     } finally {
       setBusy(false);
     }
@@ -80,9 +85,12 @@ export function PoolPage({ account, ready, overview, onContributed }: PoolPagePr
       <h2>Support the community pool.</h2>
       <p className="muted">Choose an amount from your wallet. Token approval may be required before the contribution transaction.</p>
       <label htmlFor="contribution-amount">Contribution amount</label>
-      <div className="amount-input"><input id="contribution-amount" type="number" min="0.000001" step="0.000001" max={overview?.balance} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required disabled={busy} /><span>{tokenSymbol}</span></div>
+      <div className="amount-input"><input id="contribution-amount" type="number" min="0.000001" step="0.000001" max={overview?.balance} value={amount} onChange={(event) => { setAmount(event.target.value); setConfirming(false); }} placeholder="0.00" required disabled={busy || confirming} /><span>{tokenSymbol}</span></div>
       <small>Available balance: {money(overview?.balance)} {tokenSymbol}</small>
-      <button className="primary full" type="submit" disabled={!ready || busy || !amount}>{busy ? "Transaction in progress…" : "Contribute to pool"}</button>
+      {confirming ? <div className="contribution-confirm">
+        <p className="notice warning">You are contributing <strong>{money(amount)} {tokenSymbol}</strong>. This becomes shared pool money and cannot be withdrawn.</p>
+        <div><button className="text-button" type="button" disabled={busy} onClick={() => setConfirming(false)}>Go back</button><button className="primary" type="submit" disabled={busy}>{busy ? "Transaction in progress…" : "Confirm contribution"}</button></div>
+      </div> : <button className="primary full" type="submit" disabled={!ready || busy || !amount}>Contribute to pool</button>}
       <p className="contribution-warning">Contributions become shared pool funds and are not refundable.</p>
       {feedback && <p className="notice" role="status">{feedback}</p>}
       {error && <p className="notice warning" role="alert">{error}</p>}

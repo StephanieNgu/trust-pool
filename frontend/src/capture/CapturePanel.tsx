@@ -25,13 +25,6 @@ interface CaptureCodePanelProps {
 export function CaptureCodePanel({ account, code, disabled = false, onCode, onAuthenticated }: CaptureCodePanelProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-
-  useEffect(() => {
-    if (!code) return;
-    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
-    return () => window.clearInterval(timer);
-  }, [code]);
 
   useEffect(() => {
     if (!code) return;
@@ -46,7 +39,6 @@ export function CaptureCodePanel({ account, code, disabled = false, onCode, onAu
     setError("");
     try {
       onCode(await requestCaptureCode(account));
-      setNow(Math.floor(Date.now() / 1000));
       onAuthenticated?.();
     } catch (cause) {
       setError(errorText(cause));
@@ -55,7 +47,7 @@ export function CaptureCodePanel({ account, code, disabled = false, onCode, onAu
     }
   }
 
-  const expired = code !== null && now > code.expiresAt;
+  const expired = code !== null && Math.floor(Date.now() / 1_000) > code.expiresAt;
   return <div className="capture-code">
     {code && !expired ? <>
       <span className="eyebrow">YOUR CAPTURE CODE</span>
@@ -98,6 +90,6 @@ export function PhotoSlot({ id, label, hint, file, disabled = false, onChange }:
     <label htmlFor={id}>{label}</label>
     <small>{hint}</small>
     {preview && <img src={preview} alt={label} />}
-    <input id={id} className="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={disabled} onChange={(event) => onChange(event.target.files?.[0] ?? null)} />
+    <input id={id} className="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic" capture="environment" disabled={disabled} onChange={(event) => { const file = event.target.files?.[0] ?? null; event.target.value = ""; onChange(file); }} />
   </div>;
 }
