@@ -9,6 +9,12 @@ export const HARDHAT_ACCOUNTS = [
   "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
   "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
   "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc",
+  "0x976EA74026E726554dB657fA54763abd0C3a0aa9",
+  "0x14dC79964da2C08b23698B3D3cc7Ca32193d9955",
+  "0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f",
+  "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720",
+  "0xBcd4042DE499D14e55001CcbB24a551F3b954096",
+  "0x71bE63f3384f5fb98995898A86B02Fb2426c5788",
 ] as const;
 
 interface WalletController {
@@ -27,8 +33,10 @@ declare global {
 async function installWallet(page: Page) {
   await page.addInitScript(
     ({ accounts, defaultChainId, rpcUrl }) => {
-      let selectedIndex = 0;
-      let chainId = defaultChainId;
+      const storedIndex = Number(sessionStorage.getItem("trustpool:e2e-account"));
+      let selectedIndex = Number.isInteger(storedIndex) && storedIndex >= 0 && storedIndex < accounts.length ? storedIndex : 0;
+      let chainId = sessionStorage.getItem("trustpool:e2e-chain") ?? defaultChainId;
+      let connected = sessionStorage.getItem("trustpool:e2e-connected") === "1";
       const rejected = new Set<string>();
       const listeners = new Map<string, Set<(value: unknown) => void>>();
 
@@ -52,7 +60,13 @@ async function installWallet(page: Page) {
             error.code = 4001;
             throw error;
           }
-          if (method === "eth_accounts" || method === "eth_requestAccounts") return [accounts[selectedIndex]];
+          if (method === "eth_accounts") return connected ? [accounts[selectedIndex]] : [];
+          if (method === "eth_requestAccounts") {
+            connected = true;
+            sessionStorage.setItem("trustpool:e2e-connected", "1");
+            emit("accountsChanged", [accounts[selectedIndex]]);
+            return [accounts[selectedIndex]];
+          }
           if (method === "eth_chainId") return chainId;
 
           const response = await fetch(rpcUrl, {
@@ -78,10 +92,12 @@ async function installWallet(page: Page) {
         selectAccount(index) {
           if (!Number.isInteger(index) || index < 0 || index >= accounts.length) throw new Error(`Unknown account index ${index}.`);
           selectedIndex = index;
-          emit("accountsChanged", [accounts[selectedIndex]]);
+          sessionStorage.setItem("trustpool:e2e-account", String(index));
+          if (connected) emit("accountsChanged", [accounts[selectedIndex]]);
         },
         setChainId(nextChainId) {
           chainId = nextChainId;
+          sessionStorage.setItem("trustpool:e2e-chain", chainId);
           emit("chainChanged", chainId);
         },
         rejectNext(method) {
@@ -90,8 +106,12 @@ async function installWallet(page: Page) {
         reset() {
           selectedIndex = 0;
           chainId = defaultChainId;
+          connected = false;
           rejected.clear();
-          emit("accountsChanged", [accounts[selectedIndex]]);
+          sessionStorage.removeItem("trustpool:e2e-account");
+          sessionStorage.removeItem("trustpool:e2e-chain");
+          sessionStorage.removeItem("trustpool:e2e-connected");
+          emit("accountsChanged", []);
           emit("chainChanged", chainId);
         },
       };
