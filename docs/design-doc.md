@@ -1,4 +1,4 @@
-# P2P Device Insurance: System Design Document (Milestone 2)
+# P2P Device Insurance: System Design Document
 
 ## 1. Overview
 
@@ -270,11 +270,11 @@ The Express backend stores evidence, runs a keeper, and serves read-only views o
 
 **Evidence policy.** Evidence is private, not public IPFS.
 - Uploading claim evidence requires a wallet signature from a holder with an Active policy. Enrollment bundles only need a signature, since they come before the policy exists.
-- A bundle is served only to (a) the wallets that uploaded it and (b) the selected jurors of a claim that one of those uploaders filed with it (as its evidence, or as the enrollment of its policy), and to jurors only while that claim is in Voting. Other members, past jurors and anonymous callers get nothing. Copying a hash from the chain and filing a claim with it grants nothing.
+- A bundle is served only to (a) the wallets that uploaded it and (b) the selected jurors of a claim that one of those uploaders filed with it (as its evidence, or as the enrollment of its policy), and to jurors only while that claim is in Voting. A claim's receipt stays open to that claim's jurors after voting, so they can see what the payout went to. Other members, past jurors and anonymous callers get nothing. Copying a hash from the chain and filing a claim with it grants nothing. Section 6c has the details.
 - Sign-in: the wallet signs a timestamped message (EIP-191, valid 10 minutes) and posts it to `POST /api/auth/session`, which returns a random token valid for 7 days. Requests send it as `Authorization: Bearer …`; the backend stores only its SHA-256, so the sessions file alone can't be used to sign in. Signing out (`POST /api/auth/session/end`) ends it everywhere. The signed headers still work on their own, for scripts. There are no passwords: the wallet is the account.
 - Every bundle is encrypted at rest with AES-256-GCM under the backend's evidence key (`EVIDENCE_ENCRYPTION_KEY`; on a local chain a key file is generated). The evidence hash is bound as authenticated data, so a file swapped or altered on disk fails to decrypt. The hash on-chain is of the plaintext, so jurors still verify it after download.
-- Trust boundary: the backend holds the key and decrypts for authorized readers, so its operator could read evidence. End-to-end encryption to each juror's own key was not chosen because jurors are unknown when evidence is uploaded and MetaMask has deprecated its encryption API; it remains future work #9.
-- Retention: files are kept on the backend's disk for the life of the deployment, so they stay available through the voting window. There is no automatic deletion yet.
+- Trust boundary: the backend holds the key and decrypts for authorized readers, so its operator could read evidence. End-to-end encryption to each juror's own key was not chosen because jurors are unknown when evidence is uploaded and MetaMask has deprecated its encryption API; it remains future work #11.
+- Retention: files are kept on the backend's disk for the life of the deployment. There is no automatic deletion yet (Section 6c).
 - The on-chain hash proves the evidence has not changed since the claim was filed. It does not prove the claim is true; that is what the jury decides.
 
 ```mermaid
@@ -300,6 +300,40 @@ sequenceDiagram
 **Keeper.** Polls open claims. On a local chain it asks Chainlink's coordinator mock to answer pending VRF requests (the mock derives the word from the request id; the keeper passes no seed). On Sepolia Chainlink's oracles answer by themselves and the keeper skips this step. It also cancels claims whose randomness timed out or that were starved of jurors, finalizes when voting has closed, and pays approved claims. All of these are permissionless, so the keeper saves users transactions but cannot change an outcome.
 
 **Randomness trust.** Jury seeds come from Chainlink VRF v2.5 through `VRFRandomness`, which has no owner: its coordinator, subscription and key hash are immutable, only the coordinator can deliver a word, and each request is answered once. The seed is used in the same transaction that delivers it, so nobody can see it and then change the candidate list. The deployer and keeper keys have no route to choose a seed (see `test/unit/VRFRandomness.test.js`). On Sepolia the word carries Chainlink's VRF proof, verified on-chain by the coordinator. On a local chain the coordinator is Chainlink's mock, which lets anyone answer and even override the word, so local runs demonstrate the flow, not unbiasability; the claim page labels such draws "Demo only". The remaining trust is liveness: the subscription owner could stop funding it, in which case claims time out and are cancelled with the bond returned. See [vrf.md](vrf.md).
+
+## 6c. Evidence Handling in Detail
+
+This section answers the Milestone 3 question of how evidence is kept, who can read it, and what is not built yet. It describes `backend/src/evidence.ts` and the evidence routes in `backend/src/app.ts`.
+
+**What is stored, and where.** Each upload is one JSON bundle (photos and documents as base64, plus the device details, the covered event, the claimant's explanation and the capture stamp). The backend stores it under `EVIDENCE_DIR` (default `data/evidence`) as `<keccak256>.enc`, with a small `<keccak256>.uploaders.json` listing the wallets that uploaded it. Jurors' notes are stored next to it under `notes/`, encrypted the same way. Two marker folders, `photos/` and `receipts/`, record which bundle or claim each file has already been used for, so a photo or a receipt cannot be reused. Their file names are an HMAC of the file under the evidence key, so they reveal nothing about the files to someone without the key.
+
+**Encryption at rest.** AES-256-GCM with a random 12-byte IV per file. The on-disk format is `TPE1 | IV | tag | ciphertext`, and the evidence hash is bound in as authenticated data, so a file moved onto another hash, or edited on disk, fails to decrypt. After decrypting, the backend also checks that the plaintext still hashes to the requested evidence hash, so altered evidence is never served.
+
+**Key storage.**
+- Built: one 32-byte key. Outside a local chain the backend refuses to start without `EVIDENCE_ENCRYPTION_KEY` (64 hex characters or base64), which the operator supplies through the environment, for example a hosting provider's secret store. On a local chain, if the variable is unset, it creates `data/evidence.key` with a random key, readable by the backend's user only (mode 0600), and reuses it on later runs. The key never leaves the backend process and is never logged.
+- Not built: a key management service (KMS) or hardware module holding the key, so that a copy of the server's disk and environment would not be enough to read evidence. Losing the key makes all stored evidence unreadable, and there is no escrow or backup procedure.
+
+**Key rotation.**
+- Not built. Every file is encrypted under the same key, and the format has no key id. Rotating would need a key id in the header (a `TPE2` format), the new key for new writes, the old key kept read-only, and a one-off job to re-encrypt old files. The `TPE1` magic bytes were added so that a later format can be told apart. Until then, changing `EVIDENCE_ENCRYPTION_KEY` would make every existing bundle, note and marker unreadable. Hashes on-chain are of the plaintext, so re-encrypting never changes them.
+
+**Who can read a bundle: the check on every download.**
+- Every evidence route (`/api/evidence/:hash`, `/raw` and `/files/:index`) first identifies the wallet, from a 7-day session token or a fresh wallet signature, then runs `requireEvidenceAccess`. Nothing about access is cached: each request reads the current claim and jury state from the chain.
+- Allowed: a wallet that uploaded this exact bundle. A selected juror of a claim whose claimant uploaded the bundle, while that claim is in Voting, for the claim's evidence and the enrollment bundle of its policy. A selected juror of a claim, in any state, for that claim's receipt.
+- Refused with 403: everyone else, including jurors of other claims, past jurors once voting closes, and a wallet that filed its own claim with a hash it copied from the chain (it is not an uploader, so its jurors get nothing either). A hash that is not stored returns 404 only after the wallet has signed in, so anonymous callers cannot probe which hashes exist.
+- Reassigned jurors: juries are never reassigned on-chain. A claim gets one jury, and a claim cancelled before its randomness arrives never had one. When a claimant refiles after a decided claim, the new claim draws a new jury, and jurors of the earlier claim cannot read the new evidence unless they are drawn again (`backend/test/claimFlow.test.ts`).
+- Responses carry `Cache-Control: private, no-store` so no shared cache keeps a copy. Individual files are served with `X-Content-Type-Options: nosniff` and a sandboxing `Content-Security-Policy`, because they are user-supplied.
+
+**File names and types.**
+- Storage paths come only from the evidence hash, which is checked against `0x` plus 64 hex characters before any file access, so a file name or hash in a request can never reach another path. The name a member gave a file is kept inside the encrypted bundle and shown to readers.
+- Names may be up to 255 characters. When a file is downloaded, the name is cut down to letters, digits, `.`, `_` and `-` in the `Content-Disposition` header, so it cannot inject headers.
+- Accepted types are JPEG, PNG, WebP, GIF, HEIC and PDF. There are at most 10 files of 5 MB each per upload, and the description, explanation and device fields have length limits. The content type is the one the browser declares, and the backend does not inspect the bytes. A mislabelled file is served under its declared type with sniffing off, so a browser will not run it.
+
+**Access logs.**
+- Not built. The backend logs only unexpected errors. It does not record who read which evidence. An access log would append one line per evidence request (time, wallet, hash, route, allowed or refused) to a file the backend can only append to, and keep it for the life of the deployment. It would let a claimant see who opened their evidence and help spot a juror scraping other claims.
+
+**Abandoned uploads and deletion.**
+- Not built. A bundle that is uploaded but never put on-chain (the member closes the tab, or the transaction fails) stays on disk, as do the photo and receipt markers. So does evidence of claims that are long closed. Capture codes are only in memory and expire after 15 minutes, so they need no cleanup.
+- Planned rule: delete a bundle that no policy or claim references after 7 days. Delete a closed claim's evidence, receipt and notes 90 days after it reaches a final state, keeping the on-chain hashes. Keep the photo and receipt markers, which are needed to stop reuse and hold no content. The keeper already reads every claim's state, so it could run this sweep.
 
 ## 7. Key Design Decisions
 
@@ -353,6 +387,8 @@ sequenceDiagram
 | Fake or padded claims | Bond: a rejected claim loses all of it, and a cut claim loses the same share of it as the jury cut. Only works when jurors spot the problem; nothing on-chain checks the claim | Bond size by claim history; signed shop invoices (oracle, deferred) |
 | Payout not spent on the device | Paid only against a receipt, at most what it shows | Shop-signed invoices or paying shops directly |
 | Same receipt used twice | Backend refuses a receipt file already used for another claim | Shop-issued invoice numbers checked with the shop |
+| One policyholder claims again and again | Each claim is capped at the coverage limit, needs a fresh bond, and only one claim can be open per policy; but a paid claim does not reduce the limit, so a holder can claim the full limit repeatedly | Lifetime coverage limit, each payout deducted (§10a) |
+| The same damage claimed twice | Photos already uploaded are refused, so the exact files cannot be reused; but new photos of the same damage can be, and jurors see only the claim in front of them | Show jurors the policy's earlier claims and let them open that evidence (§10a) |
 | Jurors don't care | Fee for agreeing with the outcome, penalty for not revealing | Tune fee and penalty from real participation data |
 | Jurors collude | Random selection means the claimant cannot choose jurors, and sealed votes stop copying inside the app. Neither stops coordination outside it, and three of five colluders (or two, if two honest jurors do not reveal) decide a claim. Not measured: no objective collusion tests exist (see [oracle-and-anti-fraud.md](oracle-and-anti-fraud.md), Section 3) | Larger juries, appeals, attacker simulations |
 
@@ -390,6 +426,26 @@ These are known gaps, deliberately left out of the prototype.
 17. **Off-app reminders:** premium due dates and jury deadlines show in the app only. Email or push would use the member profile (built) for contact details, plus a delivery provider
 18. **Fallback when jurors are short:** claims are paused while fewer than five members are covered and staked, and a claim whose jurors drop out before the seed arrives is cancelled rather than given a short jury; a queue would keep a young pool usable
 19. **Testnet deployment** with a real stablecoin: contracts deploy to Sepolia with real Chainlink VRF (see [vrf.md](vrf.md)), still with mock USDC; the web app runs against the local chain
+
+## 10a. Plan for Closing Claim Loopholes
+
+The goal for the feature-complete milestones was to close the ways the MVP could be gamed, not to add new surface. This table tracks each loophole and where it stands on `main`.
+
+| Loophole | MVP | Now | Status |
+|---|---|---|---|
+| Biased jury selection | The keeper owned `MockRandomness` and chose the seed | `VRFRandomness`, an ownerless Chainlink VRF v2.5 consumer; local runs labelled "Demo only" | Built (PR #27, #33). Sepolia run still to do |
+| Jurors with nothing at stake | No reward or penalty | 20 mUSDC stake to be picked, 2% fee for agreeing jurors, 5 mUSDC no-show penalty | Built (PR #15) |
+| Fake or padded claims | Free to file | 5% bond, kept in proportion to how much the jury cut | Built (PR #16) |
+| Payout not spent on the device | Paid on approval | Paid only against a receipt, at most its total, within 30 days | Built (PR #18) |
+| Reused photos or receipts | Any file accepted | Photo files usable in one bundle, receipt files for one claim | Built (PR #13, #18) |
+| Two claims promised the same money | Second payout reverted | Each offer reserved in the Pool when the jury decides | Built (PR #32) |
+| Repeat claims | `coverageLimit` caps each claim; a paid claim leaves it unchanged | Make `coverageLimit` a lifetime total per policy. `executePayout` deducts the paid amount; `submitClaim` checks the request against what remains; the policy is exhausted at zero, and the dashboard shows what is left | Not built. Touches `PolicyRegistry`, `ClaimManager`, the backend's policy view and the dashboard |
+| The same damage claimed twice | Jurors see only the claim in front of them | Show jurors the policy's earlier claims (amount, outcome, date, covered event) and let them open those claims' evidence while the new claim is in Voting, so they can judge whether it is the same damage | Not built. Touches the backend's evidence access rule (one more allowed case), the claim detail and jury screens |
+
+Considered but not planned (or not yet decided):
+- **Rejecting a reused evidence hash on-chain.** Cheap to add, but any re-saved photo produces a new hash, so it would only stop the laziest duplicate. The backend already refuses the same photo file twice, and jurors reviewing the claim history cover the rest.
+- **Automatic near-duplicate image detection** (perceptual hashing in the backend). It would catch re-saved or cropped copies of earlier photos, but it needs tuning to avoid false matches, and jurors comparing the evidence cover the same risk.
+- **AI-generated photo detection** (assessed, not decided). Google's SynthID only finds Google's own watermark and has no public API. A C2PA Content Credentials check could run in the backend and show jurors an advisory badge (about a day of work), and a paid classifier could add a probability at the cost of sending claim photos to a third party. Neither would reject a claim on its own. The capture code, single-use photos and device key already make a generated photo hard to pass off.
 
 ## 11. Repository Layout
 
