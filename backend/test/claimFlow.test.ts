@@ -395,7 +395,7 @@ describe("claim flow through the backend", () => {
     // leaves the cancelled claim alone.
     assert.deepEqual(await t.keeper.tick(), []);
   });
-  it("keeps a refiled claim's evidence from the jury that decided the earlier claim", async () => {
+  it("keeps a refiled claim's evidence from the earlier jury, and shows the new jury the earlier claim", async () => {
     // Juries are never reassigned on-chain: a claim gets one jury, and a claim cancelled before its
     // randomness arrives never had one. So the case to guard is a claimant who refiles after a
     // decided claim: the first jury must not be able to read the second claim's evidence unless it
@@ -441,14 +441,28 @@ describe("claim flow through the backend", () => {
     for (const addr of secondJurors) {
       assert.equal((await getAs(`/api/evidence/${secondEvidence}`, signerFor(signers, addr))).status, 200, addr);
     }
-    // A juror who sat on both juries reads the second claim only through its new seat, and loses it
-    // when that vote closes too.
-    const both = secondJurors.find((addr) => firstJurors.includes(addr));
-    assert.ok(both, "with seven holders, the two juries overlap");
-    assert.equal((await getAs(`/api/evidence/${firstEvidence}`, signerFor(signers, both))).status, 403);
+    // While the second claim is in Voting its jurors also see the device's earlier claim, and can open
+    // that claim's evidence to check whether the same damage is being claimed twice. Evidence of
+    // other devices' claims stays closed to them.
+    const detail = (await api(`/api/claims/${second}`)).body;
+    assert.deepEqual(
+      detail.earlierClaims.map((e: { id: string; state: string }) => [e.id, e.state]),
+      [[String(first), "Rejected"]],
+    );
+    assert.equal(detail.earlierClaims[0].evidence.url, `/api/evidence/${firstEvidence}`);
+    const otherClaim = (await api("/api/claims/1")).body;
+    for (const addr of secondJurors) {
+      assert.equal((await getAs(`/api/evidence/${firstEvidence}`, signerFor(signers, addr))).status, 200, addr);
+      if (addr.toLowerCase() === otherClaim.claimant.toLowerCase()) continue; // they uploaded it
+      assert.equal((await getAs(`/api/evidence/${otherClaim.evidenceHash}`, signerFor(signers, addr))).status, 403, addr);
+    }
+    // Both close again when the vote does.
     await increaseTime(Number(params.commitPeriod) + Number(params.revealPeriod) + 1);
     await keeper.tick();
-    assert.equal((await getAs(`/api/evidence/${secondEvidence}`, signerFor(signers, both))).status, 403);
+    for (const addr of secondJurors) {
+      assert.equal((await getAs(`/api/evidence/${secondEvidence}`, signerFor(signers, addr))).status, 403, addr);
+      assert.equal((await getAs(`/api/evidence/${firstEvidence}`, signerFor(signers, addr))).status, 403, addr);
+    }
     // The claimant can always read their own evidence.
     assert.equal((await getAs(`/api/evidence/${firstEvidence}`, claimant)).status, 200);
     assert.equal((await getAs(`/api/evidence/${secondEvidence}`, claimant)).status, 200);

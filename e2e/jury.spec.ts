@@ -145,4 +145,8 @@ test("jurors complete review and the claimant receives a receipt-based payout", 
   await expect(page.locator(".claim-status")).toHaveText("Paid", { timeout: 30_000 });
   await expect(page.locator(".detail-grid").getByText("250 mUSDC", { exact: true })).toHaveCount(2);
   await expect(page.getByRole("region", { name: "Repair or replacement receipt" })).toBeVisible();
+  // This was the device's first claim, and its payout now counts against the device's lifetime cover.
+  await expect(page.getByRole("region", { name: "Earlier claims on this device" })).toContainText("first claim filed for this device");
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await expect(page.getByText("350 of 600 mUSDC left to claim on this device", { exact: false })).toBeVisible({ timeout: 30_000 });
 });

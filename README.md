@@ -240,11 +240,11 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/health` | Chain id, block number, keeper status |
 | `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
 | `GET /api/pool` | Reserve balance (excluding jurors' stakes, claim bonds and money reserved for offered claims), `totalReserved`, per-claim cap, totals including stakes, juror fees, penalties and bonds, the claim bond rate and minimum, policy and claim counts |
-| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), how many other members could sit on a jury for this wallet's claim (`jury: { available, required }`; a claim cannot be filed below `required`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below) |
+| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), how many other members could sit on a jury for this wallet's claim (`jury: { available, required }`; a claim cannot be filed below `required`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below); the policy also carries `paidOnDevice` and `remainingCoverage` (lifetime cover left on the device) |
 | `GET /api/members/:address/history` | The member's account history from contract events, newest first: `{ history: [{ id, kind, title, amount, direction, claimId, txHash, blockNumber, logIndex, at }] }`. `kind` is `coverage`, `premium`, `lapse`, `contribution`, `stake`, `unstake`, `fee`, `penalty`, `bond`, `bondReturn`, `claim` or `payout`; `direction` is `in` (to the wallet), `out` or null. Premiums are listed once, not again as contributions |
 | `GET /api/members/:address/premium` | Just the premium schedule, light enough to poll for reminders: `{ premium: { status, amount, period, paidThrough, dueAt, graceEndsAt, secondsUntilDue, dueSoon, canPay, asOf } }`, or `{ premium: null }` without a policy. `status` is `Paid`, `Grace` (missed, still covered until `graceEndsAt`), `Overdue` (not covered; the keeper will close it) or `Lapsed`. `dueSoon` is true within 7 days of `dueAt` or once missed |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
-| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, the `bond` (amount, and once decided what was returned and forfeited), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?), the `receipt` (deadline, hash, total) with `receiptFile` and `receiptCheck` (does the total match, is it dated after the claim?) |
+| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, the `bond` (amount, and once decided what was returned and forfeited), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?), the `receipt` (deadline, hash, total) with `receiptFile` and `receiptCheck` (does the total match, is it dated after the claim?); `deviceIdHash` and `earlierClaims` (every earlier claim on the same device: id, claimant, state, amount, paid, date and an evidence link) |
 | `POST /api/claims/:id/notes` 🔒 | A juror's note `{ note }` (up to 500 characters), sent before sealing the vote; returns the `noteHash` to seal. Jurors of the claim only, while voting and before they commit |
 | `GET /api/claims/:id/notes/mine` 🔒 | The notes this juror saved for the claim, each with its `noteHash`, so a juror without the browser copy of their sealed vote only has to re-enter the amount to reveal. The juror only |
 | `GET /api/claims/:id/votes` 🔒 | Each revealed juror's `amount` and `note`. Only the claimant and the claim's jurors |
@@ -267,7 +267,10 @@ for 10 minutes. The frontend signs once to open a session; scripts can keep usin
 Claims can end `Paid`, `Rejected` (most jurors voted 0, a tie, or fewer than 3 votes; the API's
 `jury.outcomeReason` says which), `Withdrawn` (the claimant turned the offer down) or `Cancelled`
 (randomness never arrived). The offer is fixed when voting ends: the median juror amount, capped by
-the coverage limit and the pool's per-claim cap. The keeper accepts an offer the claimant has not
+the coverage left on the device and the pool's per-claim cap. Coverage is a lifetime total per device:
+each payout is taken off what is left (`ClaimManager.remainingCoverage`), and cancelling and
+re-buying cover for the same device does not reset it. Each claim page lists the device's earlier
+claims, and while a claim is in Voting its jurors can open their evidence. The keeper accepts an offer the claimant has not
 answered once its deadline passes, then pays it.
 
 Premiums are monthly. Buying a policy pays the first 30 days; `PolicyRegistry.payPremium()` pays the

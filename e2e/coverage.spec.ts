@@ -59,7 +59,7 @@ test("a member enrolls a device, reviews the premium, and purchases coverage", a
   await page.getByRole("button", { name: "Approve & confirm coverage" }).click();
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Active coverage", { exact: true })).toBeVisible();
-  await expect(page.getByText(/^Coverage #\d+ · up to 600 mUSDC per claim\.$/)).toBeVisible();
+  await expect(page.getByText(/^Coverage #\d+ · 600 of 600 mUSDC left to claim on this device\.$/)).toBeVisible();
 
   await page.getByRole("button", { name: "Device Coverage", exact: true }).click();
   await expect(page.getByText("This wallet already has active device coverage.", { exact: true })).toBeVisible();
