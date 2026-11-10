@@ -395,4 +395,62 @@ describe("claim flow through the backend", () => {
     // leaves the cancelled claim alone.
     assert.deepEqual(await t.keeper.tick(), []);
   });
+  it("keeps a refiled claim's evidence from the jury that decided the earlier claim", async () => {
+    // Juries are never reassigned on-chain: a claim gets one jury, and a claim cancelled before its
+    // randomness arrives never had one. So the case to guard is a claimant who refiles after a
+    // decided claim: the first jury must not be able to read the second claim's evidence unless it
+    // is drawn again.
+    const { holders, claimManager, registry, pool, api, post, getAs, keeper, signers, jury, params } = t;
+    await payPremiums(registry, holders);
+    const claimant = holders[5];
+    const upload = async (name: string) =>
+      (await post("/api/evidence", { files: [{ name, contentType: "image/png", data: photo() }] }, claimant)).body
+        .evidenceHash as string;
+
+    // First claim: the jury rejects it.
+    const firstEvidence = await upload("first.png");
+    await (await claimManager.connect(claimant).submitClaim(USDC(100), firstEvidence)).wait();
+    const first = Number(await claimManager.claimCount());
+    await keeper.tick();
+    const firstJurors: string[] = (await api(`/api/claims/${first}`)).body.jury.jurors.map((j: { address: string }) => j.address);
+    for (const addr of firstJurors) await commit(jury, signerFor(signers, addr), first, false);
+    for (const addr of firstJurors) await reveal(jury, signerFor(signers, addr), first, false);
+    await keeper.tick();
+    assert.equal((await api(`/api/claims/${first}`)).body.state, "Rejected");
+
+    // One of those jurors stops jury duty, so the next draw cannot pick them again.
+    const leaver = signerFor(signers, firstJurors[0]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (await (pool.connect(leaver) as any).unstake(await pool.stakeOf(firstJurors[0]))).wait();
+
+    // The claimant refiles with new evidence and a new jury is drawn.
+    const secondEvidence = await upload("second.png");
+    await (await claimManager.connect(claimant).submitClaim(USDC(100), secondEvidence)).wait();
+    const second = Number(await claimManager.claimCount());
+    await keeper.tick();
+    const secondClaim = (await api(`/api/claims/${second}`)).body;
+    assert.equal(secondClaim.state, "Voting");
+    const secondJurors: string[] = secondClaim.jury.jurors.map((j: { address: string }) => j.address);
+    assert.ok(!secondJurors.includes(firstJurors[0]));
+
+    // The juror who left can read neither claim's evidence: the first because its vote is over, the
+    // second because they are not on its jury. The new jurors can read the second claim's.
+    assert.equal((await getAs(`/api/evidence/${secondEvidence}`, leaver)).status, 403);
+    assert.equal((await getAs(`/api/evidence/${secondEvidence}/raw`, leaver)).status, 403);
+    assert.equal((await getAs(`/api/evidence/${firstEvidence}`, leaver)).status, 403);
+    for (const addr of secondJurors) {
+      assert.equal((await getAs(`/api/evidence/${secondEvidence}`, signerFor(signers, addr))).status, 200, addr);
+    }
+    // A juror who sat on both juries reads the second claim only through its new seat, and loses it
+    // when that vote closes too.
+    const both = secondJurors.find((addr) => firstJurors.includes(addr));
+    assert.ok(both, "with seven holders, the two juries overlap");
+    assert.equal((await getAs(`/api/evidence/${firstEvidence}`, signerFor(signers, both))).status, 403);
+    await increaseTime(Number(params.commitPeriod) + Number(params.revealPeriod) + 1);
+    await keeper.tick();
+    assert.equal((await getAs(`/api/evidence/${secondEvidence}`, signerFor(signers, both))).status, 403);
+    // The claimant can always read their own evidence.
+    assert.equal((await getAs(`/api/evidence/${firstEvidence}`, claimant)).status, 200);
+    assert.equal((await getAs(`/api/evidence/${secondEvidence}`, claimant)).status, 200);
+  });
 });

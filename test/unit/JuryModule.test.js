@@ -467,6 +467,43 @@ describe("JuryModule", function () {
       expect(await jury.eligibleJurors(ctx.claimant.address)).to.not.include(jurors[4].address);
     });
 
+    it("treats a juror who lost their salt or note as a no-show", async function () {
+      // The app keeps an encrypted copy of each sealed vote and can re-derive the salt from a wallet
+      // signature. If the juror loses that copy and cannot rebuild the exact amount, note and salt,
+      // nothing on-chain can open their commitment: they cannot reveal, their vote does not count,
+      // and they pay the no-show penalty like a juror who never voted.
+      const ctx = await loadFixture(votingFixture);
+      const { jury, pool, jurors, claimId, params } = ctx;
+      const lost = jurors[4];
+      const amount = USDC(400);
+      const note = ethers.keccak256(ethers.toUtf8Bytes("the note as first written"));
+      const salt = ethers.keccak256(ethers.toUtf8Bytes("salt from a recovery copy that is now gone"));
+      await jury.connect(lost).commitVote(claimId, await jury.computeCommitment(claimId, lost.address, amount, note, salt));
+      await castVotes(ctx, claimId, jurors.slice(0, 4), [true, true, true, true]);
+
+      // A guessed salt, or the same amount with the note retyped slightly differently, is refused.
+      await expect(jury.connect(lost).revealVote(claimId, amount, note, saltFor(claimId, lost)))
+        .to.be.revertedWithCustomError(jury, "CommitmentMismatch");
+      const retyped = ethers.keccak256(ethers.toUtf8Bytes("the note as first written."));
+      await expect(jury.connect(lost).revealVote(claimId, amount, retyped, salt))
+        .to.be.revertedWithCustomError(jury, "CommitmentMismatch");
+
+      // Once the reveal window closes there is no second chance, even with the right details.
+      await time.increase(votingPeriod(params) + 1);
+      await expect(jury.connect(lost).revealVote(claimId, amount, note, salt))
+        .to.be.revertedWithCustomError(jury, "RevealClosed");
+
+      const share = (FEE + USDC(5)) / 4n;
+      await expect(ctx.claimManager.finalize(claimId)).to.emit(jury, "JurySettled").withArgs(claimId, 4n, share, USDC(5));
+      expect(await jury.hasRevealed(claimId, lost.address)).to.equal(false);
+      expect(await jury.penaltyOf(claimId, lost.address)).to.equal(USDC(5));
+      expect(await jury.rewardOf(claimId, lost.address)).to.equal(0n);
+      expect(await pool.stakeOf(lost.address)).to.equal(USDC(15));
+      // The other four decide the claim: the lost vote is not counted either way.
+      expect((await ctx.claimManager.getClaim(claimId)).state).to.equal(ClaimState.Offered);
+      expect(await jury.medianAmount(claimId)).to.equal(USDC(400));
+    });
+
     it("pays no fee without quorum, but still penalizes no-shows", async function () {
       const ctx = await loadFixture(votingFixture);
       const { jury, pool, jurors, claimId, params } = ctx;

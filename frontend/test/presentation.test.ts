@@ -38,3 +38,18 @@ describe("covered events", () => {
     assert.deepEqual(COVERED_EVENTS.map((event) => event.id), [...CLAIM_EVENTS]);
   });
 });
+
+describe("demo-only randomness label", async () => {
+  const { isLocalRandomness } = await import("../src/claims/DemoRandomnessNote");
+
+  it("labels local chains, where the VRF coordinator is a mock", () => {
+    assert.ok(isLocalRandomness("31337"));
+    assert.ok(isLocalRandomness("1337"));
+  });
+
+  it("does not label public networks, or an unknown chain", () => {
+    assert.ok(!isLocalRandomness("11155111"), "Sepolia uses the real coordinator");
+    assert.ok(!isLocalRandomness("1"));
+    assert.ok(!isLocalRandomness(null));
+  });
+});

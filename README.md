@@ -380,7 +380,8 @@ npm run test:e2e
 
 Use `npm run test:e2e:headed` to watch Chromium or `npm run test:e2e:ui` for Playwright UI mode.
 Failure screenshots, video, traces, and the HTML report are written to ignored Playwright output
-directories.
+directories. GitHub Actions runs the same suite on every push and pull request (the
+`Playwright browser tests` job) and attaches the report and failure artifacts when it fails.
 
 For a coverage report:
 

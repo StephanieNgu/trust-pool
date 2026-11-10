@@ -7,6 +7,7 @@ import { JuryVotePanel } from "./JuryVotePanel";
 import { JuryReasoning, OfferPanel } from "./OfferPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { EvidenceViewer } from "./EvidenceViewer";
+import { DemoRandomnessNote } from "./DemoRandomnessNote";
 import { CLAIM_STATE_COPY, dateTime, jurorLabel, formatAmount } from "./presentation";
 
 interface ClaimDetailProps {
@@ -175,6 +176,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
 
     <div className="detail-section-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h3>Jury</h3></div>{jury && <span>{jury.commits} committed · {jury.approvals + jury.rejections} revealed</span>}</div>
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>
+      <DemoRandomnessNote />
       <dl className="detail-grid compact"><div><dt>Phase</dt><dd>{jury.phase}</dd></div><div><dt>Outcome</dt><dd>{outcomeCopy(jury.outcomeReason)}</dd></div><div><dt>Revealed</dt><dd>{jury.approvals + jury.rejections} of {jury.jurors.length} (quorum {jury.quorum})</dd></div><div><dt>Vote tally</dt><dd>{jury.revealOpen || jury.phase === "Tallied" ? `${jury.approvals} would pay · ${jury.rejections} reject` : "Sealed until reveal"}</dd></div><div><dt>Commit deadline</dt><dd>{dateTime(jury.commitDeadline)}</dd></div><div><dt>Reveal deadline</dt><dd>{dateTime(jury.revealDeadline)}</dd></div>{jury.cancelAvailableAt && <div className="detail-wide"><dt>Randomness timeout</dt><dd>{dateTime(jury.cancelAvailableAt)}</dd></div>}</dl>
       {chainTimeError && <p className="notice warning">Could not synchronize blockchain time: {chainTimeError}</p>}
       <div className="juror-list">{jury.jurors.map((juror, index) => <div className={juror.address.toLowerCase() === account.toLowerCase() ? "juror-row current" : "juror-row"} key={juror.address}><span><b>{jurorLabel(index).slice(-1)}</b><span className="juror-name">{jurorLabel(index)}</span>{juror.address.toLowerCase() === account.toLowerCase() && <small>You</small>}</span><span>{juror.revealed ? (juror.amount === "0" ? "Rejects" : `Pays ${formatAmount(juror.amount ?? "0", tokenDecimals)}`) : juror.committed ? "Sealed" : "Waiting"}{juror.reward && juror.reward !== "0" && <small className="juror-reward">+{formatAmount(juror.reward, tokenDecimals)} fee</small>}{juror.penalty && juror.penalty !== "0" && <small className="juror-penalty">−{formatAmount(juror.penalty, tokenDecimals)} no-show</small>}</span></div>)}</div>
