@@ -50,6 +50,8 @@ async function openAssignment(page: Page, wallet: E2EWallet, accountIndex: numbe
   await card.getByRole("button", { name: "Review claim →" }).click();
   await expect(page.getByRole("heading", { name: `Claim #${claimId}` })).toBeVisible();
   await expect(page.getByText("Selected juror", { exact: true })).toBeVisible();
+  // Local chains use the VRF test mock, so the draw is labelled demo-only.
+  await expect(page.getByTestId("demo-randomness")).toContainText("Demo only");
 }
 
 async function findSelectedJurors(page: Page, wallet: E2EWallet, claimId: string) {
