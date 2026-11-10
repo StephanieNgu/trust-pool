@@ -224,7 +224,7 @@ export async function listClaims(c: ProtocolContracts, filter: ClaimFilter = {})
 }
 
 export async function getPoolView(c: ProtocolContracts) {
-  const [balance, maxPayout, maxPayoutBps, totalContributed, totalPaidOut, policyCount, holderCount, claims, totalStaked, totalJurorFees, totalPenalties, totalBonded, totalBondsForfeited, claimBondBps, minClaimBond] =
+  const [balance, maxPayout, maxPayoutBps, totalContributed, totalPaidOut, policyCount, holderCount, claims, totalStaked, totalJurorFees, totalPenalties, totalBonded, totalBondsForfeited, claimBondBps, minClaimBond, totalReserved] =
     await Promise.all([
       c.pool.balance(),
       c.pool.maxPayout(),
@@ -241,6 +241,7 @@ export async function getPoolView(c: ProtocolContracts) {
       c.pool.totalBondsForfeited(),
       c.claimManager.bondBps(),
       c.claimManager.minBond(),
+      c.pool.totalReserved(),
     ]);
   return {
     /** Jurors' stakes are held by the pool but are not part of `balance`, the reserve that pays claims. */
@@ -250,6 +251,8 @@ export async function getPoolView(c: ProtocolContracts) {
     /** Claimants' bonds, likewise held outside the reserve until their claims are decided. */
     totalBonded: totalBonded.toString(),
     totalBondsForfeited: totalBondsForfeited.toString(),
+    /** Set aside for claims the jury has made an offer on but that are not paid yet; not part of `balance`. */
+    totalReserved: totalReserved.toString(),
     /** A claim's bond is `claimBondBps` of the amount asked, but at least `minClaimBond`. */
     claimBondBps: Number(claimBondBps),
     minClaimBond: minClaimBond.toString(),

@@ -191,7 +191,8 @@ refreshes and the purchase appears in the current session's activity list. Activ
 across reloads. The avatar and member name are placeholders; there is no email/password login.
 
 The **Community Pool** workspace shows the live reserve, the connected wallet's contributions,
-protocol contribution and payout totals, and the current payout cap. A member can approve mUSDC and
+protocol contribution and payout totals, the amount set aside for offered or accepted claims that
+are not paid yet, and the current payout cap. A member can approve mUSDC and
 call `Pool.contribute`; voluntary contributions become shared, non-refundable pool funds. An active
 policy can also be cancelled from its dashboard card through an explicit confirmation step. The UI
 and PolicyRegistry both block cancellation while that policy has an open claim, then refresh policy
@@ -238,7 +239,7 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 |---|---|
 | `GET /api/health` | Chain id, block number, keeper status |
 | `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
-| `GET /api/pool` | Reserve balance (excluding jurors' stakes and claim bonds), per-claim cap, totals including stakes, juror fees, penalties and bonds, the claim bond rate and minimum, policy and claim counts |
+| `GET /api/pool` | Reserve balance (excluding jurors' stakes, claim bonds and money reserved for offered claims), `totalReserved`, per-claim cap, totals including stakes, juror fees, penalties and bonds, the claim bond rate and minimum, policy and claim counts |
 | `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), how many other members could sit on a jury for this wallet's claim (`jury: { available, required }`; a claim cannot be filed below `required`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below) |
 | `GET /api/members/:address/history` | The member's account history from contract events, newest first: `{ history: [{ id, kind, title, amount, direction, claimId, txHash, blockNumber, logIndex, at }] }`. `kind` is `coverage`, `premium`, `lapse`, `contribution`, `stake`, `unstake`, `fee`, `penalty`, `bond`, `bondReturn`, `claim` or `payout`; `direction` is `in` (to the wallet), `out` or null. Premiums are listed once, not again as contributions |
 | `GET /api/members/:address/premium` | Just the premium schedule, light enough to poll for reminders: `{ premium: { status, amount, period, paidThrough, dueAt, graceEndsAt, secondsUntilDue, dueSoon, canPay, asOf } }`, or `{ premium: null }` without a policy. `status` is `Paid`, `Grace` (missed, still covered until `graceEndsAt`), `Overdue` (not covered; the keeper will close it) or `Lapsed`. `dueSoon` is true within 7 days of `dueAt` or once missed |
@@ -302,7 +303,7 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 |---|---|---|
 | `MockStablecoin` | Demo ERC-20 standing in for USDC (6 decimals) | n/a |
 | `PolicyRegistry` | Sells policies, one per wallet and per device; collects monthly premiums with a grace period; tracks Active/Lapsed; lists eligible jurors | No |
-| `Pool` | Holds all funds; takes premiums and contributions; holds jurors' stakes and claimants' bonds apart from the reserve; pays approved claims up to `maxPayoutBps` of the reserve, and jurors' fees | **Yes** |
+| `Pool` | Holds all funds; takes premiums and contributions; holds jurors' stakes and claimants' bonds apart from the reserve; reserves each jury offer until it is paid or closed, so two claims are never promised the same funds; pays approved claims up to `maxPayoutBps` of the free reserve, and jurors' fees | **Yes** |
 | `ClaimManager` | Claim state machine: Submitted → JuryPending → Voting → Offered/Rejected → Approved (or Withdrawn) → Paid (or Expired without a receipt); takes the claimant's bond on submit and settles it at the verdict; pays the smaller of the offer and the receipt | No |
 | `JuryModule` | Requests randomness, picks 5 staked jurors (claimant excluded), runs commit-reveal amount voting, takes the median, pays agreeing jurors and penalizes no-shows | No |
 | `VRFRandomness` | Chainlink VRF v2.5 randomness provider behind `IRandomnessProvider`. No owner; immutable coordinator. Locally it talks to Chainlink's `VRFCoordinatorV2_5Mock`, on Sepolia to the real coordinator. See [docs/vrf.md](docs/vrf.md) | No |
@@ -362,7 +363,8 @@ in-process Hardhat chain):
 
 ```powershell
 npm test
-npm run test:contracts   # contracts only
+npm run test:contracts   # contracts only (includes a short run of the accounting invariants)
+npm run test:invariants  # longer randomised run of the token-accounting invariants
 npm run test:backend     # backend only
 npm run test:frontend    # frontend integration tests only
 ```

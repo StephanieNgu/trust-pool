@@ -37,6 +37,8 @@ export interface PoolView {
   /** Claimants' bonds, held outside `balance` until their claims are decided. */
   totalBonded: string;
   totalBondsForfeited: string;
+  /** Set aside for offered or accepted claims that are not paid yet; not part of `balance`. */
+  totalReserved: string;
   /** A claim's bond is `claimBondBps` of the amount asked, but at least `minClaimBond`. */
   claimBondBps: number;
   minClaimBond: string;

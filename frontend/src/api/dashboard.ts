@@ -19,6 +19,8 @@ export interface DashboardOverview {
   balance: string;
   contributed: string;
   pool: string;
+  /** Promised to offered or accepted claims and held back from `pool` until they are paid. */
+  reserved: string;
   cap: string;
   totalContributed: string;
   totalPaidOut: string;
@@ -99,6 +101,7 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     balance: formatUnits(member.balance, decimals),
     contributed: formatUnits(member.contributed, decimals),
     pool: formatUnits(pool.balance, decimals),
+    reserved: formatUnits(pool.totalReserved, decimals),
     cap: formatUnits(pool.maxPayout, decimals),
     totalContributed: formatUnits(pool.totalContributed, decimals),
     totalPaidOut: formatUnits(pool.totalPaidOut, decimals),

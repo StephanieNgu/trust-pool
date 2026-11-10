@@ -119,6 +119,56 @@ describe("Pool", function () {
     });
   });
 
+  describe("reservations", function () {
+    it("takes reserved money out of the free balance and the cap", async function () {
+      const { pool, claimManager, alice } = await loadFixture(poolFixture);
+      await pool.connect(alice).contribute(USDC(1_000));
+      await expect(pool.connect(claimManager).reserve(USDC(200)))
+        .to.emit(pool, "Reserved")
+        .withArgs(USDC(200), USDC(200));
+      expect(await pool.totalReserved()).to.equal(USDC(200));
+      expect(await pool.balance()).to.equal(USDC(800));
+      expect(await pool.maxPayout()).to.equal(USDC(160));
+      await expect(pool.connect(claimManager).release(USDC(50)))
+        .to.emit(pool, "Released")
+        .withArgs(USDC(50), USDC(150));
+      expect(await pool.balance()).to.equal(USDC(850));
+    });
+
+    it("refuses to reserve more than the free balance or release more than is reserved", async function () {
+      const { pool, claimManager, alice } = await loadFixture(poolFixture);
+      await pool.connect(alice).contribute(USDC(1_000));
+      await pool.connect(claimManager).reserve(USDC(700));
+      await expect(pool.connect(claimManager).reserve(USDC(300) + 1n))
+        .to.be.revertedWithCustomError(pool, "InsufficientPoolBalance")
+        .withArgs(USDC(300) + 1n, USDC(300));
+      await expect(pool.connect(claimManager).release(USDC(700) + 1n))
+        .to.be.revertedWithCustomError(pool, "InvalidRelease")
+        .withArgs(USDC(700) + 1n, USDC(700));
+      await expect(pool.connect(claimManager).reserve(0)).to.be.revertedWithCustomError(pool, "ZeroAmount");
+      await expect(pool.connect(claimManager).release(0)).to.be.revertedWithCustomError(pool, "ZeroAmount");
+    });
+
+    it("pays no payout or juror fee out of reserved money", async function () {
+      const { pool, claimManager, jury, alice, bob } = await loadFixture(poolFixture);
+      await pool.connect(alice).contribute(USDC(1_000));
+      await pool.connect(claimManager).reserve(USDC(900));
+      await expect(pool.connect(claimManager).payout(bob.address, USDC(100) + 1n))
+        .to.be.revertedWithCustomError(pool, "InsufficientPoolBalance")
+        .withArgs(USDC(100) + 1n, USDC(100));
+      await pool.connect(jury).payJurorFee(bob.address, USDC(500));
+      expect(await pool.totalJurorFees()).to.equal(USDC(100));
+      expect(await pool.balance()).to.equal(0n);
+    });
+
+    it("only lets the claim manager reserve and release", async function () {
+      const { pool, alice } = await loadFixture(poolFixture);
+      await pool.connect(alice).contribute(USDC(1_000));
+      await expect(pool.connect(alice).reserve(1n)).to.be.revertedWithCustomError(pool, "NotClaimManager");
+      await expect(pool.connect(alice).release(1n)).to.be.revertedWithCustomError(pool, "NotClaimManager");
+    });
+  });
+
   describe("juror stakes", function () {
     it("holds stakes outside the reserve that pays claims", async function () {
       const { pool, token, alice, bob } = await loadFixture(poolFixture);

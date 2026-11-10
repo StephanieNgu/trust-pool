@@ -69,6 +69,7 @@ export function PoolPage({ account, ready, overview, onContributed }: PoolPagePr
       <p className="muted">Contributions increase the funds available for approved claims. They are voluntary and cannot be withdrawn.</p>
       <div className="pool-stat-grid">
         <div><span>Pool balance</span><strong>{money(overview?.pool)} {tokenSymbol}</strong></div>
+        <div><span>Set aside for approved claims</span><strong>{money(overview?.reserved)} {tokenSymbol}</strong></div>
         <div><span>Your contributions</span><strong>{money(overview?.contributed)} {tokenSymbol}</strong></div>
         <div><span>Total contributed</span><strong>{money(overview?.totalContributed)} {tokenSymbol}</strong></div>
         <div><span>Total paid out</span><strong>{money(overview?.totalPaidOut)} {tokenSymbol}</strong></div>
@@ -76,7 +77,7 @@ export function PoolPage({ account, ready, overview, onContributed }: PoolPagePr
         <div><span>Policies issued</span><strong>{overview?.policyCount ?? "—"}</strong></div>
         <div><span>Claims submitted</span><strong>{overview?.claimCount ?? "—"}</strong></div>
       </div>
-      <p className="pool-cap-note">The current per-claim payout cap is {money(overview?.cap)} {tokenSymbol}, equal to {overview?.maxPayoutBps ? overview.maxPayoutBps / 100 : "—"}% of the live pool balance.</p>
+      <p className="pool-cap-note">The current per-claim payout cap is {money(overview?.cap)} {tokenSymbol}, equal to {overview?.maxPayoutBps ? overview.maxPayoutBps / 100 : "—"}% of the live pool balance. Money already offered to a claim is set aside until it is paid, so two claims are never promised the same funds.</p>
       <div className={`keeper-health ${overview?.keeperRunning ? "healthy" : "warning"}`}><strong>Keeper {overview?.keeperRunning ? "online" : "offline"} · automatic recovery {overview?.keeperAutoResolve ? "enabled" : "disabled"}</strong><span>{overview?.keeperLastError ? overview.keeperLastError : overview?.keeperLastTickAt ? `Last successful pass ${new Date(overview.keeperLastTickAt).toLocaleTimeString()}` : "No completed pass reported"}</span></div>
     </section>
 

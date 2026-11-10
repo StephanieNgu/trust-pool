@@ -13,7 +13,8 @@ import {IPool} from "./interfaces/IPool.sol";
 ///         stakes: members lock a stake to be picked for juries, and the JuryModule pays fees from the
 ///         reserve and moves no-show penalties out of stakes. It also holds claimants' bonds while their
 ///         claims are decided. Stakes and bonds are not part of the reserve: `balance()` and the
-///         per-claim cap leave them out.
+///         per-claim cap leave them out. Neither does money already promised to claims: when a jury
+///         makes an offer the ClaimManager reserves it, so two claims can never be offered the same funds.
 contract Pool is IPool, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -44,6 +45,9 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     uint256 public totalBonded;
     uint256 public totalBondsForfeited;
 
+    /// @notice Reserve set aside for claims the jury has made an offer on but that are not paid yet.
+    uint256 public totalReserved;
+
     event RegistrySet(address indexed registry);
     event ClaimManagerSet(address indexed claimManager);
     event Contributed(address indexed from, uint256 amount);
@@ -55,6 +59,8 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     event StakePenalized(address indexed juror, uint256 amount);
     event BondPosted(address indexed claimant, uint256 amount);
     event BondSettled(address indexed claimant, uint256 returned, uint256 forfeited);
+    event Reserved(uint256 amount, uint256 totalReserved);
+    event Released(uint256 amount, uint256 totalReserved);
 
     error ZeroAddress();
     error AlreadySet();
@@ -67,6 +73,7 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     error StakeLocked(uint256 activeJuries);
     error InsufficientStake(uint256 amount, uint256 staked);
     error InvalidBond();
+    error InvalidRelease(uint256 amount, uint256 reserved);
 
     modifier onlyRegistry() {
         if (msg.sender != registry) revert NotRegistry();
@@ -220,11 +227,36 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     }
 
     // ---------------------------------------------------------------------
+    // Reservations for offered claims
+    // ---------------------------------------------------------------------
+
+    /// @notice Sets `amount` of the free reserve aside for a claim the jury has made an offer on. It stops
+    ///         counting towards `balance()`, so later claims, their caps and juror fees cannot use it.
+    function reserve(uint256 amount) external onlyClaimManager {
+        if (amount == 0) revert ZeroAmount();
+        uint256 available = balance();
+        if (amount > available) revert InsufficientPoolBalance(amount, available);
+        totalReserved += amount;
+        emit Reserved(amount, totalReserved);
+    }
+
+    /// @notice Returns `amount` of a reservation to the free reserve: the claim was paid, withdrawn,
+    ///         expired, or its receipt came in below the offer.
+    function release(uint256 amount) external onlyClaimManager {
+        if (amount == 0) revert ZeroAmount();
+        uint256 reserved = totalReserved;
+        if (amount > reserved) revert InvalidRelease(amount, reserved);
+        totalReserved = reserved - amount;
+        emit Released(amount, totalReserved);
+    }
+
+    // ---------------------------------------------------------------------
     // Money out
     // ---------------------------------------------------------------------
 
-    /// @notice Pays an approved claim. The ClaimManager applies the per-claim cap (`maxPayout`) when the
-    ///         jury approves; here the only limit is what the pool actually holds.
+    /// @notice Pays a claim from its reservation. The ClaimManager applies the per-claim cap
+    ///         (`maxPayout`) and reserves the offer when the jury decides; it releases the
+    ///         reservation just before calling this, so the only limit here is the free reserve.
     function payout(address to, uint256 amount) external onlyClaimManager nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
@@ -239,12 +271,13 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     // Views
     // ---------------------------------------------------------------------
 
-    /// @notice The reserve that pays claims: everything held except jurors' stakes and open claims' bonds.
+    /// @notice The free reserve that new claims draw on: everything held except jurors' stakes, open
+    ///         claims' bonds, and money already reserved for offered claims.
     function balance() public view returns (uint256) {
-        return token.balanceOf(address(this)) - totalStaked - totalBonded;
+        return token.balanceOf(address(this)) - totalStaked - totalBonded - totalReserved;
     }
 
-    /// @notice Current per-claim payout cap: `maxPayoutBps` of the pool balance.
+    /// @notice Current per-claim payout cap: `maxPayoutBps` of the free reserve.
     function maxPayout() public view returns (uint256) {
         return (balance() * maxPayoutBps) / BPS_DENOMINATOR;
     }
