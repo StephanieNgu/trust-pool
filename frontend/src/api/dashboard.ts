@@ -42,6 +42,9 @@ export interface DashboardOverview {
   claimBondBps: number;
   minClaimBond: string;
   coverage: string;
+  /** Coverage is a lifetime limit per device: what is left after earlier payouts on it. */
+  remainingCoverage: string;
+  paidOnDevice: string;
   /** The policy is open and covered: premiums paid, or missed but still in their grace period. */
   active: boolean;
   /** The policy is still open on-chain but its premium grace period ended unpaid. */
@@ -120,6 +123,8 @@ export async function getDashboardOverview(address: string): Promise<DashboardOv
     claimBondBps: pool.claimBondBps,
     minClaimBond: formatUnits(pool.minClaimBond, decimals),
     coverage: formatUnits(policy?.coverageLimit ?? "0", decimals),
+    remainingCoverage: formatUnits(policy?.remainingCoverage ?? "0", decimals),
+    paidOnDevice: formatUnits(policy?.paidOnDevice ?? "0", decimals),
     active: policy?.status === "Active" && policy.covered,
     overdue: policy?.status === "Active" && !policy.covered,
     premium: policy?.premium
