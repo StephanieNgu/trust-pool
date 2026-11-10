@@ -108,6 +108,37 @@ describe("Fund reservation for concurrent payouts", function () {
     expect(await claimManager.reservedFor(first)).to.equal(reserved);
   });
 
+  it("closes an approved claim when everything is already reserved, instead of offering 0", async function () {
+    // With a 100% cap the first offer can take the whole free reserve, leaving nothing for the next.
+    const ctx = await deployContracts({ premiumBps: 500, maxPayoutBps: 10_000 });
+    const signers = await ethers.getSigners();
+    const holders = signers.slice(1, 8);
+    for (const [i, h] of holders.entries()) {
+      await ctx.token.mint(h.address, USDC(1_000));
+      await ctx.token.connect(h).approve(await ctx.pool.getAddress(), ethers.MaxUint256);
+      await ctx.registry.connect(h).buyPolicy(deviceHash(i), USDC(1_000), enrollmentHash(i));
+      await stakeAsJuror({ ...ctx, signers }, h);
+    }
+    await time.increase(ctx.params.waitingPeriod);
+    const run = { ...ctx, signers, holders };
+    const [alice, bob] = holders;
+
+    const first = await votedClaim(run, alice, USDC(1_000));
+    const second = await votedClaim(run, bob, USDC(100));
+    await ctx.claimManager.finalize(first);
+    expect(await ctx.pool.balance()).to.equal(0n);
+
+    const bobBefore = await ctx.token.balanceOf(bob.address);
+    await ctx.claimManager.finalize(second);
+    const b = await ctx.claimManager.getClaim(second);
+    expect(b.state).to.equal(ClaimState.Rejected);
+    expect(b.approvedAmount).to.equal(0n);
+    expect(b.bondForfeited, "the jury paid in full, so no bond is kept").to.equal(0n);
+    expect((await ctx.token.balanceOf(bob.address)) - bobBefore).to.equal(b.bond);
+    expect(await ctx.claimManager.openClaimOfPolicy((await ctx.registry.getPolicy(bob.address)).id)).to.equal(0n);
+    expect(await ctx.claimManager.reservedFor(second)).to.equal(0n);
+  });
+
   describe("releases", function () {
     async function offered() {
       const ctx = await activePoolFixture();

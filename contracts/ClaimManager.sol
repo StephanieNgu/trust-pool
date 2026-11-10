@@ -271,16 +271,19 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         _requireState(claimId, State.Voting);
         Claim storage claim = _claims[claimId];
         (IJuryModule.Outcome outcome, uint256 award) = jury.tally(claimId);
-        if (outcome == IJuryModule.Outcome.Approved) {
-            claim.approvedAmount = _capped(claim, award);
+        uint256 offer = outcome == IJuryModule.Outcome.Approved ? _capped(claim, award) : 0;
+        if (offer > 0) {
+            claim.approvedAmount = offer;
             claim.offerDeadline = block.timestamp + responsePeriod;
-            if (claim.approvedAmount > 0) {
-                reservedFor[claimId] = claim.approvedAmount;
-                pool.reserve(claim.approvedAmount);
-            }
+            reservedFor[claimId] = offer;
+            pool.reserve(offer);
             _setState(claimId, State.Offered);
             emit OfferMade(claimId, claim.approvedAmount, claim.offerDeadline);
         } else {
+            // Also reached when the jury approved but the free reserve is empty (everything is already
+            // reserved for other offers), so the cap is 0. An offer of 0 could never be paid and would
+            // hold the policy open, so the claim closes and the holder can refile once the pool refills.
+            // The bond is still settled against the jury's own figure, so an empty pool costs it nothing.
             _setState(claimId, State.Rejected);
             delete openClaimOfPolicy[claim.policyId];
         }
