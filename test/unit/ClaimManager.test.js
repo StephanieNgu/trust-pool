@@ -285,7 +285,9 @@ describe("ClaimManager", function () {
       await castAll(ctx, claimId, await selectJury(ctx, claimId), true);
       await finalizeAndAccept(ctx, claimId, holders[0]);
 
-      expect(await ctx.pool.maxPayout()).to.equal(USDC(66.4));
+      expect((await ctx.claimManager.getClaim(claimId)).approvedAmount).to.equal(USDC(66.4));
+      // The offer is reserved, so the cap for the next claim is 20% of what is left (332 - 66.4).
+      expect(await ctx.pool.maxPayout()).to.equal(USDC(53.12));
       await expect(ctx.claimManager.executePayout(claimId))
         .to.emit(ctx.claimManager, "ClaimPaid")
         .withArgs(claimId, holders[0].address, USDC(66.4));

@@ -12,6 +12,7 @@
     "compile": "hardhat compile",
     "test": "npm run test:contracts && npm run test:backend && npm run test:frontend",
     "test:contracts": "hardhat test",
+    "test:invariants": "node scripts/test-invariants.js",
     "test:backend": "tsx --test --test-concurrency=1 \"backend/test/**/*.test.ts\"",
     "test:frontend": "tsx --test --test-concurrency=1 \"frontend/test/**/*.test.ts\"",
     "test:e2e": "playwright test",

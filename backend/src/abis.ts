@@ -22,6 +22,7 @@ export const poolAbi = [
   "function totalPenalties() view returns (uint256)",
   "function totalBonded() view returns (uint256)",
   "function totalBondsForfeited() view returns (uint256)",
+  "function totalReserved() view returns (uint256)",
 ] as const;
 
 export const registryAbi = [

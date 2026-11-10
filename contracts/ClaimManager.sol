@@ -25,7 +25,10 @@ import {IPool} from "./interfaces/IPool.sol";
 /// @dev Payout is reimbursement: once the offer is accepted the claimant has `receiptPeriod` to submit
 ///      the receipt for the repair or replacement (its hash and total). The claim then pays the smaller
 ///      of the offer and the receipt, so money goes to what was actually spent.
-/// @dev Holds no funds. Payouts are executed by the Pool on this contract's instruction.
+/// @dev Holds no funds. Payouts are executed by the Pool on this contract's instruction. When the jury
+///      makes an offer, its amount is reserved in the Pool, so other claims cannot be offered the same
+///      money; the reservation is released when the claim is paid, withdrawn or expires, and trimmed to
+///      the receipt total when that is lower.
 contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     enum State {
         None,
@@ -82,6 +85,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     mapping(uint256 => Claim) private _claims;
     /// @notice The claim currently open (not Rejected, Paid or Cancelled) for each policy id, or 0.
     mapping(uint256 => uint256) public override openClaimOfPolicy;
+    /// @notice What the Pool holds back for each offered or accepted claim until it is paid or closed.
+    mapping(uint256 => uint256) public reservedFor;
 
     event ClaimSubmitted(
         uint256 indexed claimId,
@@ -211,7 +216,10 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (amount == 0) revert InvalidAmount();
         claim.receiptHash = receiptHash;
         claim.receiptAmount = amount;
-        emit ReceiptSubmitted(claimId, receiptHash, amount, payoutAmount(claimId));
+        uint256 payout = payoutAmount(claimId);
+        // A receipt below the offer frees the difference for other claims straight away.
+        _release(claimId, reservedFor[claimId] - payout);
+        emit ReceiptSubmitted(claimId, receiptHash, amount, payout);
     }
 
     /// @notice Close an accepted claim whose receipt never arrived. Anyone, after `receiptDeadline`.
@@ -223,6 +231,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (block.timestamp <= claim.receiptDeadline) revert ReceiptWindowOpen(claim.receiptDeadline);
         _setState(claimId, State.Expired);
         delete openClaimOfPolicy[claim.policyId];
+        _release(claimId, reservedFor[claimId]);
     }
 
     /// @notice Turn the jury's offer down and close the claim with no payout. Only the claimant,
@@ -235,6 +244,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         claim.approvedAmount = 0;
         _setState(claimId, State.Withdrawn);
         delete openClaimOfPolicy[claim.policyId];
+        _release(claimId, reservedFor[claimId]);
     }
 
     // ---------------------------------------------------------------------
@@ -254,7 +264,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
 
     /// @notice Close voting and record the verdict. Rejected claims are closed immediately.
     ///         An approved claim becomes an offer to the claimant; its amount is fixed here, so later
-    ///         pool movements cannot change it.
+    ///         pool movements cannot change it, and reserved in the Pool so no other claim can be
+    ///         offered the same money. The cap is a share of the free reserve, so the offer always fits.
     ///         The bond is settled here too, against the jury's own figure (before any pool cap).
     function finalize(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.Voting);
@@ -263,6 +274,10 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (outcome == IJuryModule.Outcome.Approved) {
             claim.approvedAmount = _capped(claim, award);
             claim.offerDeadline = block.timestamp + responsePeriod;
+            if (claim.approvedAmount > 0) {
+                reservedFor[claimId] = claim.approvedAmount;
+                pool.reserve(claim.approvedAmount);
+            }
             _setState(claimId, State.Offered);
             emit OfferMade(claimId, claim.approvedAmount, claim.offerDeadline);
         } else {
@@ -273,8 +288,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     }
 
     /// @notice Pay an approved claim once its receipt is in: the smaller of the offer and the receipt.
-    ///         If the pool cannot cover it right now the Pool reverts and the claim stays Approved until
-    ///         it can (first come, first served).
+    ///         The money was reserved when the jury made its offer, so the payout cannot fail for lack
+    ///         of funds even when several claims are approved at once.
     function executePayout(uint256 claimId) external nonReentrant {
         _requireState(claimId, State.Approved);
         Claim storage claim = _claims[claimId];
@@ -289,6 +304,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         delete openClaimOfPolicy[claim.policyId];
         emit ClaimPaid(claimId, claim.claimant, amount);
 
+        _release(claimId, reservedFor[claimId]);
         pool.payout(claim.claimant, amount);
     }
 
@@ -345,6 +361,13 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (claim.coverageLimit < amount) amount = claim.coverageLimit;
         uint256 cap = pool.maxPayout();
         return cap < amount ? cap : amount;
+    }
+
+    /// @dev Hands `amount` of `claimId`'s reservation back to the Pool's free reserve.
+    function _release(uint256 claimId, uint256 amount) private {
+        if (amount == 0) return;
+        reservedFor[claimId] -= amount;
+        pool.release(amount);
     }
 
     function _settleBond(uint256 claimId, uint256 forfeit) private {

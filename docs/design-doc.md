@@ -93,7 +93,10 @@ classDiagram
     class Pool {
         +IERC20 token
         +uint256 maxPayoutBps
+        +uint256 totalReserved
         +contribute(amount)
+        +reserve(amount)
+        +release(amount)
         +payout(to, amount)
         +balance() uint256
     }
@@ -195,11 +198,11 @@ stateDiagram-v2
 | Commit | Caller is a selected juror, has not committed, commit window (2 days from selection) still open. The commitment is `keccak256(abi.encode(claimId, juror, amount, noteHash, salt))`, so it reveals nothing and cannot be reused by another juror or claim. `amount` is what the juror would pay (0 rejects); `noteHash` is the hash of their written reasoning, kept by the backend |
 | Reveal | Caller committed and has not revealed; the commit window has ended or every juror has committed; reveal window (1 day after the commit window) still open; `(amount, noteHash, salt)` matches the commitment; `amount` is at most the amount asked |
 | Finalize | Reveal window ended or every juror revealed. Only revealed votes count; a commit that is never revealed counts as no vote. The offer is the median revealed amount (the lower middle one for an even count). Approved only if at least 3 votes were revealed and the median is above 0, which is the same as strictly more jurors paying than rejecting. A tie (for example 2-2) and fewer than 3 votes both end in Rejected; nothing is retried. The bond is settled here: the claimant gets it back minus the share of the ask the jury cut (bond × (asked − median) / asked), measured against the median before any pool cap. Without quorum the whole bond is returned |
-| Offered | The offer is fixed here: the minimum of the median, the coverage limit, and the per-claim cap (`maxPayoutBps`, 20% of the pool balance at this moment). Later pool movements do not change it. The claimant sees every juror's amount and note |
+| Offered | The offer is fixed here: the minimum of the median, the coverage limit, and the per-claim cap (`maxPayoutBps`, 20% of the free pool balance at this moment). Later pool movements do not change it. The offer is also reserved in the Pool (`totalReserved`, tracked per claim in `ClaimManager.reservedFor`): it leaves `balance()`, so later claims, their caps and juror fees cannot use it. Withdrawing, expiring, or a receipt below the offer releases it (the last only the difference). The claimant sees every juror's amount and note |
 | Accept / Withdraw | The claimant accepts (to Approved) or withdraws (to Withdrawn, nothing paid, policy freed) within `responsePeriod` (2 days). After it, anyone may accept; the keeper does. There is no counteroffer |
 | Receipt | Only the claimant, once, within `receiptPeriod` (30 days) of accepting: the hash of the encrypted receipt bundle (shop, total, date, invoice files) and its total. The payout becomes the smaller of the offer and the total. The backend takes a receipt only for the claimant's own accepted claim, and refuses a file already used for another claim |
 | Approved to Expired | Anyone, once the receipt window has passed with no receipt; nothing is paid and the policy is freed. The keeper does it |
-| Paid | Needs the receipt. Pays the smaller of the fixed offer and the receipt. If the pool holds less than that, the call reverts and the claim stays Approved until funds arrive; approved claims are paid first come, first served (no pro-rata) |
+| Paid | Needs the receipt. Pays the smaller of the fixed offer and the receipt from the claim's reservation, which is released in the same transaction. Because the money was set aside when the offer was made, several approved claims can be paid in any order and none fails for lack of funds |
 
 ## 6. Main Flow
 
@@ -337,6 +340,7 @@ sequenceDiagram
 | Randomness is predicted or gamed | Chainlink VRF v2.5 with an ownerless consumer; seed used in the delivering transaction; local chains use Chainlink's mock (labelled local-only) | Mainnet VRF with more request confirmations |
 | Too few jurors (starvation) | Claims cannot be filed with fewer than 5 eligible jurors; if members drop out before the seed arrives, no short jury is seated and the claim can be cancelled at once | Queue or smaller jury for young pools |
 | Pool drained by a single large claim | Coverage limit and `maxPayoutBps` cap | Solvency modeling, reserve ratios, pro-rata payouts |
+| Two claims promised the same money | Each offer is reserved when the jury decides, and the next claim's cap is a share of what is left, so outstanding offers never exceed the reserve (`test/unit/reservation.test.js`, invariant I9) | Keep |
 | Reentrancy on payout | Checks-effects-interactions, OpenZeppelin `ReentrancyGuard` | External audit |
 | Non-voting jurors stall a claim | Voting deadline and quorum rule; no-show penalty | Replace with fresh jurors |
 | Randomness never arrives | Anyone can cancel after 1 day; the holder can refile | VRF subscription monitoring |
@@ -355,6 +359,9 @@ sequenceDiagram
 - **Unit tests** (Hardhat + Chai) per contract, covering guards and state transitions.
 - **Integration test** that runs the full happy path: join, contribute, submit, vote, payout.
 - **Negative tests:** ineligible claimant, double commit and double reveal, non-juror vote, reveal not matching the commitment, commit or reveal after its window, payout above the pool balance, evidence read by a non-juror or with a wrong key.
+- **Fund reservation** (`test/unit/reservation.test.js`): two large claims decided before either is paid get offers that together fit in the pool, and both pay in either order; withdrawing, expiring and a lower receipt release the reservation.
+- **Token-accounting invariants** (`test/invariant/accounting.test.js`): seeded random sequences of contributions, premiums, stakes, claims, juries (with no-shows and stalls), offers, receipts, payouts, expiries, lapses and time jumps, under the default 20% cap and thin pools with 60% and 90% caps. After every action it checks that every token in the Pool is accounted for (contributions + penalties + kept bonds + stakes + bonds − payouts − fees), that reservations add up and are backed, that stakes add up, that payouts never exceed the ask or coverage, that outstanding offers can all be paid together, and that a payable claim never fails for lack of funds. `npm test` runs 9 sequences of 100 actions; `npm run test:invariants` runs 60 of 200. A failure names its seed, which `INVARIANT_SEED=<seed>` replays. With the reservation removed, the 90% configuration breaks the outstanding-offers invariant within 40 actions.
+- **Backend, frontend and browser tests**: the Node test runner covers the Express API, keeper and evidence store (`backend/test`) and the frontend's contract and API modules with a simulated wallet (`frontend/test`), both against a real in-process Hardhat chain. Playwright (`e2e/`, `npm run test:e2e`) drives the full stack in Chromium.
 - **Limitation tests** (`test/unit/limitations.test.js`): passing tests that record what the rules do not stop, such as a colluding majority getting a fabricated claim paid. They are not tests of collusion resistance, which is not measured.
 - **CI (GitHub Actions):** install dependencies, compile, run tests, lint (Solhint and ESLint). Branch protection requires a green run before merge.
 

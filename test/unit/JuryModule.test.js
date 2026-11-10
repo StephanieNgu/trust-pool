@@ -436,7 +436,11 @@ describe("JuryModule", function () {
       // The claimant's bond lost 5% (the jury cut 20 of 400), which joins the reserve.
       const { bondForfeited } = await ctx.claimManager.getClaim(claimId);
       expect(bondForfeited).to.equal(USDC(1));
-      expect(reserve - (await pool.balance())).to.equal(share * 3n - bondForfeited);
+      // The offer (the median, 380) is set aside for this claim, so it leaves the free reserve too.
+      const { approvedAmount } = await ctx.claimManager.getClaim(claimId);
+      expect(approvedAmount).to.equal(USDC(380));
+      expect(await pool.totalReserved()).to.equal(approvedAmount);
+      expect(reserve - (await pool.balance())).to.equal(share * 3n - bondForfeited + approvedAmount);
     });
 
     it("pays the jurors who rejected when the claim is rejected", async function () {

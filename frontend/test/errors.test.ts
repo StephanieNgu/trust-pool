@@ -7,7 +7,7 @@ import { contractErrorMessage } from "../src/contracts/errors";
 
 // Internal wiring and admin errors no member can trigger from the app.
 const INTERNAL = new Set([
-  "AlreadySet", "InvalidBps", "InvalidConfig", "InvalidPeriod", "InvalidBond", "NotClaimManager", "NotJury", "NotJuryModule",
+  "AlreadySet", "InvalidBps", "InvalidConfig", "InvalidPeriod", "InvalidBond", "InvalidRelease", "NotClaimManager", "NotJury", "NotJuryModule",
   "NotRandomnessProvider", "NotRegistry", "OwnableInvalidOwner", "OwnableUnauthorizedAccount",
   "ReentrancyGuardReentrantCall", "SafeERC20FailedOperation", "ZeroAddress",
 ]);
