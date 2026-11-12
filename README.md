@@ -279,6 +279,12 @@ is decided.
 
 Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 
+Images that look AI-generated are rejected (HTTP 422) for every kind of evidence. The backend
+always checks image metadata for generator marks: Content Credentials / IPTC "trained algorithmic
+media" labels, Stable Diffusion settings in PNG text chunks, and generator names such as Midjourney
+or DALL-E. Metadata is easy to strip, so for pixel-level detection point `AI_DETECTOR_URL` at a
+classifier service that takes the image bytes as the POST body and answers `{ "aiProbability": 0..1 }`.
+
 | Variable | Default | |
 |---|---|---|
 | `PORT` | `3000` | |
@@ -289,6 +295,9 @@ Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 | `EVIDENCE_KEY_FILE` | `data/evidence.key` | Local chain only: generated on first start when no key is set |
 | `ACCOUNTS_DIR` | `data/accounts` | Sign-in sessions and member profiles |
 | `CORS_ORIGIN` | `*` | |
+| `AI_DETECTOR_URL` | unset | Optional AI-image classifier; unset runs only the metadata check |
+| `AI_DETECTOR_API_KEY` | unset | Sent as a bearer token to the classifier |
+| `AI_DETECTOR_THRESHOLD` | `0.8` | Classifier probability at or above which an image is rejected |
 | `KEEPER_ENABLED` | `true` | |
 | `KEEPER_PRIVATE_KEY` | unset | Required off the local chain |
 | `KEEPER_INTERVAL_MS` | `5000` | |

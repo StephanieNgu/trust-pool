@@ -7,6 +7,7 @@ import { JsonRpcProvider, Wallet, type Signer } from "ethers";
 import { AccountStore } from "./accounts";
 import { createApp } from "./app";
 import { connectContracts, loadDeployment } from "./chain";
+import { HttpAiDetector, MetadataAiDetector, type AiImageDetector } from "./aiDetection";
 import { loadConfig } from "./config";
 import { LocalEvidenceStore, loadOrCreateKeyFile, parseEvidenceKey } from "./evidence";
 import { Keeper } from "./keeper";
@@ -60,7 +61,12 @@ async function main() {
   } else {
     throw new Error("Set EVIDENCE_ENCRYPTION_KEY (32 bytes, hex or base64) to store evidence on a non-local chain.");
   }
-  const evidence = new LocalEvidenceStore(config.evidenceDir, evidenceKey);
+  const aiDetectors: AiImageDetector[] = [new MetadataAiDetector()];
+  if (config.aiDetector) {
+    aiDetectors.push(new HttpAiDetector(config.aiDetector));
+    console.log(`Screening evidence images with the AI-image classifier at ${config.aiDetector.url}`);
+  }
+  const evidence = new LocalEvidenceStore(config.evidenceDir, evidenceKey, { aiDetectors });
   const accounts = new AccountStore(config.accountsDir);
   const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin });
 

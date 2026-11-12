@@ -11,6 +11,8 @@ export interface Config {
   /** Sign-in sessions and member profiles. */
   accountsDir: string;
   corsOrigin: string;
+  /** Optional AI-image classifier service; null runs only the offline metadata check. */
+  aiDetector: { url: string; apiKey: string | null; threshold: number } | null;
   keeper: {
     enabled: boolean;
     /** Signs keeper transactions. Unset on a local chain means "use the deployer's unlocked account". */
@@ -33,6 +35,13 @@ function int(value: string | undefined, fallback: number, name: string): number 
   return n;
 }
 
+function probability(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value === "") return fallback;
+  const n = Number(value);
+  if (!(n > 0 && n <= 1)) throw new Error(`${name} must be a number above 0 and at most 1, got "${value}".`);
+  return n;
+}
+
 /** Reads configuration from environment variables. Paths are relative to the working directory. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
@@ -44,6 +53,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     evidenceKeyFile: resolve(env.EVIDENCE_KEY_FILE || "data/evidence.key"),
     accountsDir: resolve(env.ACCOUNTS_DIR || "data/accounts"),
     corsOrigin: env.CORS_ORIGIN || "*",
+    aiDetector: env.AI_DETECTOR_URL
+      ? {
+          url: env.AI_DETECTOR_URL,
+          apiKey: env.AI_DETECTOR_API_KEY || null,
+          threshold: probability(env.AI_DETECTOR_THRESHOLD, 0.8, "AI_DETECTOR_THRESHOLD"),
+        }
+      : null,
     keeper: {
       enabled: flag(env.KEEPER_ENABLED, true),
       privateKey: env.KEEPER_PRIVATE_KEY || null,
