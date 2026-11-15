@@ -120,6 +120,7 @@ To run a jury draw from the command line, use `npx hardhat run scripts/sepolia-v
 | `KEEPER_PRIVATE_KEY` | secret | Without it the keeper is off on Sepolia, and claims then have to be advanced by hand from the UI |
 | `EVIDENCE_ENCRYPTION_KEY` | secret | 32 bytes, hex or base64. Required on any non-local chain |
 | `KEEPER_INTERVAL_MS` | `60000` | 60 s keeps the RPC use inside Alchemy's free tier. Windows are 15 min, so this is plenty |
+| `LOG_BLOCK_RANGE` | `10` | Alchemy's free tier allows 10 blocks per `eth_getLogs`; the backend reads history in chunks from the deploy block (needs PR #38) |
 | `STATIC_DIR` | `/app/dist/frontend` | Set in the image; serves the web app at `/` |
 | `EVIDENCE_DIR`, `ACCOUNTS_DIR` | `/var/data/evidence`, `/var/data/accounts` | Ephemeral on the free plan; on a paid plan mount a disk here |
 | `PORT` | set by Render | |

@@ -21,6 +21,8 @@ services:
         value: /app/deployments/sepolia.json
       - key: KEEPER_INTERVAL_MS
         value: "60000"
+      - key: LOG_BLOCK_RANGE
+        value: "10" # Alchemy's free tier caps eth_getLogs at 10 blocks; raise it on a paid RPC
       - key: RPC_URL
         sync: false # Alchemy/Infura Sepolia HTTPS endpoint
       - key: KEEPER_PRIVATE_KEY
