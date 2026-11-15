@@ -96,15 +96,30 @@ async function deployLocalVrf() {
  * caller supplies `vrf.subscriptionId` and `vrf.keyHash` and must add the returned `randomness`
  * contract as a consumer of that subscription.
  */
-async function deployContracts(overrides = {}, vrf = {}, { log } = {}) {
+async function deployContracts(overrides = {}, vrf = {}, { log, existing = {}, signer } = {}) {
   const params = { ...DEFAULT_PARAMS, ...overrides };
-  const [deployer] = await ethers.getSigners();
+  const deployer = signer ?? (await ethers.getSigners())[0];
   // With `log` (public networks), report each step and wait for it to be mined, so a slow or stuck
-  // transaction is visible instead of the script sitting silent.
+  // transaction is visible instead of the script sitting silent. With `existing` (contract name ->
+  // address, from findPartialDeployment), contracts an earlier, interrupted run already deployed are
+  // reused instead of deployed again.
+  const KEYS = {
+    MockStablecoin: "token",
+    Pool: "pool",
+    PolicyRegistry: "registry",
+    VRFRandomness: "randomness",
+    JuryModule: "jury",
+    ClaimManager: "claimManager",
+  };
   const deploy = async (name, args = []) => {
-    if (!log) return ethers.deployContract(name, args);
+    const reuse = existing[KEYS[name]];
+    if (reuse) {
+      if (log) log(`  reusing ${name} at ${reuse}`);
+      return ethers.getContractAt(name, reuse, deployer);
+    }
+    if (!log) return ethers.deployContract(name, args, deployer);
     log(`  deploying ${name}...`);
-    const contract = await ethers.deployContract(name, args);
+    const contract = await ethers.deployContract(name, args, deployer);
     log(`    tx ${contract.deploymentTransaction().hash}`);
     await contract.waitForDeployment();
     log(`    ${name} at ${await contract.getAddress()}`);
@@ -129,6 +144,9 @@ async function deployContracts(overrides = {}, vrf = {}, { log } = {}) {
   ]);
   const vrfSettings = { ...VRF_DEFAULTS, ...vrf };
   let vrfCoordinator = null;
+  if (!vrfSettings.coordinator && existing.randomness) {
+    throw new Error("Reusing a VRFRandomness needs the VRF coordinator it was deployed with.");
+  }
   if (!vrfSettings.coordinator) {
     const local = await deployLocalVrf();
     vrfCoordinator = local.coordinator;
@@ -174,11 +192,21 @@ async function deployContracts(overrides = {}, vrf = {}, { log } = {}) {
     params.receiptPeriod,
   ]);
 
-  await step("linking VRFRandomness to JuryModule", randomness.setConsumer(await jury.getAddress()));
-  await step("linking Pool to PolicyRegistry", pool.setRegistry(await registry.getAddress()));
-  await step("linking Pool to ClaimManager", pool.setClaimManager(await claimManager.getAddress()));
-  await step("linking JuryModule to ClaimManager", jury.setClaimManager(await claimManager.getAddress()));
-  await step("linking Pool to JuryModule", pool.setJury(await jury.getAddress()));
+  // Each link is a one-time setter, so skip any an earlier, interrupted run already made.
+  const links = [
+    ["linking VRFRandomness to JuryModule", () => randomness.consumer(), () => randomness.setConsumer(jury)],
+    ["linking Pool to PolicyRegistry", () => pool.registry(), () => pool.setRegistry(registry)],
+    ["linking Pool to ClaimManager", () => pool.claimManager(), () => pool.setClaimManager(claimManager)],
+    ["linking JuryModule to ClaimManager", () => jury.claimManager(), () => jury.setClaimManager(claimManager)],
+    ["linking Pool to JuryModule", () => pool.jury(), () => pool.setJury(jury)],
+  ];
+  for (const [label, current, set] of links) {
+    if (Object.keys(existing).length > 0 && (await current()) !== ethers.ZeroAddress) {
+      if (log) log(`  already done: ${label}`);
+      continue;
+    }
+    await step(label, set());
+  }
 
   return { deployer, params, token, pool, registry, randomness, vrfCoordinator, vrf: vrfSettings, jury, claimManager };
 }
