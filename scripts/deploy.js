@@ -64,7 +64,17 @@ const POOL_SEED = USDC(5_000);
 async function main() {
   const local = LOCAL_NETWORKS.includes(network.name);
   const [deployer] = await ethers.getSigners();
+  const log = local ? undefined : (msg) => console.log(msg);
+  if (log) {
+    // Printed first so a wrong RPC URL or an unfunded wallet shows up straight away.
+    log(`Connecting to ${network.name}...`);
+    const [block, balance] = await Promise.all([ethers.provider.getBlockNumber(), ethers.provider.getBalance(deployer.address)]);
+    log(`  block ${block}; deployer ${deployer.address} has ${ethers.formatEther(balance)} ETH`);
+    if (balance === 0n) throw new Error("The deployer has no Sepolia ETH. Get some from a faucet first.");
+    log("Checking the VRF key hash and subscription...");
+  }
   const vrf = local ? null : await publicVrfSettings(deployer);
+  if (log) log(`Deploying contracts (each waits for its transaction to be mined, usually 10 to 30 seconds)...`);
 
   // Keep the production/default rules, but remove the waiting period from local UI testing, and on a
   // testnet also shorten every window so a full claim (jury, votes, offer) fits in a demo.
@@ -72,12 +82,13 @@ async function main() {
   // Contract events start after this block, so the backend reads logs from here, not from block 0
   // (public RPCs cap how many blocks one eth_getLogs call may cover).
   const startBlock = await ethers.provider.getBlockNumber();
-  const ctx = await deployContracts(overrides, vrf ? vrf.settings : {});
+  const ctx = await deployContracts(overrides, vrf ? vrf.settings : {}, { log });
   const { chainId } = await ethers.provider.getNetwork();
 
   if (vrf) {
     const consumer = await ctx.randomness.getAddress();
     if (vrf.subOwner.toLowerCase() === deployer.address.toLowerCase()) {
+      log("  adding VRFRandomness as a consumer of the subscription...");
       await (await vrf.coordinatorContract.addConsumer(vrf.settings.subscriptionId, consumer)).wait();
       console.log(`Added ${consumer} as a consumer of VRF subscription ${vrf.settings.subscriptionId}.`);
     } else {
@@ -110,6 +121,7 @@ async function main() {
   } else if (network.name === "sepolia") {
     // Seed the testnet pool from the deployer too, so the first claims can be paid. Members get their
     // own test mUSDC from the token's public faucet in the app.
+    log("  seeding the pool...");
     await (await ctx.token.mint(deployer.address, POOL_SEED)).wait();
     await (await ctx.token.approve(await ctx.pool.getAddress(), POOL_SEED)).wait();
     await (await ctx.pool.contribute(POOL_SEED)).wait();

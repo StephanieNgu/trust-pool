@@ -96,13 +96,30 @@ async function deployLocalVrf() {
  * caller supplies `vrf.subscriptionId` and `vrf.keyHash` and must add the returned `randomness`
  * contract as a consumer of that subscription.
  */
-async function deployContracts(overrides = {}, vrf = {}) {
+async function deployContracts(overrides = {}, vrf = {}, { log } = {}) {
   const params = { ...DEFAULT_PARAMS, ...overrides };
   const [deployer] = await ethers.getSigners();
+  // With `log` (public networks), report each step and wait for it to be mined, so a slow or stuck
+  // transaction is visible instead of the script sitting silent.
+  const deploy = async (name, args = []) => {
+    if (!log) return ethers.deployContract(name, args);
+    log(`  deploying ${name}...`);
+    const contract = await ethers.deployContract(name, args);
+    log(`    tx ${contract.deploymentTransaction().hash}`);
+    await contract.waitForDeployment();
+    log(`    ${name} at ${await contract.getAddress()}`);
+    return contract;
+  };
+  const step = async (label, txPromise) => {
+    if (log) log(`  ${label}...`);
+    const tx = await txPromise;
+    if (log) log(`    tx ${tx.hash}`);
+    return tx.wait();
+  };
 
-  const token = await ethers.deployContract("MockStablecoin");
-  const pool = await ethers.deployContract("Pool", [await token.getAddress(), params.maxPayoutBps]);
-  const registry = await ethers.deployContract("PolicyRegistry", [
+  const token = await deploy("MockStablecoin");
+  const pool = await deploy("Pool", [await token.getAddress(), params.maxPayoutBps]);
+  const registry = await deploy("PolicyRegistry", [
     await pool.getAddress(),
     params.waitingPeriod,
     params.premiumBps,
@@ -119,7 +136,7 @@ async function deployContracts(overrides = {}, vrf = {}) {
     vrfSettings.subscriptionId = local.subscriptionId;
     vrfSettings.keyHash = local.keyHash;
   }
-  const randomness = await ethers.deployContract("VRFRandomness", [
+  const randomness = await deploy("VRFRandomness", [
     vrfSettings.coordinator,
     vrfSettings.subscriptionId,
     vrfSettings.keyHash,
@@ -130,7 +147,7 @@ async function deployContracts(overrides = {}, vrf = {}) {
   if (vrfCoordinator) {
     await (await vrfCoordinator.addConsumer(vrfSettings.subscriptionId, await randomness.getAddress())).wait();
   }
-  const jury = await ethers.deployContract("JuryModule", [
+  const jury = await deploy("JuryModule", [
     await registry.getAddress(),
     await randomness.getAddress(),
     await pool.getAddress(),
@@ -147,7 +164,7 @@ async function deployContracts(overrides = {}, vrf = {}) {
       noShowPenalty: params.noShowPenalty,
     },
   ]);
-  const claimManager = await ethers.deployContract("ClaimManager", [
+  const claimManager = await deploy("ClaimManager", [
     await registry.getAddress(),
     await pool.getAddress(),
     await jury.getAddress(),
@@ -157,11 +174,11 @@ async function deployContracts(overrides = {}, vrf = {}) {
     params.receiptPeriod,
   ]);
 
-  await (await randomness.setConsumer(await jury.getAddress())).wait();
-  await (await pool.setRegistry(await registry.getAddress())).wait();
-  await (await pool.setClaimManager(await claimManager.getAddress())).wait();
-  await (await jury.setClaimManager(await claimManager.getAddress())).wait();
-  await (await pool.setJury(await jury.getAddress())).wait();
+  await step("linking VRFRandomness to JuryModule", randomness.setConsumer(await jury.getAddress()));
+  await step("linking Pool to PolicyRegistry", pool.setRegistry(await registry.getAddress()));
+  await step("linking Pool to ClaimManager", pool.setClaimManager(await claimManager.getAddress()));
+  await step("linking JuryModule to ClaimManager", jury.setClaimManager(await claimManager.getAddress()));
+  await step("linking Pool to JuryModule", pool.setJury(await jury.getAddress()));
 
   return { deployer, params, token, pool, registry, randomness, vrfCoordinator, vrf: vrfSettings, jury, claimManager };
 }
