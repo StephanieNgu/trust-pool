@@ -91,6 +91,14 @@ exists before deploying, then adds `VRFRandomness` as a consumer if the deployer
 subscription (otherwise it prints what to add on vrf.chain.link). Addresses go to
 `deployments/sepolia.json`.
 
+Before sending anything, `deploy.js` prints the wallet's balance and the expected cost at the current
+gas price (the full deploy is about 9.5M gas), and stops if the wallet holds less than 1.5 times that.
+A deploy that still stops partway (the wallet ran dry, the terminal closed) is not wasted: run the
+same command again and it finds the contracts this wallet already deployed, reuses them, and only
+deploys and links what is missing. It recognises them by how they point at each other and only
+reuses a set made for the same VRF subscription and testnet settings. Set `FRESH_DEPLOY=true` to
+ignore an unfinished deployment and start over.
+
 `sepolia-vrf-demo.js` makes six throwaway member wallets (keys saved, git-ignored, in
 `deployments/sepolia-demo-wallets.json`), funds each with a little Sepolia ETH for gas, has them buy
 policies and stake, files a claim, and waits for Chainlink to answer (usually one to three minutes).

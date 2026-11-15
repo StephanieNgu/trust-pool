@@ -8,10 +8,15 @@
 // deployed alongside. On Sepolia it is Chainlink's real coordinator and your VRF subscription:
 //
 //   npx hardhat run scripts/deploy.js --network sepolia    # needs .env, see docs/vrf.md
+//
+// On a public network, if an earlier run from the same wallet stopped partway (usually because the
+// wallet ran out of ETH), running the same command again finishes that deployment instead of
+// starting over, reusing the contracts already on-chain. Set FRESH_DEPLOY=true to start over.
 const fs = require("fs");
 const path = require("path");
 const { ethers, network } = require("hardhat");
 const { deployContracts, TESTNET_PARAMS, USDC } = require("./lib/deployContracts");
+const { findPartialDeployment } = require("./lib/findPartialDeployment");
 
 const LOCAL_NETWORKS = ["hardhat", "localhost"];
 
@@ -58,26 +63,107 @@ async function publicVrfSettings(deployer) {
   if (env.VRF_CALLBACK_GAS_LIMIT) settings.callbackGasLimit = Number(env.VRF_CALLBACK_GAS_LIMIT);
   return { settings, coordinatorContract: c, subOwner: sub.subOwner };
 }
+/** Gas each step uses (measured on Hardhat, rounded up), for the cost estimate on public networks. */
+const GAS = {
+  MockStablecoin: 700_000n,
+  Pool: 1_400_000n,
+  PolicyRegistry: 1_400_000n,
+  VRFRandomness: 650_000n,
+  JuryModule: 2_850_000n,
+  ClaimManager: 1_950_000n,
+  // Five one-time links, adding the VRF consumer, and seeding the pool.
+  finishing: 600_000n,
+};
+
 const FAUCET_AMOUNT = USDC(10_000);
 const POOL_SEED = USDC(5_000);
 
 async function main() {
   const local = LOCAL_NETWORKS.includes(network.name);
   const [deployer] = await ethers.getSigners();
+  const log = local ? undefined : (msg) => console.log(msg);
+  let balance = 0n;
+  if (log) {
+    // Printed first so a wrong RPC URL or an unfunded wallet shows up straight away.
+    log(`Connecting to ${network.name}...`);
+    const block = await ethers.provider.getBlockNumber();
+    balance = await ethers.provider.getBalance(deployer.address);
+    log(`  block ${block}; deployer ${deployer.address} has ${ethers.formatEther(balance)} ETH`);
+    if (balance === 0n) throw new Error("The deployer has no Sepolia ETH. Get some from a faucet first.");
+
+    // A transaction from an earlier run that the wallet could not pay for can sit in the node's queue
+    // and hold up every later one, so the script would wait forever.
+    const [mined, queued] = await Promise.all([
+      ethers.provider.getTransactionCount(deployer.address, "latest"),
+      ethers.provider.getTransactionCount(deployer.address, "pending"),
+    ]);
+    if (queued > mined) {
+      throw new Error(
+        `${queued - mined} transaction(s) from an earlier run are still waiting to be mined. Check ` +
+          `https://sepolia.etherscan.io/address/${deployer.address}: once they are mined (adding ETH lets them through) ` +
+          "or have disappeared (nodes drop them after a few hours), run this again.",
+      );
+    }
+    log("Checking the VRF key hash and subscription...");
+  }
   const vrf = local ? null : await publicVrfSettings(deployer);
 
   // Keep the production/default rules, but remove the waiting period from local UI testing, and on a
   // testnet also shorten every window so a full claim (jury, votes, offer) fits in a demo.
   const overrides = local ? { waitingPeriod: 0 } : network.name === "sepolia" ? TESTNET_PARAMS : {};
+
+  // Finish an earlier run from this wallet that stopped partway, rather than paying for it all again.
+  let partial = null;
+  if (vrf && process.env.FRESH_DEPLOY !== "true") {
+    log("Looking for an unfinished deployment from this wallet...");
+    partial = await findPartialDeployment(deployer, { subscriptionId: vrf.settings.subscriptionId });
+    if (partial?.existing.jury && overrides.jurySize !== undefined) {
+      // Only reuse contracts deployed with the settings this script would use now.
+      const jury = await ethers.getContractAt("JuryModule", partial.existing.jury);
+      const [size, commit] = [Number(await jury.jurySize()), Number(await jury.commitPeriod())];
+      if (size !== overrides.jurySize || commit !== overrides.commitPeriod) {
+        log(`  found an unfinished deployment with different settings (jury of ${size}); deploying everything instead`);
+        partial = null;
+      }
+    }
+    if (partial) {
+      log(`  found one: reusing ${Object.keys(partial.existing).join(", ")}; still to do: ${partial.missing.join(", ")}`);
+      log("  (set FRESH_DEPLOY=true to ignore it and deploy everything again)");
+    } else {
+      log("  none; deploying everything");
+    }
+  }
+
+  if (log) {
+    // A transaction the wallet cannot pay for is accepted by the node but never mined, so check first.
+    const reused = new Set(Object.keys(partial?.existing ?? {}));
+    const keyOf = { MockStablecoin: "token", Pool: "pool", PolicyRegistry: "registry", VRFRandomness: "randomness", JuryModule: "jury", ClaimManager: "claimManager" };
+    let gas = GAS.finishing;
+    for (const [name, key] of Object.entries(keyOf)) if (!reused.has(key)) gas += GAS[name];
+    const { gasPrice } = await ethers.provider.getFeeData();
+    const expected = gas * (gasPrice ?? 0n);
+    // Fees can rise between blocks, and each transaction must be covered at its maximum fee.
+    const required = (expected * 3n) / 2n;
+    log(`  at ${ethers.formatUnits(gasPrice ?? 0n, "gwei")} gwei this should cost about ${ethers.formatEther(expected)} ETH`);
+    if (balance < required) {
+      throw new Error(
+        `The deployer has ${ethers.formatEther(balance)} ETH; to be safe it needs at least ${ethers.formatEther(required)}. ` +
+          "Add Sepolia ETH (faucets or a teammate) and run the same command again. Nothing was sent.",
+      );
+    }
+    log("Deploying contracts (each waits for its transaction to be mined, usually 10 to 30 seconds)...");
+  }
+
   // Contract events start after this block, so the backend reads logs from here, not from block 0
   // (public RPCs cap how many blocks one eth_getLogs call may cover).
   const startBlock = await ethers.provider.getBlockNumber();
-  const ctx = await deployContracts(overrides, vrf ? vrf.settings : {});
+  const ctx = await deployContracts(overrides, vrf ? vrf.settings : {}, { log, existing: partial?.existing ?? {} });
   const { chainId } = await ethers.provider.getNetwork();
 
   if (vrf) {
     const consumer = await ctx.randomness.getAddress();
     if (vrf.subOwner.toLowerCase() === deployer.address.toLowerCase()) {
+      log("  adding VRFRandomness as a consumer of the subscription...");
       await (await vrf.coordinatorContract.addConsumer(vrf.settings.subscriptionId, consumer)).wait();
       console.log(`Added ${consumer} as a consumer of VRF subscription ${vrf.settings.subscriptionId}.`);
     } else {
@@ -110,6 +196,7 @@ async function main() {
   } else if (network.name === "sepolia") {
     // Seed the testnet pool from the deployer too, so the first claims can be paid. Members get their
     // own test mUSDC from the token's public faucet in the app.
+    log("  seeding the pool...");
     await (await ctx.token.mint(deployer.address, POOL_SEED)).wait();
     await (await ctx.token.approve(await ctx.pool.getAddress(), POOL_SEED)).wait();
     await (await ctx.pool.contribute(POOL_SEED)).wait();
