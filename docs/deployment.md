@@ -17,13 +17,13 @@ This is the runbook for the public testnet deployment. The contracts go on Ether
 Browser (MetaMask on Sepolia)
    │  signs its own transactions ─────────────────────────────┐
    ▼                                                           ▼
-Render web service (Docker, 1 instance)                 Sepolia contracts
+Render web service (Docker, 1 instance, free plan)                 Sepolia contracts
    ├─ /            built web app (dist/frontend)          MockStablecoin (faucet), Pool,
    ├─ /api/*       Express API: config, claims,           PolicyRegistry, VRFRandomness,
    │               evidence (AES-256-GCM), sign-in         JuryModule, ClaimManager
    ├─ keeper       finalize / acceptOffer / payout /            ▲
    │               expire / lapse, every 60 s ── RPC ─────────┤
-   └─ /var/data    persistent disk: evidence, accounts         │
+   └─ /var/data    evidence, accounts (ephemeral on free plan) │
                                                     Chainlink VRF coordinator answers
                                                     jury randomness by itself
 ```
@@ -53,7 +53,7 @@ All other parameters (premiums, stakes, bonds, the 20% payout cap) are the defau
 | Keeper wallet (throwaway, about 0.05 Sepolia ETH) | Max, MetaMask | Render secret `KEEPER_PRIVATE_KEY` |
 | Alchemy (or Infura) Sepolia RPC URL | Max | `.env` `SEPOLIA_RPC_URL` and Render secret `RPC_URL` |
 | VRF subscription (funded with about 20 LINK) | Deployer wallet at vrf.chain.link | `.env` `VRF_SUBSCRIPTION_ID` |
-| Evidence encryption key (`openssl rand -hex 32`) | Render secret, plus a copy in a password manager | Render secret `EVIDENCE_ENCRYPTION_KEY` |
+| Evidence encryption key (`openssl rand -hex 32`) | Render secret, plus a copy in a password manager (with a disk, losing it makes stored evidence unreadable) | Render secret `EVIDENCE_ENCRYPTION_KEY` |
 | Render account | Max | — |
 
 Keep the deployer and keeper as separate wallets. The keeper key sits on the server, and none of its calls need privileges because every one of them is permissionless on-chain. If the key leaks, all an attacker gets is its gas money. Never commit a key. `.env` is git-ignored.
@@ -86,7 +86,7 @@ The service builds from `main` and reads `deployments/sepolia.json`, so this fil
 
 ### 3. Create the service on Render (once)
 
-1. In the Render dashboard, click **New**, then **Blueprint**, and pick this repository. Render reads `render.yaml`, which sets up one Docker web service with a 1 GB disk at `/var/data` and a health check on `/api/health`.
+1. In the Render dashboard, click **New**, then **Blueprint**, and pick this repository. Render reads `render.yaml`, which sets up one free Docker web service with a health check on `/api/health`.
 2. Fill in the three secrets it asks for: `RPC_URL`, `KEEPER_PRIVATE_KEY` and `EVIDENCE_ENCRYPTION_KEY`.
 3. Click **Apply**. The first build takes about 5 minutes, because it compiles the contracts and builds and type-checks the web app.
 
@@ -121,14 +121,14 @@ To run a jury draw from the command line, use `npx hardhat run scripts/sepolia-v
 | `EVIDENCE_ENCRYPTION_KEY` | secret | 32 bytes, hex or base64. Required on any non-local chain |
 | `KEEPER_INTERVAL_MS` | `60000` | 60 s keeps the RPC use inside Alchemy's free tier. Windows are 15 min, so this is plenty |
 | `STATIC_DIR` | `/app/dist/frontend` | Set in the image; serves the web app at `/` |
-| `EVIDENCE_DIR`, `ACCOUNTS_DIR` | `/var/data/evidence`, `/var/data/accounts` | On the persistent disk |
+| `EVIDENCE_DIR`, `ACCOUNTS_DIR` | `/var/data/evidence`, `/var/data/accounts` | Ephemeral on the free plan; on a paid plan mount a disk here |
 | `PORT` | set by Render | |
 | `CORS_ORIGIN` | unset (`*`) | The app and API share one origin; API auth is a bearer token, not a cookie |
 | `KEEPER_FULFILL_RANDOMNESS` | default | Ignored on Sepolia, where there is no mock coordinator to drive |
 
 ## Rollback
 
-**App (web, API, keeper).** In Render, open the service's **Events**, choose the last good deploy, and click **Rollback**. You can also revert the bad commit on `main`, which redeploys it. Data on the disk is untouched either way. Contract addresses only change when `deployments/sepolia.json` changes.
+**App (web, API, keeper).** In Render, open the service's **Events**, choose the last good deploy, and click **Rollback**. You can also revert the bad commit on `main`, which redeploys it. On the free plan any redeploy or rollback wipes stored evidence and sign-ins; on-chain state is untouched. Contract addresses only change when `deployments/sepolia.json` changes.
 
 **Contracts.** Deployed contracts are immutable and have no upgrade path or admin switch. That's deliberate, so nobody can change a claim's outcome. To "roll back", you redeploy instead:
 
@@ -137,7 +137,7 @@ To run a jury draw from the command line, use `npx hardhat run scripts/sepolia-v
 3. Commit the new `deployments/sepolia.json` and merge it. The service redeploys against it.
 4. On vrf.chain.link, remove the old `VRFRandomness` consumer so it can't spend LINK.
 
-To go back to a previous contract set, revert the commit that changed `deployments/sepolia.json`. Policies, stakes and claims live in the contract set they were made in. Members of the old set don't carry over, and their evidence stays on the disk, readable by its uploaders.
+To go back to a previous contract set, revert the commit that changed `deployments/sepolia.json`. Policies, stakes and claims live in the contract set they were made in. Members of the old set don't carry over, and with a disk, their evidence stays readable by its uploaders.
 
 **Evidence key.** If `EVIDENCE_ENCRYPTION_KEY` is lost, stored evidence can't be decrypted. Keep a copy in a password manager. If it leaks, rotate it: set a new key, then redeploy contracts and clear `/var/data/evidence`. The store has no re-encryption tool yet.
 
@@ -151,7 +151,6 @@ To go back to a previous contract set, revert the commit that changed `deploymen
 | VRF subscription balance | vrf.chain.link subscription page | Below 5 LINK, or requests stuck pending |
 | Claims stuck | Claims page (`JuryPending` over 10 min), Etherscan `ClaimManager` events | Check the VRF subscription and the consumer list |
 | RPC quota | Alchemy dashboard, compute units | Above 70% of the monthly limit: raise `KEEPER_INTERVAL_MS` |
-| Disk | Render disk usage | Above 80% of 1 GB |
 | Errors | Render logs (the API logs unexpected errors with `console.error`) | Any 502 burst |
 
 On demo day, open `/api/health`, the keeper address on Etherscan and the VRF subscription page in tabs. Check all three are green 30 minutes before presenting.
@@ -159,10 +158,10 @@ On demo day, open `/api/health`, the keeper address on Etherscan and the VRF sub
 ## Known limits
 
 - **Run one instance.** The keeper and the stores assume a single process. Don't scale the service horizontally.
-- **The disk is a single point of failure.** Render snapshots disks daily, but there's no off-site backup. That's fine for a testnet, not for production.
+- **Free plan: no disk, and it sleeps.** Uploaded evidence and sign-in sessions are wiped on every restart or redeploy, and the service sleeps after 15 idle minutes. The first request after that takes about a minute, and the keeper pauses while it sleeps, though anyone can still advance a claim from the UI because every keeper call is permissionless. On-chain state (policies, claims, payouts) is never affected. Before a demo, open the app 5 minutes early, don't merge to `main` during it, and file claims after the last redeploy so jurors can still open the photos. To keep data, switch `render.yaml` to `plan: starter` and uncomment the disk (about $7.25 a month).
 - **Sepolia itself.** Faucets rate-limit, and Chainlink VRF can occasionally be slow. Claims can be cancelled after the 1-hour randomness timeout.
 - **MockStablecoin.** Anyone can mint 1,000 a day from the faucet, so pool numbers on the testnet mean nothing economically.
 
 ## Cost
 
-Render Starter with a 1 GB disk is about $7.25 a month. Alchemy, Chainlink and the Sepolia faucets are free.
+The Render free plan costs nothing (Starter with a 1 GB disk is about $7.25 a month). Alchemy, Chainlink and the Sepolia faucets are free.

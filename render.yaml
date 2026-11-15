@@ -5,14 +5,17 @@ services:
   - type: web
     name: trustpool
     runtime: docker
-    plan: starter # a persistent disk needs a paid plan; evidence and sign-ins live on it
+    # Free plan: no persistent disk, so evidence and sign-ins in /var/data are wiped on every restart or
+    # redeploy, and the service sleeps after 15 idle minutes (the keeper pauses with it). For a disk,
+    # switch to `plan: starter` and uncomment the disk block.
+    plan: free
     branch: main
     healthCheckPath: /api/health
     autoDeploy: true
-    disk:
-      name: trustpool-data
-      mountPath: /var/data
-      sizeGB: 1
+    # disk:
+    #   name: trustpool-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: DEPLOYMENT_FILE
         value: /app/deployments/sepolia.json
