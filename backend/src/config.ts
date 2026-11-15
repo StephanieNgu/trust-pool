@@ -11,6 +11,11 @@ export interface Config {
   /** Sign-in sessions and member profiles. */
   accountsDir: string;
   corsOrigin: string;
+  /**
+   * Most blocks one eth_getLogs call may cover, or null for no limit. Free RPC tiers cap this
+   * (Alchemy's free tier at 10 blocks), so set LOG_BLOCK_RANGE on public networks.
+   */
+  logBlockRange: number | null;
   keeper: {
     enabled: boolean;
     /** Signs keeper transactions. Unset on a local chain means "use the deployer's unlocked account". */
@@ -44,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     evidenceKeyFile: resolve(env.EVIDENCE_KEY_FILE || "data/evidence.key"),
     accountsDir: resolve(env.ACCOUNTS_DIR || "data/accounts"),
     corsOrigin: env.CORS_ORIGIN || "*",
+    logBlockRange: env.LOG_BLOCK_RANGE ? int(env.LOG_BLOCK_RANGE, 0, "LOG_BLOCK_RANGE") : null,
     keeper: {
       enabled: flag(env.KEEPER_ENABLED, true),
       privateKey: env.KEEPER_PRIVATE_KEY || null,

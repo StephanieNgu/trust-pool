@@ -20,7 +20,7 @@ sequenceDiagram
     Note over V: Chainlink oracle produces the word and its VRF proof
     V->>R: rawFulfillRandomWords(requestId, [word])  (proof checked on-chain)
     R->>JM: fulfillRandomness(claimId, word)  (same transaction)
-    JM->>JM: Fisher-Yates shuffle of eligible members, seat 5
+    JM->>JM: draw 5 eligible members (shuffle up to 25 holders, index sampling above), seat 5
     JM->>CM: startVoting
 ```
 

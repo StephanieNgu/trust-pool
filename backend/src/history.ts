@@ -55,28 +55,111 @@ export interface HistoryEntry {
 }
 
 const topicFor = (address: string) => zeroPadValue(address, 32);
+const ev = (iface: Interface, name: string) => iface.getEvent(name)!.topicHash;
 
-/** Every money movement and milestone for `address`, newest first. */
-export async function getMemberHistory(provider: Provider, addresses: DeploymentAddresses, address: string): Promise<HistoryEntry[]> {
-  const me = topicFor(address);
-  const logs = (filters: { address: string; topics: (string | null)[] }[]) =>
-    Promise.all(filters.map((filter) => provider.getLogs({ ...filter, fromBlock: 0, toBlock: "latest" })));
+export interface LogIndexOptions {
+  /** First block to read; the block the contracts were deployed in, from deployments/<network>.json. */
+  fromBlock?: number;
+  /** Most blocks per eth_getLogs call (free RPC tiers cap it), or null/undefined for no limit. */
+  maxRange?: number | null;
+}
 
-  const ev = (iface: Interface, name: string) => iface.getEvent(name)!.topicHash;
-  const [purchased, lapsed, premiums, contributed, staked, unstaked, fees, penalties, bonds, bondsBack, submitted, paid] = await logs([
-    { address: addresses.registry, topics: [ev(registryEvents, "PolicyPurchased"), null, me] },
-    { address: addresses.registry, topics: [ev(registryEvents, "PolicyLapsed"), null, me] },
-    { address: addresses.registry, topics: [ev(registryEvents, "PremiumPaid"), null, me] },
-    { address: addresses.pool, topics: [ev(poolEvents, "Contributed"), me] },
-    { address: addresses.pool, topics: [ev(poolEvents, "Staked"), me] },
-    { address: addresses.pool, topics: [ev(poolEvents, "Unstaked"), me] },
-    { address: addresses.pool, topics: [ev(poolEvents, "JurorFeePaid"), me] },
-    { address: addresses.pool, topics: [ev(poolEvents, "StakePenalized"), me] },
-    { address: addresses.pool, topics: [ev(poolEvents, "BondPosted"), me] },
-    { address: addresses.pool, topics: [ev(poolEvents, "BondSettled"), me] },
-    { address: addresses.claimManager, topics: [ev(claimEvents, "ClaimSubmitted"), null, me] },
-    { address: addresses.claimManager, topics: [ev(claimEvents, "ClaimPaid"), null, me] },
-  ]);
+/**
+ * Every log the history needs, from all three contracts, read once and kept. Each sync reads only the
+ * blocks added since the last one, in steps of at most `maxRange` blocks, so a public RPC that caps
+ * eth_getLogs ranges still works and a page load does not rescan the chain.
+ */
+export class LogIndex {
+  private readonly logs: Log[] = [];
+  private next: number;
+  private syncing: Promise<void> | null = null;
+  private readonly blockTimes = new Map<number, number>();
+
+  constructor(
+    private readonly provider: Provider,
+    private readonly addresses: DeploymentAddresses,
+    private readonly options: LogIndexOptions = {},
+  ) {
+    this.next = options.fromBlock ?? 0;
+  }
+
+  /** Reads any new blocks, then returns every indexed log. Concurrent calls share one read. */
+  async sync(): Promise<readonly Log[]> {
+    this.syncing ??= this.read().finally(() => {
+      this.syncing = null;
+    });
+    await this.syncing;
+    return this.logs;
+  }
+
+  async blockTime(blockNumber: number): Promise<number> {
+    let at = this.blockTimes.get(blockNumber);
+    if (at === undefined) {
+      at = (await this.provider.getBlock(blockNumber))?.timestamp ?? 0;
+      this.blockTimes.set(blockNumber, at);
+    }
+    return at;
+  }
+
+  private async read(): Promise<void> {
+    const latest = await this.provider.getBlockNumber();
+    const { maxRange } = this.options;
+    const address = [this.addresses.registry, this.addresses.pool, this.addresses.claimManager];
+    while (this.next <= latest) {
+      const toBlock = maxRange ? Math.min(latest, this.next + maxRange - 1) : latest;
+      const logs = await this.provider.getLogs({ address, topics: [INDEXED_TOPICS], fromBlock: this.next, toBlock });
+      this.logs.push(...logs);
+      this.next = toBlock + 1;
+    }
+  }
+}
+
+const EVENTS = {
+  purchased: [registryEvents, "PolicyPurchased", "registry", 2],
+  lapsed: [registryEvents, "PolicyLapsed", "registry", 2],
+  premiums: [registryEvents, "PremiumPaid", "registry", 2],
+  contributed: [poolEvents, "Contributed", "pool", 1],
+  staked: [poolEvents, "Staked", "pool", 1],
+  unstaked: [poolEvents, "Unstaked", "pool", 1],
+  fees: [poolEvents, "JurorFeePaid", "pool", 1],
+  penalties: [poolEvents, "StakePenalized", "pool", 1],
+  bonds: [poolEvents, "BondPosted", "pool", 1],
+  bondsBack: [poolEvents, "BondSettled", "pool", 1],
+  submitted: [claimEvents, "ClaimSubmitted", "claimManager", 2],
+  paid: [claimEvents, "ClaimPaid", "claimManager", 2],
+} as const satisfies Record<string, readonly [Interface, string, keyof DeploymentAddresses, number]>;
+
+const INDEXED_TOPICS = Object.values(EVENTS).map(([iface, name]) => ev(iface, name));
+
+/**
+ * Every money movement and milestone for `address`, newest first. Pass the app's shared `index` so
+ * logs are read once; without one, the whole chain is read for this call.
+ */
+export async function getMemberHistory(
+  provider: Provider,
+  addresses: DeploymentAddresses,
+  address: string,
+  index: LogIndex = new LogIndex(provider, addresses),
+): Promise<HistoryEntry[]> {
+  const me = topicFor(address).toLowerCase();
+  const all = await index.sync();
+  const pick = ([iface, name, contract, position]: (typeof EVENTS)[keyof typeof EVENTS]) => {
+    const topic = ev(iface, name);
+    const at = addresses[contract]!.toLowerCase();
+    return all.filter((log) => log.address.toLowerCase() === at && log.topics[0] === topic && log.topics[position]?.toLowerCase() === me);
+  };
+  const purchased = pick(EVENTS.purchased);
+  const lapsed = pick(EVENTS.lapsed);
+  const premiums = pick(EVENTS.premiums);
+  const contributed = pick(EVENTS.contributed);
+  const staked = pick(EVENTS.staked);
+  const unstaked = pick(EVENTS.unstaked);
+  const fees = pick(EVENTS.fees);
+  const penalties = pick(EVENTS.penalties);
+  const bonds = pick(EVENTS.bonds);
+  const bondsBack = pick(EVENTS.bondsBack);
+  const submitted = pick(EVENTS.submitted);
+  const paid = pick(EVENTS.paid);
 
   // Premiums also emit Contributed (they go into the pool the same way); show those once, as premiums.
   const premiumTxs = new Set([...purchased, ...premiums].map((log) => log.transactionHash));
@@ -136,13 +219,10 @@ export async function getMemberHistory(provider: Provider, addresses: Deployment
     drafts.push(entry(log, "payout", `Claim #${claimId} paid`, amount, "in", claimId.toString()));
   }
 
-  // Block times, fetched once per block.
+  // Block times, fetched once per block and kept by the index.
   const blockNumbers = [...new Set(drafts.map((draft) => draft.blockNumber))];
   const times = new Map<number, number>();
-  await Promise.all(blockNumbers.map(async (number) => {
-    const block = await provider.getBlock(number);
-    times.set(number, block?.timestamp ?? 0);
-  }));
+  await Promise.all(blockNumbers.map(async (number) => times.set(number, await index.blockTime(number))));
 
   return drafts
     .map((draft) => ({ ...draft, at: times.get(draft.blockNumber) ?? 0 }))

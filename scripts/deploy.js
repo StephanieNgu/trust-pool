@@ -69,6 +69,9 @@ async function main() {
   // Keep the production/default rule at seven days, but remove the wait from local UI testing and
   // from testnet demos, so a claim can be filed straight after joining.
   const overrides = local || network.name === "sepolia" ? { waitingPeriod: 0 } : {};
+  // Contract events start after this block, so the backend reads logs from here, not from block 0
+  // (public RPCs cap how many blocks one eth_getLogs call may cover).
+  const startBlock = await ethers.provider.getBlockNumber();
   const ctx = await deployContracts(overrides, vrf ? vrf.settings : {});
   const { chainId } = await ethers.provider.getNetwork();
 
@@ -113,7 +116,7 @@ async function main() {
     keyHash: ctx.vrf.keyHash,
     mock: !vrf,
   };
-  const out = { network: network.name, chainId: chainId.toString(), deployer: ctx.deployer.address, addresses, vrf: vrfInfo, params };
+  const out = { network: network.name, chainId: chainId.toString(), deployer: ctx.deployer.address, startBlock, addresses, vrf: vrfInfo, params };
   const dir = path.join(__dirname, "..", "deployments");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${network.name}.json`);

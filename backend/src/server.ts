@@ -62,7 +62,7 @@ async function main() {
   }
   const evidence = new LocalEvidenceStore(config.evidenceDir, evidenceKey);
   const accounts = new AccountStore(config.accountsDir);
-  const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin });
+  const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin, logBlockRange: config.logBlockRange });
 
   const server = app.listen(config.port, () => {
     console.log(`TrustPool backend on http://localhost:${config.port} (chain ${chainId}, ${config.rpcUrl})`);

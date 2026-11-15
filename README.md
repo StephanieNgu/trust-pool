@@ -289,6 +289,7 @@ Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 | `EVIDENCE_KEY_FILE` | `data/evidence.key` | Local chain only: generated on first start when no key is set |
 | `ACCOUNTS_DIR` | `data/accounts` | Sign-in sessions and member profiles |
 | `CORS_ORIGIN` | `*` | |
+| `LOG_BLOCK_RANGE` | unset (no limit) | Most blocks per `eth_getLogs` call. Set it on Sepolia to your RPC's cap (Alchemy free tier: `10`) |
 | `KEEPER_ENABLED` | `true` | |
 | `KEEPER_PRIVATE_KEY` | unset | Required off the local chain |
 | `KEEPER_INTERVAL_MS` | `5000` | |

@@ -50,6 +50,12 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     }
 
     uint256 public constant BPS_DENOMINATOR = 10_000;
+    /// @notice Pools with at most this many policyholders shuffle the whole eligible list when
+    ///         seating a jury; larger pools sample members by index so the VRF callback's gas stays
+    ///         flat (see `fulfillRandomness`).
+    uint256 public constant SCAN_LIMIT = 25;
+    /// @notice In pools above `SCAN_LIMIT`, how many random draws each jury seat may use.
+    uint256 public constant MAX_DRAWS_PER_SEAT = 6;
 
     struct Jury {
         Phase phase;
@@ -225,10 +231,15 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         emit JuryCancelled(claimId);
     }
 
-    /// @notice Randomness callback. Picks jurors via a partial Fisher-Yates shuffle seeded by `seed`.
+    /// @notice Randomness callback. Picks `jurySize` distinct eligible members uniformly at random.
     /// @dev Only the first callback selects a jury; any later one (or one after `cancel`) reverts.
     ///      Never seats a short jury: if fewer than `jurySize` members are still eligible when the seed
     ///      arrives, the claim is marked starved and can be cancelled at once (see `canCancel`).
+    /// @dev Chainlink runs this inside a fixed callback gas limit, so its cost must not grow with the
+    ///      pool. Up to `SCAN_LIMIT` policyholders the whole eligible list is shuffled (partial
+    ///      Fisher-Yates). Above that, members are drawn by index and redrawn when ineligible or already
+    ///      seated (rejection sampling, which is still uniform over eligible members), with at most
+    ///      `MAX_DRAWS_PER_SEAT` draws per seat; a pool too sparse to fill the jury that way starves.
     function fulfillRandomness(uint256 claimId, uint256 seed) external {
         if (msg.sender != address(randomness)) revert NotRandomnessProvider();
         Jury storage jury = _juries[claimId];
@@ -236,21 +247,18 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (starved[claimId]) revert WrongPhase(Phase.AwaitingRandomness, jury.phase);
 
         // Eligibility is re-read at fulfilment time: policies may have lapsed or stakes been withdrawn.
-        address[] memory candidates = eligibleJurors(jury.claimant);
-        uint256 n = candidates.length;
-        if (n < jurySize) {
+        (address[] memory picked, uint256 available) = registry.holderCount() <= SCAN_LIMIT
+            ? _shuffle(jury.claimant, seed)
+            : _sample(jury.claimant, seed);
+        if (picked.length < jurySize) {
             starved[claimId] = true;
-            emit JuryStarved(claimId, n, jurySize);
+            emit JuryStarved(claimId, available, jurySize);
             return;
         }
-        uint256 k = jurySize;
-
-        for (uint256 i = 0; i < k; i++) {
-            uint256 j = i + (uint256(keccak256(abi.encode(seed, i))) % (n - i));
-            (candidates[i], candidates[j]) = (candidates[j], candidates[i]);
-            jury.jurors.push(candidates[i]);
-            isJuror[claimId][candidates[i]] = true;
-            pool.lockStake(candidates[i]);
+        for (uint256 i = 0; i < picked.length; i++) {
+            jury.jurors.push(picked[i]);
+            isJuror[claimId][picked[i]] = true;
+            pool.lockStake(picked[i]);
         }
 
         jury.phase = Phase.Voting;
@@ -398,6 +406,49 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (jury.phase != Phase.AwaitingRandomness) return 0;
         if (starved[claimId]) return uint256(jury.requestedAt);
         return uint256(jury.requestedAt) + randomnessTimeout;
+    }
+
+    /// @dev Partial Fisher-Yates shuffle over the full eligible list. Returns fewer than `jurySize`
+    ///      members (and how many were eligible) when the jury cannot be filled.
+    function _shuffle(address claimant, uint256 seed) private view returns (address[] memory picked, uint256 n) {
+        address[] memory candidates = eligibleJurors(claimant);
+        n = candidates.length;
+        if (n < jurySize) return (new address[](0), n);
+        picked = new address[](jurySize);
+        for (uint256 i = 0; i < jurySize; i++) {
+            uint256 j = i + (uint256(keccak256(abi.encode(seed, i))) % (n - i));
+            (candidates[i], candidates[j]) = (candidates[j], candidates[i]);
+            picked[i] = candidates[i];
+        }
+    }
+
+    /// @dev Rejection sampling by holder index, in gas bounded by `jurySize * MAX_DRAWS_PER_SEAT`.
+    ///      Returns the members found so far (fewer than `jurySize` if the draws ran out).
+    function _sample(address claimant, uint256 seed) private view returns (address[] memory picked, uint256 found) {
+        uint256 n = registry.holderCount();
+        uint256 maxDraws = uint256(jurySize) * MAX_DRAWS_PER_SEAT;
+        picked = new address[](jurySize);
+        for (uint256 draw = 0; draw < maxDraws && found < jurySize; draw++) {
+            address candidate = registry.holderAt(uint256(keccak256(abi.encode(seed, draw))) % n);
+            if (candidate == claimant || !_isEligible(candidate)) continue;
+            bool seated;
+            for (uint256 i = 0; i < found; i++) {
+                if (picked[i] == candidate) {
+                    seated = true;
+                    break;
+                }
+            }
+            if (!seated) picked[found++] = candidate;
+        }
+        if (found < jurySize) {
+            assembly {
+                mstore(picked, found)
+            }
+        }
+    }
+
+    function _isEligible(address member) private view returns (bool) {
+        return pool.stakeOf(member) >= minStake && registry.isPastWaitingPeriod(member);
     }
 
     /// @notice Policyholders who may be picked for a jury on `claimant`'s claim: past their waiting

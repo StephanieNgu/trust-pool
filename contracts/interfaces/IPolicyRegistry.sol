@@ -33,4 +33,6 @@ interface IPolicyRegistry {
     function isActive(address holder) external view returns (bool);
     function isPastWaitingPeriod(address holder) external view returns (bool);
     function eligibleJurors(address exclude) external view returns (address[] memory);
+    function holderCount() external view returns (uint256);
+    function holderAt(uint256 index) external view returns (address);
 }

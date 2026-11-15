@@ -253,6 +253,12 @@ contract PolicyRegistry is IPolicyRegistry, Ownable {
         return _holders.length;
     }
 
+    /// @notice The `index`-th wallet that ever bought a policy (in purchase order). Lets the jury
+    ///         draw sample members without copying the whole list.
+    function holderAt(uint256 index) external view returns (address) {
+        return _holders[index];
+    }
+
     /// @notice Wallets whose policies are past their grace period but not yet closed; the keeper
     ///         calls `lapseOverdue` on each.
     /// @dev O(n) over all holders, like `eligibleJurors`.
