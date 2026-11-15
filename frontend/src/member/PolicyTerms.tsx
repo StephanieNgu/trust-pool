@@ -44,7 +44,7 @@ export function PolicyTerms({ onFileClaim, onGetCoverage }: Props) {
       <span className="eyebrow">AT A GLANCE</span>
       <dl className="terms-facts">
         <div><dt>Monthly premium</dt><dd>{percent(p.premiumBps)} of your cover</dd><small>{examplePremium !== null ? `${examplePremium.toLocaleString("en-US", { maximumFractionDigits: 2 })} ${symbol} a month on 1,000 of cover` : ""}</small></div>
-        <div><dt>Most cover per device</dt><dd>{money(p.maxCoverageLimit)}</dd><small>You choose the amount at signup</small></div>
+        <div><dt>Most cover per device</dt><dd>{money(p.maxCoverageLimit)}</dd><small>You choose the amount at signup. It is the total all claims on the device can pay, not a per-claim amount</small></div>
         <div><dt>Waiting period</dt><dd>{days(p.waitingPeriod)}</dd><small>From signup until you can claim</small></div>
         <div><dt>Grace period</dt><dd>{days(p.gracePeriod)}</dd><small>To pay a missed premium and stay covered</small></div>
         <div><dt>Most one claim can take</dt><dd>{percent(p.maxPayoutBps)} of the pool</dd><small>So one claim can't empty it</small></div>
@@ -91,6 +91,7 @@ export function PolicyTerms({ onFileClaim, onGetCoverage }: Props) {
         <li>Miss a premium and you stay covered for the {days(p.gracePeriod)} grace period. After that the policy ends, and coming back means signing up again with new photos.</li>
         <li>You can cancel at any time when no claim is open. Premiums already paid stay in the pool.</li>
         <li>One open claim per policy at a time.</li>
+        <li>Your cover is a lifetime total for the device: each payout is taken off what is left, and a new claim can ask for at most the rest. Cancelling and signing the same device up again does not reset it. Earlier claims on the device are shown to the jury.</li>
       </ul>
     </section>
 

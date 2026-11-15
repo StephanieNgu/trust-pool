@@ -240,11 +240,11 @@ needed. The Vite dev server proxies `/api` to the backend, so the frontend can c
 | `GET /api/health` | Chain id, block number, keeper status |
 | `GET /api/config` | Contract addresses, protocol parameters, token symbol and decimals |
 | `GET /api/pool` | Reserve balance (excluding jurors' stakes, claim bonds and money reserved for offered claims), `totalReserved`, per-claim cap, totals including stakes, juror fees, penalties and bonds, the claim bond rate and minimum, policy and claim counts |
-| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), how many other members could sit on a jury for this wallet's claim (`jury: { available, required }`; a claim cannot be filed below `required`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below) |
+| `GET /api/members/:address` | Wallet balance, contributions, juror stake (`juror: { stake, minStake, activeJuries, staked }`), how many other members could sit on a jury for this wallet's claim (`jury: { available, required }`; a claim cannot be filed below `required`), policy, claim-eligible date, open claim, whether the policy is `covered` now, and its `premium` schedule (below); the policy also carries `paidOnDevice` and `remainingCoverage` (lifetime cover left on the device) |
 | `GET /api/members/:address/history` | The member's account history from contract events, newest first: `{ history: [{ id, kind, title, amount, direction, claimId, txHash, blockNumber, logIndex, at }] }`. `kind` is `coverage`, `premium`, `lapse`, `contribution`, `stake`, `unstake`, `fee`, `penalty`, `bond`, `bondReturn`, `claim` or `payout`; `direction` is `in` (to the wallet), `out` or null. Premiums are listed once, not again as contributions |
 | `GET /api/members/:address/premium` | Just the premium schedule, light enough to poll for reminders: `{ premium: { status, amount, period, paidThrough, dueAt, graceEndsAt, secondsUntilDue, dueSoon, canPay, asOf } }`, or `{ premium: null }` without a policy. `status` is `Paid`, `Grace` (missed, still covered until `graceEndsAt`), `Overdue` (not covered; the keeper will close it) or `Lapsed`. `dueSoon` is true within 7 days of `dueAt` or once missed |
 | `GET /api/claims?claimant=&juror=&state=` | Claims, newest first; `juror=` gives a juror their queue |
-| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, the `bond` (amount, and once decided what was returned and forfeited), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?), the `receipt` (deadline, hash, total) with `receiptFile` and `receiptCheck` (does the total match, is it dated after the claim?) |
+| `GET /api/claims/:id` | Claim, jury (jurors, who has committed and revealed, each revealed amount, the median `award`, deadlines), `offerDeadline` while an offer is open, the `bond` (amount, and once decided what was returned and forfeited), evidence and signup-photo links, and `deviceCheck` (do the IMEIs or serials match?), the `receipt` (deadline, hash, total) with `receiptFile` and `receiptCheck` (does the total match, is it dated after the claim?); `deviceIdHash` and `earlierClaims` (every earlier claim on the same device: id, claimant, state, amount, paid, date and an evidence link) |
 | `POST /api/claims/:id/notes` 🔒 | A juror's note `{ note }` (up to 500 characters), sent before sealing the vote; returns the `noteHash` to seal. Jurors of the claim only, while voting and before they commit |
 | `GET /api/claims/:id/notes/mine` 🔒 | The notes this juror saved for the claim, each with its `noteHash`, so a juror without the browser copy of their sealed vote only has to re-enter the amount to reveal. The juror only |
 | `GET /api/claims/:id/votes` 🔒 | Each revealed juror's `amount` and `note`. Only the claimant and the claim's jurors |
@@ -267,7 +267,10 @@ for 10 minutes. The frontend signs once to open a session; scripts can keep usin
 Claims can end `Paid`, `Rejected` (most jurors voted 0, a tie, or fewer than 3 votes; the API's
 `jury.outcomeReason` says which), `Withdrawn` (the claimant turned the offer down) or `Cancelled`
 (randomness never arrived). The offer is fixed when voting ends: the median juror amount, capped by
-the coverage limit and the pool's per-claim cap. The keeper accepts an offer the claimant has not
+the coverage left on the device and the pool's per-claim cap. Coverage is a lifetime total per device:
+each payout is taken off what is left (`ClaimManager.remainingCoverage`), and cancelling and
+re-buying cover for the same device does not reset it. Each claim page lists the device's earlier
+claims, and while a claim is in Voting its jurors can open their evidence. The keeper accepts an offer the claimant has not
 answered once its deadline passes, then pays it.
 
 Premiums are monthly. Buying a policy pays the first 30 days; `PolicyRegistry.payPremium()` pays the
@@ -278,6 +281,12 @@ longer counts as active (no new claims, no jury duty), and the keeper calls the 
 is decided.
 
 Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
+
+Images that look AI-generated are rejected (HTTP 422) for every kind of evidence. The backend
+always checks image metadata for generator marks: Content Credentials / IPTC "trained algorithmic
+media" labels, Stable Diffusion settings in PNG text chunks, and generator names such as Midjourney
+or DALL-E. Metadata is easy to strip, so for pixel-level detection point `AI_DETECTOR_URL` at a
+classifier service that takes the image bytes as the POST body and answers `{ "aiProbability": 0..1 }`.
 
 | Variable | Default | |
 |---|---|---|
@@ -290,6 +299,9 @@ Up to 10 files of 5 MB each (JPEG, PNG, WebP, GIF, HEIC or PDF) per claim.
 | `ACCOUNTS_DIR` | `data/accounts` | Sign-in sessions and member profiles |
 | `CORS_ORIGIN` | `*` | |
 | `LOG_BLOCK_RANGE` | unset (no limit) | Most blocks per `eth_getLogs` call. Set it on Sepolia to your RPC's cap (Alchemy free tier: `10`) |
+| `AI_DETECTOR_URL` | unset | Optional AI-image classifier; unset runs only the metadata check |
+| `AI_DETECTOR_API_KEY` | unset | Sent as a bearer token to the classifier |
+| `AI_DETECTOR_THRESHOLD` | `0.8` | Classifier probability at or above which an image is rejected |
 | `KEEPER_ENABLED` | `true` | |
 | `KEEPER_PRIVATE_KEY` | unset | Required off the local chain |
 | `KEEPER_INTERVAL_MS` | `5000` | |
@@ -309,7 +321,7 @@ The on-chain protocol from [`docs/design-doc.md`](docs/design-doc.md) lives in `
 | `JuryModule` | Requests randomness, picks 5 staked jurors (claimant excluded), runs commit-reveal amount voting, takes the median, pays agreeing jurors and penalizes no-shows | No |
 | `VRFRandomness` | Chainlink VRF v2.5 randomness provider behind `IRandomnessProvider`. No owner; immutable coordinator. Locally it talks to Chainlink's `VRFCoordinatorV2_5Mock`, on Sepolia to the real coordinator. See [docs/vrf.md](docs/vrf.md) | No |
 
-Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 1.5% premium per 30-day period (the first paid on purchase), 7-day grace period after a missed premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` sets the waiting period to zero on the local Hardhat chain and on Sepolia so claim flows can be tried immediately; tests and other deployments keep the 7-day default. The test suites pin a 5% premium to keep their amounts round.
+Prototype defaults (in `scripts/lib/deployContracts.js`): 7-day waiting period, 1.5% premium per 30-day period (the first paid on purchase), 7-day grace period after a missed premium, 2,000 mUSDC max coverage, 20% per-claim pool cap, jury of 5, quorum of 3, 2-day commit window then 1-day reveal window, 1-day randomness timeout, 2 days for the claimant to answer the offer, 20 mUSDC juror stake, juror fee 2% of the claim (minimum 2 mUSDC), agreement band 10% of the claim, 5 mUSDC no-show penalty, claim bond 5% of the claim (minimum 5 mUSDC), 30 days to submit the receipt. `scripts/deploy.js` sets the waiting period to zero on the local Hardhat chain so claim flows can be tried immediately. On Sepolia it uses `TESTNET_PARAMS` instead: no waiting period, a jury of 3 with quorum 2, 15-minute commit, reveal and offer-response windows, a 1-hour randomness timeout and a 1-day receipt window, because a public chain can't fast-forward time. Tests and other deployments keep the defaults. To host the app on Sepolia, see [docs/deployment.md](docs/deployment.md). The test suites pin a 5% premium to keep their amounts round.
 
 **Voting is commit-reveal, on amounts.** Each juror votes the amount they think the claim should pay,
 from 0 (reject) up to the amount asked. A juror first calls `commitVote(claimId, commitment)` with

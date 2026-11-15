@@ -2,5 +2,10 @@
   "function balanceOf(address account) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
-  "function decimals() view returns (uint8)"
+  "function decimals() view returns (uint8)",
+  "function faucet()",
+  "function lastFaucetAt(address account) view returns (uint256)",
+  "function FAUCET_AMOUNT() view returns (uint256)",
+  "function FAUCET_COOLDOWN() view returns (uint256)",
+  "error FaucetCooldown(uint256 availableAt)"
 ]

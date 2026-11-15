@@ -20,6 +20,8 @@ import {
   verifyDeviceSignature,
   type DeviceKey,
 } from "../src/evidence";
+import type { AiImageDetector } from "../src/aiDetection";
+import { aiJpeg, cameraJpeg, png } from "./imageFixtures";
 
 const ALICE = "0x00000000000000000000000000000000000000A1";
 const BOB = "0x00000000000000000000000000000000000000B0";
@@ -231,6 +233,45 @@ describe("LocalEvidenceStore", async () => {
     for (const name of notes) assert.ok(!(await readFile(join(dir, "notes", name))).includes("screen"));
     await assert.rejects(store.putNote(7, BOB, "  "), EvidenceError);
     await assert.rejects(store.putNote(7, BOB, "x".repeat(501)), EvidenceError);
+  });
+
+  it("rejects evidence with an AI-generated image, for every kind of bundle", async () => {
+    const photo = (bytes: Buffer, name: string) => ({ name, contentType: "image/jpeg", data: bytes.toString("base64") });
+    const isAiRejection = (index: number) => (err: unknown) =>
+      err instanceof EvidenceError && err.status === 422 && err.message.startsWith(`files[${index}]`) && /AI-generated/.test(err.message);
+
+    // A claim with one real photo and one generated one is refused as a whole, and nothing is kept.
+    const real = cameraJpeg();
+    const fake = aiJpeg();
+    const before = await readdir(dir, { recursive: true });
+    await assert.rejects(store.put({ event: "screen", files: [photo(real, "front.jpg"), photo(fake, "back.jpg")] }, ALICE), isAiRejection(1));
+    assert.deepEqual(await readdir(dir, { recursive: true }), before, "a rejected upload leaves no trace");
+    // So the real photo was not used up and can go in a fresh upload.
+    assert.equal((await store.put({ event: "screen", files: [photo(real, "front.jpg")] }, ALICE)).files.length, 1);
+
+    // Signup photos and receipts are screened too.
+    const device = { type: "camera", serial: "AI1", make: "M", model: "X", color: "Black" };
+    await assert.rejects(store.put({ kind: "enrollment", device, files: [photo(aiJpeg(), "phone.jpg")] }, ALICE), isAiRejection(0));
+    const receipt = { claimId: "9", shop: "Fix-It Phones", total: "1", date: "2026-11-01" };
+    const sdInvoice = { name: "invoice.png", contentType: "image/png", data: png([["parameters", "a repair invoice"]]).toString("base64") };
+    await assert.rejects(store.put({ kind: "receipt", receipt, files: [sdInvoice] }, ALICE), isAiRejection(0));
+
+    // A PDF receipt is a document, not a photo, so it is not screened.
+    const pdf = { name: "invoice.pdf", contentType: "application/pdf", data: Buffer.from("%PDF Midjourney Inc. invoice").toString("base64") };
+    assert.equal((await store.put({ kind: "receipt", receipt, files: [pdf] }, ALICE)).kind, "receipt");
+  });
+
+  it("uses the configured AI detectors", async () => {
+    const seen: string[] = [];
+    const classifier: AiImageDetector = {
+      name: "classifier",
+      inspect: async (f) => (seen.push(f.name), f.name === "render.jpg" ? { detector: "classifier", reason: "the pixels look generated" } : null),
+    };
+    const screened = new LocalEvidenceStore(dir, key, { aiDetectors: [classifier] });
+    const photo = (name: string) => ({ name, contentType: "image/jpeg", data: cameraJpeg().toString("base64") });
+    await assert.rejects(screened.put({ files: [photo("render.jpg")] }, ALICE), /the pixels look generated/);
+    await screened.put({ files: [photo("ok.jpg")] }, ALICE);
+    assert.deepEqual(seen, ["render.jpg", "ok.jpg"]);
   });
 
   it("returns null for unknown or malformed hashes", async () => {

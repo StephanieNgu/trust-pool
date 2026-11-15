@@ -28,6 +28,9 @@
 //     its capture code with it, so jurors can see the claim came from the insured device.
 //   - Proof of purchase: signup may include an invoice or carrier bill naming the device.
 //
+// No AI images. Every image in a bundle of any kind is screened before it is stored (see
+// aiDetection.ts); one that looks AI-generated gets the whole upload refused with a 422.
+//
 // The store also keeps jurors' notes: the short reasoning a juror gives with the amount they vote.
 // Only the note's keccak256 goes into the sealed vote on-chain; the text is stored here, encrypted
 // like the bundles, and shown to the claimant and the other jurors once that juror reveals.
@@ -35,6 +38,7 @@ import { createCipheriv, createDecipheriv, createHmac, createPublicKey, randomBy
 import { access, chmod, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getBytes, keccak256, toUtf8Bytes } from "ethers";
+import { findAiGeneratedImage, MetadataAiDetector, type AiImageDetector } from "./aiDetection";
 import type { CaptureStamp } from "./capture";
 
 export const BUNDLE_VERSION = 2;
@@ -546,18 +550,45 @@ export async function loadOrCreateKeyFile(file: string): Promise<{ key: Buffer; 
   return { key, created: true };
 }
 
+export interface EvidenceStoreOptions {
+  /**
+   * Checks run on every image before it is stored. Defaults to the offline metadata check; the
+   * server adds a classifier service when AI_DETECTOR_URL is set.
+   */
+  aiDetectors?: readonly AiImageDetector[];
+}
+
 /** Content-addressed, encrypted evidence store on the local filesystem. */
 export class LocalEvidenceStore {
   private readonly key: Buffer;
+  private readonly aiDetectors: readonly AiImageDetector[];
   /** Bundles never change once stored, so their summaries are cached rather than decrypted on every view. */
   private readonly summaryCache = new Map<string, EvidenceSummary>();
 
   constructor(
     readonly dir: string,
     key: Buffer,
+    options: EvidenceStoreOptions = {},
   ) {
     if (key.length !== KEY_BYTES) throw new Error(`Evidence key must be ${KEY_BYTES} bytes.`);
     this.key = key;
+    this.aiDetectors = options.aiDetectors ?? [new MetadataAiDetector()];
+  }
+
+  /**
+   * Refuses a bundle with an image that looks AI-generated. Runs before anything is written, so a
+   * refused photo is not recorded as used and leaves no trace in the store.
+   */
+  private async rejectAiImages(bundle: StoredBundle): Promise<void> {
+    const files = bundle.files.map((f) => ({ name: f.name, contentType: f.contentType, data: Buffer.from(f.data, "base64") }));
+    const hit = await findAiGeneratedImage(files, this.aiDetectors);
+    if (hit) {
+      throw new EvidenceError(
+        `files[${hit.index}] (${files[hit.index].name}) was rejected: ${hit.finding.reason}. ` +
+          "Evidence must be real photos taken with a camera, not AI-generated images.",
+        422,
+      );
+    }
   }
 
   private pathFor(evidenceHash: string): string {
@@ -626,6 +657,7 @@ export class LocalEvidenceStore {
     const evidenceHash = hashBundle(bytes);
     await mkdir(this.dir, { recursive: true });
     const bundle = JSON.parse(bytes.toString("utf8")) as StoredBundle;
+    await this.rejectAiImages(bundle);
     await this.claimReceiptFiles(bundle);
     await this.claimPhotoFiles(bundle, evidenceHash);
     if (!(await this.has(evidenceHash))) {

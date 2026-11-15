@@ -22,6 +22,7 @@ const { USDC, EVIDENCE, RECEIPT, deviceHash, enrollmentHash, fulfillRandomness, 
 //  I5  Sum of stakeOf over all members = totalStaked.
 //  I6  totalPaidOut = sum of paidAmount over Paid claims, and each payout <= its ask <= its coverage.
 //  I7  Paid out + juror fees <= everything that joined the reserve (no money from nowhere).
+//  I10 Payouts on each device add up to paidOnDevice and never exceed the coverage limit in total.
 //  I9  The offers and approved claims still outstanding can all be paid at once from the reserve.
 //  I8  executePayout on an Approved claim with its receipt in never fails for lack of funds.
 
@@ -106,6 +107,7 @@ async function checkInvariants(ctx, label) {
   let reservedSum = 0n;
   let promised = 0n;
   let paidSum = 0n;
+  const paidByDevice = new Map();
   for (let id = 1n; id <= count; id++) {
     const c = await claimManager.getClaim(id);
     const r = await claimManager.reservedFor(id);
@@ -119,12 +121,18 @@ async function checkInvariants(ctx, label) {
     }
     if (c.state === ClaimState.Paid) {
       paidSum += c.paidAmount;
+      const device = await claimManager.deviceOfClaim(id);
+      paidByDevice.set(device, (paidByDevice.get(device) ?? 0n) + c.paidAmount);
       expect(c.paidAmount <= c.amount && c.amount <= c.coverageLimit, `${label}: I6 claim ${id} bounds`).to.equal(true);
     }
   }
   expect(reservedSum, `${label}: I3 reservations add up`).to.equal(reserved);
   expect(promised <= held - staked - bonded, `${label}: I9 every outstanding offer can be paid together`).to.equal(true);
   expect(paidSum, `${label}: I6 payouts add up`).to.equal(paidOut);
+  for (const [device, paid] of paidByDevice) {
+    expect(await claimManager.paidOnDevice(device), `${label}: I10 device ledger`).to.equal(paid);
+    expect(paid <= COVERAGE, `${label}: I10 lifetime payouts on a device stay within its cover`).to.equal(true);
+  }
 
   let stakeSum = 0n;
   for (const s of everyone) stakeSum += await pool.stakeOf(s.address);

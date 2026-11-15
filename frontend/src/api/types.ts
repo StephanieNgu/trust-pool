@@ -94,6 +94,10 @@ export interface MemberPolicy {
   /** Hash of the enrollment bundle: device details and the photos taken at signup. */
   enrollmentHash: string;
   coverageLimit: string;
+  /** Coverage is a lifetime limit per device: everything paid on this device's claims so far. */
+  paidOnDevice: string;
+  /** What a new claim may still ask for: the limit minus `paidOnDevice`. */
+  remainingCoverage: string;
   startTime: number;
   status: "Active" | "Lapsed";
   /** Covered right now: open, with premiums paid or in their grace period. */
@@ -174,6 +178,8 @@ export interface ClaimView {
   evidenceHash: string;
   /** The enrollment bundle of the policy this claim was filed on, or null if it is no longer on-chain. */
   enrollmentHash: string | null;
+  /** The insured device's hash, shared by every claim filed for it. */
+  deviceIdHash: string | null;
   state: ClaimState;
   submittedAt: number;
   /** While Offered: when the time to accept or withdraw ends. Silence then counts as accepting. */
@@ -225,6 +231,22 @@ export interface ClaimDetailView extends ClaimView {
     /** The invoice is dated on or after the day the claim was filed. */
     datedAfterClaim: boolean | null;
   };
+  /**
+   * Earlier claims on the same device, newest first. Jurors can open their evidence while this claim
+   * is in Voting, to check the same damage is not being claimed twice.
+   */
+  earlierClaims: EarlierClaim[];
+}
+
+export interface EarlierClaim {
+  id: string;
+  claimant: string;
+  state: ClaimState;
+  amount: string;
+  paidAmount: string;
+  submittedAt: number;
+  evidenceHash: string;
+  evidence: { available: boolean; url: string | null };
 }
 
 export interface EvidenceFileInfo {

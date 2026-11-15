@@ -64,6 +64,8 @@ export interface ClaimView {
   evidenceHash: string;
   /** The enrollment bundle of the policy the claim was filed on: the device as it was at signup. */
   enrollmentHash: string | null;
+  /** The insured device's hash, which ties together every claim ever filed for it. */
+  deviceIdHash: string | null;
   state: ClaimState;
   submittedAt: number;
   /** While Offered: when the claimant's time to accept or withdraw ends; silence then accepts. */
@@ -108,10 +110,11 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
   const state = CLAIM_STATES[Number(claim.state)];
   if (state === "None") return null;
 
-  const [jury, payoutAmount, policy] = await Promise.all([
+  const [jury, payoutAmount, policy, device] = await Promise.all([
     getJuryView(c, claimId),
     c.claimManager.payoutAmount(claimId),
     c.registry.getPolicy(claim.claimant),
+    c.claimManager.deviceOfClaim(claimId) as Promise<string>,
   ]);
   // A claim keeps its policy open, so the holder's current policy is the claim's unless it has since
   // been closed and replaced; then the original enrollment is no longer on-chain.
@@ -124,6 +127,7 @@ export async function getClaimView(c: ProtocolContracts, claimId: number): Promi
     coverageLimit: claim.coverageLimit.toString(),
     evidenceHash: claim.evidenceHash,
     enrollmentHash,
+    deviceIdHash: device === ZERO_HASH ? null : device,
     state,
     submittedAt: Number(claim.submittedAt),
     offerDeadline: state === "Offered" ? Number(claim.offerDeadline) : null,
@@ -345,7 +349,14 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
     c.jury.jurySize() as Promise<bigint>,
   ]);
   const status = POLICY_STATUSES[Number(policy.status)];
-  const openClaimId = status === "None" ? 0n : await c.claimManager.openClaimOfPolicy(policy.id);
+  const [openClaimId, remainingCoverage, paidOnDevice] =
+    status === "None"
+      ? [0n, 0n, 0n]
+      : await Promise.all([
+          c.claimManager.openClaimOfPolicy(policy.id) as Promise<bigint>,
+          c.claimManager.remainingCoverage(address) as Promise<bigint>,
+          c.claimManager.paidOnDevice(policy.deviceIdHash) as Promise<bigint>,
+        ]);
   return {
     address,
     balance: balance.toString(),
@@ -371,6 +382,13 @@ export async function getMemberView(c: ProtocolContracts, address: string) {
             deviceIdHash: policy.deviceIdHash,
             enrollmentHash: policy.enrollmentHash,
             coverageLimit: policy.coverageLimit.toString(),
+            /**
+             * Coverage is a lifetime limit per device: `paidOnDevice` is everything paid on claims for
+             * this device so far, under this or an earlier policy, and `remainingCoverage` is what a
+             * new claim may still ask for (the limit minus that).
+             */
+            paidOnDevice: paidOnDevice.toString(),
+            remainingCoverage: remainingCoverage.toString(),
             startTime: Number(policy.startTime),
             status,
             /**

@@ -1,6 +1,7 @@
 import { Contract, parseUnits } from "ethers";
 import { getBrowserProvider } from "../wallet";
 import { loadContracts } from "./contracts";
+import { deploymentFor } from "./deployments";
 
 const CLAIM_MANAGER_ABI = [
   "function submitClaim(uint256 amount, bytes32 evidenceHash) returns (uint256 claimId)",
@@ -21,7 +22,7 @@ function claimNumber(claimId: string): bigint {
 
 async function claimManagerFor(account: string) {
   const provider = getBrowserProvider();
-  if ((await provider.getNetwork()).chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
+  await deploymentFor(provider);
   const { deployment } = await loadContracts(provider);
   if (await provider.getCode(deployment.addresses.claimManager) === "0x") {
     throw new Error("ClaimManager is unavailable. Deploy the contracts and refresh.");
@@ -106,7 +107,7 @@ export async function submitClaim(
   if (units <= 0n) throw new Error("Enter a claim amount greater than zero.");
 
   const provider = getBrowserProvider();
-  if ((await provider.getNetwork()).chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
+  await deploymentFor(provider);
   const signer = await provider.getSigner(account);
   const { deployment, token } = await loadContracts(signer);
   if (await provider.getCode(deployment.addresses.claimManager) === "0x") {
