@@ -3,7 +3,7 @@
 //   npx hardhat run scripts/deploy.js --network sepolia          # once (see docs/vrf.md)
 //   npx hardhat run scripts/sepolia-vrf-demo.js --network sepolia
 //
-// The demo needs six members (a claimant plus five possible jurors). It makes throwaway wallets for
+// The demo uses six members (a claimant plus five possible jurors; Sepolia seats a jury of three). It makes throwaway wallets for
 // them, saves their keys to deployments/sepolia-demo-wallets.json (git-ignored) so later runs reuse
 // them, and funds each with a little Sepolia ETH from the deployer for gas. Members join, stake, and
 // one files a claim; the script then waits for Chainlink's oracle to answer. Nothing here can choose

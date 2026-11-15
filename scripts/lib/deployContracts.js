@@ -29,6 +29,22 @@ const DEFAULT_PARAMS = {
   receiptPeriod: 30 * DAY, // after accepting, the claimant uploads the repair or replacement receipt
 };
 
+/**
+ * Public-testnet parameters. Sepolia can't fast-forward time like the local chain, so the multi-day
+ * windows become minutes, and the jury is 3 (quorum 2) so a small team can seat one with real wallets.
+ */
+const TESTNET_PARAMS = {
+  waitingPeriod: 0,
+  commitPeriod: 15 * 60,
+  revealPeriod: 15 * 60,
+  responsePeriod: 15 * 60,
+  // Chainlink normally answers in 1 to 3 minutes; after an hour a stalled claim can be cancelled.
+  randomnessTimeout: 60 * 60,
+  receiptPeriod: 24 * 60 * 60,
+  jurySize: 3,
+  quorum: 2,
+};
+
 /** Chainlink VRF v2.5 request settings shared by every network. */
 const VRF_DEFAULTS = {
   // Seating a jury from 7 policyholders uses about 585k gas, and each extra policyholder adds a
@@ -149,4 +165,4 @@ async function deployContracts(overrides = {}, vrf = {}) {
   return { deployer, params, token, pool, registry, randomness, vrfCoordinator, vrf: vrfSettings, jury, claimManager };
 }
 
-module.exports = { deployContracts, DEFAULT_PARAMS, VRF_DEFAULTS, DAY, USDC };
+module.exports = { deployContracts, DEFAULT_PARAMS, TESTNET_PARAMS, VRF_DEFAULTS, DAY, USDC };

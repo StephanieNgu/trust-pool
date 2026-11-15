@@ -11,6 +11,8 @@ export interface Config {
   /** Sign-in sessions and member profiles. */
   accountsDir: string;
   corsOrigin: string;
+  /** Directory of the built web app to serve at /, or null to serve only the API. */
+  staticDir: string | null;
   /** Optional AI-image classifier service; null runs only the offline metadata check. */
   aiDetector: { url: string; apiKey: string | null; threshold: number } | null;
   keeper: {
@@ -53,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     evidenceKeyFile: resolve(env.EVIDENCE_KEY_FILE || "data/evidence.key"),
     accountsDir: resolve(env.ACCOUNTS_DIR || "data/accounts"),
     corsOrigin: env.CORS_ORIGIN || "*",
+    staticDir: env.STATIC_DIR ? resolve(env.STATIC_DIR) : null,
     aiDetector: env.AI_DETECTOR_URL
       ? {
           url: env.AI_DETECTOR_URL,

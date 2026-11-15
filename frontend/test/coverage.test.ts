@@ -188,7 +188,7 @@ describe("frontend coverage workflow", () => {
   it("explains a missing deployment or the wrong network instead of sending transactions", async () => {
     browser.deploymentAvailable = false;
     try {
-      await assert.rejects(quoteCoverage(account, "100"), /Local contract addresses are unavailable/);
+      await assert.rejects(quoteCoverage(account, "100"), /Contract addresses are unavailable/);
     } finally {
       browser.deploymentAvailable = true;
     }

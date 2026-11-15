@@ -3,8 +3,7 @@
 // and the Express backend. Only the browser is faked, with the smallest surface the modules touch:
 //
 //   window.ethereum   an EIP-1193 wallet backed by Hardhat's unlocked dev accounts (like MetaMask)
-//   fetch             relative URLs go to the backend; /deployments/localhost.json is served from the
-//                     test deployment, as the Vite plugin does
+//   fetch             relative URLs go to the backend, which also serves the deployment (/api/config)
 //   window, sessionStorage, localStorage, FileReader
 //
 // Nothing in the code under test is mocked, so a change on either side of the frontend/backend or
@@ -56,7 +55,7 @@ class TestFileReader {
 
 interface BrowserState {
   stack: Stack | null;
-  /** Serve /deployments/localhost.json; false makes it 404 like a missing local deployment. */
+  /** Serve the deployment from /api/config; false makes it 404 like a backend with no deployment. */
   deploymentAvailable: boolean;
   /** Report this chain id from the wallet instead of Hardhat's, to simulate a wrong network. */
   walletChainId: string | null;
@@ -95,10 +94,8 @@ function installBrowserGlobals() {
     if (!url.startsWith("/")) return nodeFetch(input, init);
     const stack = browser.stack;
     if (!stack) throw new Error("No test stack is running; call startStack() first.");
-    if (url.split("?")[0] === "/deployments/localhost.json") {
-      if (!browser.deploymentAvailable) return Response.json({ error: "not found" }, { status: 404 });
-      // `npm run deploy:local` writes network "localhost"; the frontend refuses anything else.
-      return Response.json({ ...stack.deployment, network: "localhost" });
+    if (url.split("?")[0] === "/api/config" && !browser.deploymentAvailable) {
+      return Response.json({ error: "not found" }, { status: 404 });
     }
     return nodeFetch(stack.baseUrl + url, init);
   };

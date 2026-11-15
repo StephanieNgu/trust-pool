@@ -1,17 +1,16 @@
 import { parseUnits } from "ethers";
 import { getBrowserProvider } from "../wallet";
 import { loadContracts } from "./contracts";
+import { deploymentFor } from "./deployments";
 
 async function session(account: string) {
   const provider = getBrowserProvider();
-  if ((await provider.getNetwork()).chainId !== 31337n) {
-    throw new Error("Switch to Hardhat Local (31337) to continue.");
-  }
+  await deploymentFor(provider);
   const signer = await provider.getSigner(account);
   const contracts = await loadContracts(signer);
   for (const address of [contracts.deployment.addresses.token, contracts.deployment.addresses.pool, contracts.deployment.addresses.registry]) {
     if (await provider.getCode(address) === "0x") {
-      throw new Error("Local contracts are unavailable. Deploy the contracts and refresh.");
+      throw new Error("The contracts are unavailable on this network. Deploy them and refresh.");
     }
   }
   return contracts;
@@ -140,5 +139,25 @@ export async function payPremium(account: string, progress: (message: string) =>
   progress("Your premium payment is confirming on-chain…");
   const receipt = await transaction.wait();
   if (!receipt || receipt.status !== 1) throw new Error("The premium payment did not succeed.");
+  return transaction.hash as string;
+}
+
+/**
+ * Draws test mUSDC from MockStablecoin's public faucet (1,000 mUSDC, once a day per wallet). Only
+ * offered on public testnets, where nobody pre-funds members the way the local deploy does.
+ */
+export async function claimTestTokens(account: string, progress: (message: string) => void): Promise<string> {
+  const { token } = await session(account);
+  const [last, cooldown]: [bigint, bigint] = await Promise.all([token.lastFaucetAt(account), token.FAUCET_COOLDOWN()]);
+  const latest = await token.runner?.provider?.getBlock("latest");
+  const now = BigInt(latest?.timestamp ?? Math.floor(Date.now() / 1000));
+  if (last !== 0n && now < last + cooldown) {
+    throw new Error(`This wallet already used the faucet today. Try again after ${new Date(Number(last + cooldown) * 1000).toLocaleString()}.`);
+  }
+  progress("Confirm the faucet transaction in your wallet.");
+  const transaction = await token.faucet();
+  progress("Your test mUSDC is on its way…");
+  const receipt = await transaction.wait();
+  if (!receipt || receipt.status !== 1) throw new Error("The faucet transaction did not succeed.");
   return transaction.hash as string;
 }

@@ -1,6 +1,6 @@
 import { AbiCoder, Contract, ZeroHash, getAddress, keccak256, toUtf8Bytes } from "ethers";
 import { getBrowserProvider } from "../wallet";
-import { loadLocalDeployment } from "./deployments";
+import { deploymentFor } from "./deployments";
 
 const JURY_ABI = [
   "function commitVote(uint256 claimId, bytes32 commitment)",
@@ -15,8 +15,7 @@ function claimNumber(claimId: string): bigint {
 
 async function jurySession(account: string, write = false) {
   const provider = getBrowserProvider();
-  if ((await provider.getNetwork()).chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
-  const deployment = await loadLocalDeployment();
+  const deployment = await deploymentFor(provider);
   if (await provider.getCode(deployment.addresses.jury) === "0x") {
     throw new Error("JuryModule is unavailable. Deploy the contracts and refresh.");
   }
@@ -53,8 +52,7 @@ export function computeVoteCommitment(claimId: string, juror: string, amount: bi
 export async function deriveVoteSalt(account: string, claimId: string): Promise<string> {
   const provider = getBrowserProvider();
   const network = await provider.getNetwork();
-  if (network.chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
-  const deployment = await loadLocalDeployment();
+  const deployment = await deploymentFor(provider);
   const juror = getAddress(account);
   const message = [
     "TrustPool private jury salt",

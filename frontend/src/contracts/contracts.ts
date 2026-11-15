@@ -2,10 +2,10 @@ import { Contract, type ContractRunner } from "ethers";
 import mockStablecoinAbi from "./abis/MockStablecoin.json";
 import policyRegistryAbi from "./abis/PolicyRegistry.json";
 import poolAbi from "./abis/Pool.json";
-import { loadLocalDeployment } from "./deployments";
+import { loadDeployment } from "./deployments";
 
 export async function loadContracts(runner: ContractRunner) {
-  const deployment = await loadLocalDeployment();
+  const deployment = await loadDeployment();
 
   return {
     deployment,

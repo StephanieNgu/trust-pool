@@ -11,7 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const { ethers, network } = require("hardhat");
-const { deployContracts, USDC } = require("./lib/deployContracts");
+const { deployContracts, TESTNET_PARAMS, USDC } = require("./lib/deployContracts");
 
 const LOCAL_NETWORKS = ["hardhat", "localhost"];
 
@@ -66,9 +66,9 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   const vrf = local ? null : await publicVrfSettings(deployer);
 
-  // Keep the production/default rule at seven days, but remove the wait from local UI testing and
-  // from testnet demos, so a claim can be filed straight after joining.
-  const overrides = local || network.name === "sepolia" ? { waitingPeriod: 0 } : {};
+  // Keep the production/default rules, but remove the waiting period from local UI testing, and on a
+  // testnet also shorten every window so a full claim (jury, votes, offer) fits in a demo.
+  const overrides = local ? { waitingPeriod: 0 } : network.name === "sepolia" ? TESTNET_PARAMS : {};
   const ctx = await deployContracts(overrides, vrf ? vrf.settings : {});
   const { chainId } = await ethers.provider.getNetwork();
 
@@ -104,6 +104,13 @@ async function main() {
     await (await ctx.token.mint(treasury.address, POOL_SEED)).wait();
     await (await ctx.token.connect(treasury).approve(await ctx.pool.getAddress(), POOL_SEED)).wait();
     await (await ctx.pool.connect(treasury).contribute(POOL_SEED)).wait();
+  } else if (network.name === "sepolia") {
+    // Seed the testnet pool from the deployer too, so the first claims can be paid. Members get their
+    // own test mUSDC from the token's public faucet in the app.
+    await (await ctx.token.mint(deployer.address, POOL_SEED)).wait();
+    await (await ctx.token.approve(await ctx.pool.getAddress(), POOL_SEED)).wait();
+    await (await ctx.pool.contribute(POOL_SEED)).wait();
+    console.log(`Seeded the pool with ${ethers.formatUnits(POOL_SEED, 6)} mUSDC.`);
   }
 
   const params = Object.fromEntries(Object.entries(ctx.params).map(([k, v]) => [k, v.toString()]));

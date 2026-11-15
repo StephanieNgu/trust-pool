@@ -392,6 +392,11 @@
 .profile-sync-status .text-button { padding: 0; font-size: 9px; }
 .contribution-confirm > div { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
 
+/* Testnet faucet notice: copy on the left, button on the right. */
+.testnet-faucet{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.testnet-faucet p{margin:6px 0 0}
+.testnet-faucet .text-button{white-space:nowrap}
+
 /* Earlier claims on the same device, shown on the claim detail. */
 .earlier-claim-list { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid #e6ebf3; border-radius: 10px; overflow: hidden; }
 .earlier-claim { padding: 11px 12px; border-bottom: 1px solid #edf1f6; }
