@@ -62,11 +62,12 @@ async function main() {
   }
   const evidence = new LocalEvidenceStore(config.evidenceDir, evidenceKey);
   const accounts = new AccountStore(config.accountsDir);
-  const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin });
+  const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin, staticDir: config.staticDir });
 
   const server = app.listen(config.port, () => {
     console.log(`TrustPool backend on http://localhost:${config.port} (chain ${chainId}, ${config.rpcUrl})`);
     console.log(`Evidence stored encrypted in ${config.evidenceDir}`);
+    if (config.staticDir) console.log(`Serving the web app from ${config.staticDir}`);
     if (keeper) {
       const s = keeper.status();
       console.log(

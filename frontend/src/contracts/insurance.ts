@@ -2,14 +2,15 @@ import { ZeroHash, formatUnits, isHexString, parseUnits } from "ethers";
 import { deviceIdHash, validateDeviceDetails, type DeviceDetails } from "../api";
 import { getBrowserProvider } from "../wallet";
 import { loadContracts } from "./contracts";
+import { deploymentFor } from "./deployments";
 
 async function session(account: string, write = false) {
   const provider = getBrowserProvider();
-  if ((await provider.getNetwork()).chainId !== 31337n) throw new Error("Switch to Hardhat Local (31337) to continue.");
+  await deploymentFor(provider);
   const signer = await provider.getSigner(account);
   const contracts = await loadContracts(write ? signer : provider);
   for (const address of [contracts.deployment.addresses.token, contracts.deployment.addresses.pool, contracts.deployment.addresses.registry]) {
-    if (await provider.getCode(address) === "0x") throw new Error("Local contracts are unavailable. Deploy the contracts and refresh.");
+    if (await provider.getCode(address) === "0x") throw new Error("The contracts are unavailable on this network. Deploy them and refresh.");
   }
   return contracts;
 }

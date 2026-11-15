@@ -11,6 +11,8 @@ export interface Config {
   /** Sign-in sessions and member profiles. */
   accountsDir: string;
   corsOrigin: string;
+  /** Directory of the built web app to serve at /, or null to serve only the API. */
+  staticDir: string | null;
   keeper: {
     enabled: boolean;
     /** Signs keeper transactions. Unset on a local chain means "use the deployer's unlocked account". */
@@ -44,6 +46,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     evidenceKeyFile: resolve(env.EVIDENCE_KEY_FILE || "data/evidence.key"),
     accountsDir: resolve(env.ACCOUNTS_DIR || "data/accounts"),
     corsOrigin: env.CORS_ORIGIN || "*",
+    staticDir: env.STATIC_DIR ? resolve(env.STATIC_DIR) : null,
     keeper: {
       enabled: flag(env.KEEPER_ENABLED, true),
       privateKey: env.KEEPER_PRIVATE_KEY || null,

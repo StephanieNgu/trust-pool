@@ -1,0 +1,26 @@
+# Render Blueprint: New > Blueprint in the Render dashboard, pick this repository.
+# Secrets marked `sync: false` are asked for once in the dashboard and never stored in the repo.
+# See docs/deployment.md.
+services:
+  - type: web
+    name: trustpool
+    runtime: docker
+    plan: starter # a persistent disk needs a paid plan; evidence and sign-ins live on it
+    branch: main
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: trustpool-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DEPLOYMENT_FILE
+        value: /app/deployments/sepolia.json
+      - key: KEEPER_INTERVAL_MS
+        value: "60000"
+      - key: RPC_URL
+        sync: false # Alchemy/Infura Sepolia HTTPS endpoint
+      - key: KEEPER_PRIVATE_KEY
+        sync: false # throwaway wallet with ~0.05 Sepolia ETH; never the deployer's key
+      - key: EVIDENCE_ENCRYPTION_KEY
+        sync: false # openssl rand -hex 32; losing it makes stored evidence unreadable

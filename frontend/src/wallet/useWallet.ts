@@ -44,6 +44,16 @@ export function useWallet() {
     }
   }, [applySnapshot]);
 
+  /** Asks MetaMask to switch to `chainIdHex`. MetaMask already knows Sepolia, so no chain details are needed. */
+  const switchChain = useCallback(async (chainIdHex: string) => {
+    if (!ethereum) return;
+    try {
+      await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainIdHex }] });
+    } catch (error) {
+      setState((current) => ({ ...current, error: messageFromError(error) }));
+    }
+  }, [ethereum]);
+
   const selectDemoAccount = useCallback((address: string) => {
     ethereum?.selectDemoAccount?.(address);
   }, [ethereum]);
@@ -76,6 +86,7 @@ export function useWallet() {
   return {
     ...state,
     connect,
+    switchChain,
     isMetaMaskAvailable: ethereum !== null,
     isDemoWallet: ethereum?.isTrustPoolDemo === true,
     demoAccounts: ethereum?.demoAccounts ?? [],

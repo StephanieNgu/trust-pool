@@ -391,3 +391,8 @@
 .profile-sync-status.error { color: #a85454; }
 .profile-sync-status .text-button { padding: 0; font-size: 9px; }
 .contribution-confirm > div { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+
+/* Testnet faucet notice: copy on the left, button on the right. */
+.testnet-faucet{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.testnet-faucet p{margin:6px 0 0}
+.testnet-faucet .text-button{white-space:nowrap}

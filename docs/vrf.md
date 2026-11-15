@@ -44,12 +44,12 @@ Every delivered word is stored in `VRFRandomness.seedOf(claimId)` and emitted in
 
 ## Too few jurors
 
-A jury is always five members. Two cases are covered:
+A jury is always `jurySize` members: five by default, three on the Sepolia deployment (`TESTNET_PARAMS`). Two cases are covered:
 
-1. **At filing:** `submitClaim` reverts with `NotEnoughEligibleJurors(available, 5)` if fewer than
-   five other members are covered, past their waiting period and staked.
+1. **At filing:** `submitClaim` reverts with `NotEnoughEligibleJurors(available, jurySize)` if fewer than
+   `jurySize` other members are covered, past their waiting period and staked.
 2. **While waiting for the seed:** if members cancel or unstake before the word arrives and fewer
-   than five remain, no short jury is seated. The claim is marked `starved`, `JuryStarved` is
+   than `jurySize` remain, no short jury is seated. The claim is marked `starved`, `JuryStarved` is
    emitted, and the claim can be cancelled immediately (no one-day wait), returning the bond.
    Previously the contract quietly seated a smaller jury, possibly of zero.
 
@@ -94,7 +94,7 @@ subscription (otherwise it prints what to add on vrf.chain.link). Addresses go t
 `sepolia-vrf-demo.js` makes six throwaway member wallets (keys saved, git-ignored, in
 `deployments/sepolia-demo-wallets.json`), funds each with a little Sepolia ETH for gas, has them buy
 policies and stake, files a claim, and waits for Chainlink to answer (usually one to three minutes).
-It prints the seed, the coordinator's fulfilment transaction on Etherscan, and the five jurors.
+It prints the seed, the coordinator's fulfilment transaction on Etherscan, and the jurors (three on Sepolia, see TESTNET_PARAMS).
 
 Defaults (override in `.env`): coordinator `0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B`, key hash
 `0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae`, 3 confirmations, 1,000,000

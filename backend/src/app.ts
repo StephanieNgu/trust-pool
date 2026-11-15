@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { isAddress, type Provider } from "ethers";
 import { CLAIM_STATES, type ClaimState } from "./abis";
@@ -33,6 +34,8 @@ export interface AppDeps {
   corsOrigin?: string;
   /** Sign-in sessions and member profiles; in memory by default. */
   accounts?: AccountStore;
+  /** The built web app (dist/frontend) to serve next to the API, so one host serves both. Omit in development. */
+  staticDir?: string | null;
 }
 
 class HttpError extends Error {
@@ -482,6 +485,22 @@ export function createApp(deps: AppDeps) {
   // ---------------------------------------------------------------------------
 
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "Not found.")));
+
+  if (deps.staticDir) {
+    const dir = deps.staticDir;
+    // Vite fingerprints asset names, so they can be cached; index.html must not be, or a deploy is missed.
+    app.use(
+      express.static(dir, {
+        index: false,
+        setHeaders: (res, path) => res.setHeader("Cache-Control", path.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache"),
+      }),
+    );
+    app.use((req, res, next) => {
+      if (req.method !== "GET" && req.method !== "HEAD") return next();
+      res.setHeader("Cache-Control", "no-cache");
+      res.sendFile(join(dir, "index.html"), (err) => err && next(err));
+    });
+  }
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     void _next;

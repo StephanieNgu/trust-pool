@@ -1,3 +1,3 @@
 export { loadContracts } from "./contracts";
-export { loadLocalDeployment } from "./deployments";
-export type { DeploymentAddresses, LocalDeployment } from "./deployments";
+export { chainIdHex, deploymentFor, isLocalChain, loadDeployment, loadLocalDeployment, networkLabel, wrongNetworkMessage } from "./deployments";
+export type { Deployment, DeploymentAddresses, LocalDeployment } from "./deployments";
