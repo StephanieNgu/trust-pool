@@ -7,6 +7,7 @@ import { Interface, formatUnits } from "ethers";
 const PROTOCOL_ERRORS = new Interface([
   // ClaimManager
   "error ExceedsCoverageLimit(uint256 amount, uint256 limit)",
+  "error CoverageUsedUp(uint256 amount, uint256 remaining)",
   "error InvalidAmount()",
   "error InvalidEvidence()",
   "error NoActivePolicy()",
@@ -61,6 +62,7 @@ const date = (value: unknown) => new Date(Number(value) * 1000).toLocaleString()
 
 const MESSAGES: Record<string, (args: readonly unknown[]) => string> = {
   ExceedsCoverageLimit: ([asked, limit]) => `You asked for ${amount(asked)}, more than your coverage of ${amount(limit)}.`,
+  CoverageUsedUp: ([asked, remaining]) => `You asked for ${amount(asked)}, but only ${amount(remaining)} of this device's coverage is left after earlier payouts.`,
   InvalidAmount: () => "Enter an amount above zero.",
   InvalidEvidence: () => "The evidence upload is missing. Upload your photos again.",
   NoActivePolicy: () => "This wallet has no active coverage.",

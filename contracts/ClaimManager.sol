@@ -25,6 +25,11 @@ import {IPool} from "./interfaces/IPool.sol";
 /// @dev Payout is reimbursement: once the offer is accepted the claimant has `receiptPeriod` to submit
 ///      the receipt for the repair or replacement (its hash and total). The claim then pays the smaller
 ///      of the offer and the receipt, so money goes to what was actually spent.
+/// @dev Coverage is a lifetime limit per device: every payout on a device counts against it, so a
+///      holder cannot claim the full limit again and again. A new claim may ask at most what is left
+///      (the current policy's limit minus everything already paid on that device), and the offer is
+///      capped the same way. Counting by device rather than by policy means cancelling and buying a
+///      new policy for the same device does not reset what is left.
 /// @dev Holds no funds. Payouts are executed by the Pool on this contract's instruction. When the jury
 ///      makes an offer, its amount is reserved in the Pool, so other claims cannot be offered the same
 ///      money; the reservation is released when the claim is paid, withdrawn or expires, and trimmed to
@@ -87,6 +92,10 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     mapping(uint256 => uint256) public override openClaimOfPolicy;
     /// @notice What the Pool holds back for each offered or accepted claim until it is paid or closed.
     mapping(uint256 => uint256) public reservedFor;
+    /// @notice Everything paid out so far on claims for each device (by the policy's `deviceIdHash`).
+    mapping(bytes32 => uint256) public paidOnDevice;
+    /// @notice The device each claim was filed for, so its payout counts against that device.
+    mapping(uint256 => bytes32) public deviceOfClaim;
 
     event ClaimSubmitted(
         uint256 indexed claimId,
@@ -106,6 +115,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     error WaitingPeriodNotElapsed();
     error InvalidAmount();
     error ExceedsCoverageLimit(uint256 amount, uint256 limit);
+    error CoverageUsedUp(uint256 amount, uint256 remaining);
     error InvalidEvidence();
     error OpenClaimExists(uint256 claimId);
     error NotJuryModule();
@@ -158,6 +168,8 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
         if (!registry.isPastWaitingPeriod(msg.sender)) revert WaitingPeriodNotElapsed();
         if (amount == 0) revert InvalidAmount();
         if (amount > policy.coverageLimit) revert ExceedsCoverageLimit(amount, policy.coverageLimit);
+        uint256 remaining = _remaining(policy.coverageLimit, policy.deviceIdHash);
+        if (amount > remaining) revert CoverageUsedUp(amount, remaining);
         if (evidenceHash == bytes32(0)) revert InvalidEvidence();
         uint256 existing = openClaimOfPolicy[policy.id];
         if (existing != 0) revert OpenClaimExists(existing);
@@ -183,6 +195,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
             receiptAmount: 0
         });
         openClaimOfPolicy[policy.id] = claimId;
+        deviceOfClaim[claimId] = policy.deviceIdHash;
         emit ClaimSubmitted(claimId, msg.sender, policy.id, amount, evidenceHash);
         if (bond > 0) pool.postBond(msg.sender, bond);
 
@@ -303,6 +316,7 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
 
         // Effects before the external call (checks-effects-interactions).
         claim.paidAmount = amount;
+        paidOnDevice[deviceOfClaim[claimId]] += amount;
         _setState(claimId, State.Paid);
         delete openClaimOfPolicy[claim.policyId];
         emit ClaimPaid(claimId, claim.claimant, amount);
@@ -324,6 +338,14 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     // ---------------------------------------------------------------------
     // Views
     // ---------------------------------------------------------------------
+
+    /// @notice How much `holder`'s current policy can still pay out over its lifetime: its coverage
+    ///         limit minus everything already paid on its device. 0 without an active policy record.
+    function remainingCoverage(address holder) external view returns (uint256) {
+        IPolicyRegistry.Policy memory policy = registry.getPolicy(holder);
+        if (policy.status != IPolicyRegistry.Status.Active) return 0;
+        return _remaining(policy.coverageLimit, policy.deviceIdHash);
+    }
 
     /// @notice The bond for a claim asking `amount`.
     function bondFor(uint256 amount) public view returns (uint256) {
@@ -360,8 +382,14 @@ contract ClaimManager is IClaimManager, Ownable, ReentrancyGuard {
     // Internals
     // ---------------------------------------------------------------------
 
+    function _remaining(uint256 limit, bytes32 device) private view returns (uint256) {
+        uint256 paid = paidOnDevice[device];
+        return paid >= limit ? 0 : limit - paid;
+    }
+
     function _capped(Claim storage claim, uint256 amount) private view returns (uint256) {
-        if (claim.coverageLimit < amount) amount = claim.coverageLimit;
+        uint256 left = _remaining(claim.coverageLimit, deviceOfClaim[claim.id]);
+        if (left < amount) amount = left;
         uint256 cap = pool.maxPayout();
         return cap < amount ? cap : amount;
     }

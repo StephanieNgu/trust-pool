@@ -8,6 +8,7 @@ import { JuryReasoning, OfferPanel } from "./OfferPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { EvidenceViewer } from "./EvidenceViewer";
 import { DemoRandomnessNote } from "./DemoRandomnessNote";
+import { EarlierClaims } from "./EarlierClaims";
 import { CLAIM_STATE_COPY, dateTime, jurorLabel, formatAmount } from "./presentation";
 
 interface ClaimDetailProps {
@@ -173,6 +174,7 @@ export function ClaimDetail({ claimId, account, tokenDecimals, tokenSymbol, enab
       <EvidenceViewer account={account} claim={claim} source="enrollment" onAuthenticated={onAuthenticated} />
       <EvidenceViewer account={account} claim={claim} onAuthenticated={onAuthenticated} onVerificationChange={setEvidenceVerified} />
     </div>
+    <EarlierClaims account={account} claim={claim} tokenDecimals={tokenDecimals} tokenSymbol={tokenSymbol} onAuthenticated={onAuthenticated} />
 
     <div className="detail-section-heading"><div><span className="eyebrow">COMMUNITY REVIEW</span><h3>Jury</h3></div>{jury && <span>{jury.commits} committed · {jury.approvals + jury.rejections} revealed</span>}</div>
     {!jury ? <p className="muted">A jury has not been requested for this claim.</p> : <>

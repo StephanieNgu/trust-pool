@@ -126,9 +126,11 @@ export function ClaimsPage({ account, ready, overview, draft, onDraftChange, foc
     if (!capturePhoto) { setError("Take a fresh evidence photo with the capture code visible."); return; }
     try {
       const requested = parseUnits(amount, overview.tokenDecimals);
-      const coverage = parseUnits(overview.coverage, overview.tokenDecimals);
+      const coverage = parseUnits(overview.remainingCoverage, overview.tokenDecimals);
       if (requested <= 0n || requested > coverage) {
-        setError(`Enter an amount between 0 and ${overview.coverage} ${overview.tokenSymbol}.`);
+        setError(coverage === 0n
+          ? "This device's coverage is used up by earlier payouts, so no new claim can be paid."
+          : `Enter an amount between 0 and ${overview.remainingCoverage} ${overview.tokenSymbol}, the coverage left on this device.`);
         return;
       }
     } catch {
@@ -263,8 +265,8 @@ export function ClaimsPage({ account, ready, overview, draft, onDraftChange, foc
       <small>{selectedEvent ? <>{selectedEvent.covers} <strong>Include:</strong> {selectedEvent.evidence}</> : "Loss, wear and tear, and deliberate damage aren't covered."} {onOpenTerms && <button className="text-button inline-link" type="button" onClick={onOpenTerms}>What's covered?</button>}</small>
 
       <label htmlFor="claim-amount">Requested payout</label>
-      <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.coverage} value={amount} onChange={(event) => updateDraft({ amount: event.target.value })} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
-      <small>Maximum: {overview?.active ? `${Number(overview.coverage).toLocaleString()} ${overview.tokenSymbol}` : "—"}</small>
+      <div className="amount-input"><input id="claim-amount" type="number" min="0.000001" step="0.000001" max={overview?.remainingCoverage} value={amount} onChange={(event) => updateDraft({ amount: event.target.value })} placeholder="0.00" required disabled={busy} /><span>{overview?.tokenSymbol ?? "mUSDC"}</span></div>
+      <small>Maximum: {overview?.active ? `${Number(overview.remainingCoverage).toLocaleString()} ${overview.tokenSymbol}` : "—"}{overview?.active && Number(overview.paidOnDevice) > 0 ? ` (${Number(overview.coverage).toLocaleString()} cover, ${Number(overview.paidOnDevice).toLocaleString()} already paid on this device)` : ""}</small>
       {overview?.active && capBelowAsk && <p className="notice warning">The pool can pay at most {Number(overview.cap).toLocaleString("en-US", { maximumFractionDigits: 2 })} {overview.tokenSymbol} on one claim right now ({overview.maxPayoutBps / 100}% of its balance). Jurors can agree to more, but the payout stops at the cap when they decide.</p>}
       {overview && <p className="claim-bond-note">
         <strong>Claim bond: {bond ?? `${overview.claimBondBps / 100}% of your claim, at least ${Number(overview.minClaimBond).toLocaleString()}`} {overview.tokenSymbol}</strong>
