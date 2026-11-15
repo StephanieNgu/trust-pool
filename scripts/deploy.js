@@ -69,6 +69,9 @@ async function main() {
   // Keep the production/default rules, but remove the waiting period from local UI testing, and on a
   // testnet also shorten every window so a full claim (jury, votes, offer) fits in a demo.
   const overrides = local ? { waitingPeriod: 0 } : network.name === "sepolia" ? TESTNET_PARAMS : {};
+  // Contract events start after this block, so the backend reads logs from here, not from block 0
+  // (public RPCs cap how many blocks one eth_getLogs call may cover).
+  const startBlock = await ethers.provider.getBlockNumber();
   const ctx = await deployContracts(overrides, vrf ? vrf.settings : {});
   const { chainId } = await ethers.provider.getNetwork();
 
@@ -120,7 +123,7 @@ async function main() {
     keyHash: ctx.vrf.keyHash,
     mock: !vrf,
   };
-  const out = { network: network.name, chainId: chainId.toString(), deployer: ctx.deployer.address, addresses, vrf: vrfInfo, params };
+  const out = { network: network.name, chainId: chainId.toString(), deployer: ctx.deployer.address, startBlock, addresses, vrf: vrfInfo, params };
   const dir = path.join(__dirname, "..", "deployments");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${network.name}.json`);

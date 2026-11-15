@@ -17,7 +17,7 @@ import {
   MAX_FILES,
 } from "./evidence";
 import type { Keeper } from "./keeper";
-import { getMemberHistory } from "./history";
+import { getMemberHistory, LogIndex } from "./history";
 import { buildNotifications } from "./notifications";
 import { getClaimView, getMemberView, getPoolView, getPremiumView, listClaims, type ClaimView } from "./protocol";
 
@@ -34,6 +34,8 @@ export interface AppDeps {
   corsOrigin?: string;
   /** Sign-in sessions and member profiles; in memory by default. */
   accounts?: AccountStore;
+  /** Most blocks one eth_getLogs call may cover (free RPC tiers cap it); unlimited by default. */
+  logBlockRange?: number | null;
   /** The built web app (dist/frontend) to serve next to the API, so one host serves both. Omit in development. */
   staticDir?: string | null;
 }
@@ -69,6 +71,7 @@ export function createApp(deps: AppDeps) {
   const { deployment, provider, contracts, evidence, keeper } = deps;
   const captures = deps.captures ?? new CaptureChallenges();
   const accounts = deps.accounts ?? new AccountStore();
+  const logs = new LogIndex(provider, deployment.addresses, { fromBlock: deployment.startBlock, maxRange: deps.logBlockRange });
   const app = express();
   app.disable("x-powered-by");
 
@@ -198,7 +201,7 @@ export function createApp(deps: AppDeps) {
    */
   app.get("/api/members/:address/history", async (req, res) => {
     const address = parseAddress(req.params.address, "address");
-    res.json({ history: await getMemberHistory(provider, deployment.addresses, address) });
+    res.json({ history: await getMemberHistory(provider, deployment.addresses, address, logs) });
   });
 
   app.get("/api/members/:address/notifications", async (req, res) => {

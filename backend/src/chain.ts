@@ -18,6 +18,8 @@ export interface Deployment {
   network: string;
   chainId: string;
   deployer: string;
+  /** The block just before the contracts were deployed; their logs start after it. Older files lack it. */
+  startBlock?: number;
   addresses: DeploymentAddresses;
   params: Record<string, string>;
 }

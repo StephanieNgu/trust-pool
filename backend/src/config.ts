@@ -11,6 +11,11 @@ export interface Config {
   /** Sign-in sessions and member profiles. */
   accountsDir: string;
   corsOrigin: string;
+  /**
+   * Most blocks one eth_getLogs call may cover, or null for no limit. Free RPC tiers cap this
+   * (Alchemy's free tier at 10 blocks), so set LOG_BLOCK_RANGE on public networks.
+   */
+  logBlockRange: number | null;
   /** Directory of the built web app to serve at /, or null to serve only the API. */
   staticDir: string | null;
   /** Optional AI-image classifier service; null runs only the offline metadata check. */
@@ -55,6 +60,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     evidenceKeyFile: resolve(env.EVIDENCE_KEY_FILE || "data/evidence.key"),
     accountsDir: resolve(env.ACCOUNTS_DIR || "data/accounts"),
     corsOrigin: env.CORS_ORIGIN || "*",
+    logBlockRange: env.LOG_BLOCK_RANGE ? int(env.LOG_BLOCK_RANGE, 0, "LOG_BLOCK_RANGE") : null,
     staticDir: env.STATIC_DIR ? resolve(env.STATIC_DIR) : null,
     aiDetector: env.AI_DETECTOR_URL
       ? {

@@ -47,9 +47,10 @@ const TESTNET_PARAMS = {
 
 /** Chainlink VRF v2.5 request settings shared by every network. */
 const VRF_DEFAULTS = {
-  // Seating a jury from 7 policyholders uses about 585k gas, and each extra policyholder adds a
-  // little. Raise this (Sepolia allows up to 2,500,000) for much larger pools; a higher limit makes
-  // Chainlink reserve more of the subscription balance per request.
+  // Seating a jury uses about 610k gas from 7 policyholders and peaks near 850k at 25; above 25
+  // JuryModule samples holders by index, which stays near 600k at any pool size (see
+  // test/integration/largePool.test.js). A higher limit makes Chainlink reserve more of the
+  // subscription balance per request.
   callbackGasLimit: 1_000_000,
   requestConfirmations: 3,
   nativePayment: false,

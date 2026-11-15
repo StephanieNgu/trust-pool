@@ -298,6 +298,7 @@ classifier service that takes the image bytes as the POST body and answers `{ "a
 | `EVIDENCE_KEY_FILE` | `data/evidence.key` | Local chain only: generated on first start when no key is set |
 | `ACCOUNTS_DIR` | `data/accounts` | Sign-in sessions and member profiles |
 | `CORS_ORIGIN` | `*` | |
+| `LOG_BLOCK_RANGE` | unset (no limit) | Most blocks per `eth_getLogs` call. Set it on Sepolia to your RPC's cap (Alchemy free tier: `10`) |
 | `AI_DETECTOR_URL` | unset | Optional AI-image classifier; unset runs only the metadata check |
 | `AI_DETECTOR_API_KEY` | unset | Sent as a bearer token to the classifier |
 | `AI_DETECTOR_THRESHOLD` | `0.8` | Classifier probability at or above which an image is rejected |
