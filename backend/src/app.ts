@@ -119,8 +119,10 @@ export function createApp(deps: AppDeps) {
    * own photos and the enrollment photos of the policy it was filed on, which jurors compare against.
    * A claim filed by someone else who copied the hash from the chain grants nothing, so the hash being
    * public does not make the files public. A claim's receipt is also open to that claim's jurors, in
-   * any state, so they can see what the payout went to. Other members, past jurors and anonymous
-   * callers get a 403.
+   * any state, so they can see what the payout went to. While voting, a claim's jurors can also open
+   * the evidence of earlier claims on the same device, filed by whoever claimed then, so they can tell
+   * whether the same damage is being claimed twice. Other members, past jurors and anonymous callers
+   * get a 403.
    */
   async function requireEvidenceAccess(req: Request, evidenceHash: string): Promise<void> {
     const reader = (await wallet(req)).toLowerCase();
@@ -135,12 +137,19 @@ export function createApp(deps: AppDeps) {
           (c.state === "Voting" &&
             (c.evidenceHash.toLowerCase() === evidenceHash || c.enrollmentHash?.toLowerCase() === evidenceHash))),
     );
-    if (!isJuror) {
-      throw new HttpError(
-        403,
-        "Only the claimant, and the claim's selected jurors while voting is open, can view this evidence.",
+    if (isJuror) return;
+    const voting = claims.filter((c) => c.state === "Voting" && c.deviceIdHash);
+    if (voting.length > 0) {
+      const earlier = (await listClaims(contracts, { evidenceHash })).filter((e) => uploaders.includes(e.claimant.toLowerCase()));
+      const seesHistory = voting.some((c) =>
+        earlier.some((e) => e.deviceIdHash === c.deviceIdHash && Number(e.id) < Number(c.id)),
       );
+      if (seesHistory) return;
     }
+    throw new HttpError(
+      403,
+      "Only the claimant, and the claim's selected jurors while voting is open, can view this evidence.",
+    );
   }
 
   app.get("/api/health", async (_req, res) => {
@@ -281,6 +290,32 @@ export function createApp(deps: AppDeps) {
     return { totalMatches: details.total === claim.receipt.amount, datedAfterClaim: details.date >= filedOn };
   }
 
+  /**
+   * Every earlier claim on the same device, newest first, so jurors can check whether the damage was
+   * claimed before. The amounts and outcomes are on-chain anyway; the evidence link only opens for
+   * jurors while this claim is in Voting (see requireEvidenceAccess).
+   */
+  async function earlierClaimsOf(claim: ClaimView) {
+    if (!claim.deviceIdHash) return [];
+    const all = await listClaims(contracts);
+    const earlier = all.filter((e) => e.deviceIdHash === claim.deviceIdHash && Number(e.id) < Number(claim.id));
+    return Promise.all(
+      earlier.map(async (e) => {
+        const available = await evidence.has(e.evidenceHash);
+        return {
+          id: e.id,
+          claimant: e.claimant,
+          state: e.state,
+          amount: e.amount,
+          paidAmount: e.paidAmount,
+          submittedAt: e.submittedAt,
+          evidenceHash: e.evidenceHash,
+          evidence: { available, url: available ? `/api/evidence/${e.evidenceHash}` : null },
+        };
+      }),
+    );
+  }
+
   app.get("/api/claims/:id", async (req, res) => {
     const claim = await getClaimView(contracts, parseClaimId(req.params.id));
     if (!claim) throw new HttpError(404, "Claim not found.");
@@ -297,6 +332,7 @@ export function createApp(deps: AppDeps) {
       deviceCheck: await checkDevice(claim.claimant, claim.evidenceHash, enrollmentAvailable ? claim.enrollmentHash : null),
       receiptFile: { available: receiptAvailable, url: receiptAvailable ? `/api/evidence/${claim.receipt.hash}` : null },
       receiptCheck: await checkReceipt(claim),
+      earlierClaims: await earlierClaimsOf(claim),
     });
   });
 

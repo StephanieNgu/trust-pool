@@ -109,6 +109,9 @@ describe("frontend coverage workflow", () => {
     const after = await getDashboardOverview(account);
     assert.equal(after.active, true);
     assert.equal(after.coverage, "800.0");
+    // Nothing has been paid on the new device yet, so all of its cover is left to claim.
+    assert.equal(after.remainingCoverage, "800.0");
+    assert.equal(after.paidOnDevice, "0.0");
     assert.equal(after.balance, "460.0");
     assert.equal(after.contributed, "40.0");
     assert.equal(Number(after.pool) - Number(before.pool), 40);

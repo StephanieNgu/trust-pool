@@ -391,3 +391,13 @@
 .profile-sync-status.error { color: #a85454; }
 .profile-sync-status .text-button { padding: 0; font-size: 9px; }
 .contribution-confirm > div { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+
+/* Earlier claims on the same device, shown on the claim detail. */
+.earlier-claim-list { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid #e6ebf3; border-radius: 10px; overflow: hidden; }
+.earlier-claim { padding: 11px 12px; border-bottom: 1px solid #edf1f6; }
+.earlier-claim:last-child { border-bottom: 0; }
+.earlier-claim-row { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 11px; color: #4d607c; }
+.earlier-claim-row strong { color: #1d2b40; }
+.earlier-claim-row .text-button { margin-left: auto; }
+.earlier-claim-owner { background: #fff1db; color: #936021; border-radius: 5px; padding: 3px 5px; }
+.earlier-claim .evidence-viewer { margin-top: 10px; }
