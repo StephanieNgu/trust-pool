@@ -236,7 +236,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     ///      Never seats a short jury: if fewer than `jurySize` members are still eligible when the seed
     ///      arrives, the claim is marked starved and can be cancelled at once (see `canCancel`).
     /// @dev Chainlink runs this inside a fixed callback gas limit, so its cost must not grow with the
-    ///      pool. Up to `SCAN_LIMIT` policyholders the whole eligible list is shuffled (partial
+    ///      pool. Up to `SCAN_LIMIT` policyholders the whole eligible list is shuffled (shortList
     ///      Fisher-Yates). Above that, members are drawn by index and redrawn when ineligible or already
     ///      seated (rejection sampling, which is still uniform over eligible members), with at most
     ///      `MAX_DRAWS_PER_SEAT` draws per seat; a pool too sparse to fill the jury that way starves.
@@ -441,9 +441,9 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
             if (!seated) picked[found++] = candidate;
         }
         if (found < jurySize) {
-            assembly {
-                mstore(picked, found)
-            }
+            address[] memory shortList = new address[](found);
+            for (uint256 i = 0; i < found; i++) shortList[i] = picked[i];
+            picked = shortList;
         }
     }
 
