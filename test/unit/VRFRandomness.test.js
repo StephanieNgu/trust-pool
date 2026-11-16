@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
-const { activePoolFixture, submitClaim, fulfillRandomness, JuryPhase, EVIDENCE, USDC } = require("../helpers");
+const { activePoolFixture, submitClaim, fulfillRandomness, deliverRandomness, JuryPhase, EVIDENCE, USDC } = require("../helpers");
 
 async function pendingFixture() {
   const ctx = await activePoolFixture();
@@ -54,20 +54,24 @@ describe("VRFRandomness (Chainlink VRF v2.5)", function () {
   });
 
   describe("fulfilment", function () {
-    it("seats the jury with the coordinator's word, in the same transaction", async function () {
+    it("hands the coordinator's word to the JuryModule, which stores it for seating", async function () {
       const ctx = await loadFixture(pendingFixture);
       const { jury, randomness, claimId, requestId } = ctx;
       // The mock derives its word as keccak256(requestId, 0), standing in for the oracle's VRF output.
       const word = BigInt(ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256"], [requestId, 0])));
-      await expect(fulfillRandomness(ctx, claimId))
+      await expect(deliverRandomness(ctx, claimId))
         .to.emit(randomness, "RandomnessFulfilled")
         .withArgs(claimId, requestId, word)
-        .and.to.emit(jury, "JurySelected");
-      expect((await jury.getJury(claimId)).phase).to.equal(JuryPhase.Voting);
+        .and.to.emit(jury, "SeedReceived")
+        .withArgs(claimId, word)
+        .and.not.to.emit(randomness, "RandomnessDeliveryFailed");
       expect(await randomness.isPending(claimId)).to.equal(false);
       expect(await randomness.requestIdOf(claimId)).to.equal(0n);
       // The word stays on-chain so anyone can recompute the draw.
-      expect(await randomness.seedOf(claimId)).to.equal(word);
+      expect(await jury.seedOf(claimId)).to.equal(word);
+
+      await expect(jury.seatJury(claimId)).to.emit(jury, "JurySelected");
+      expect((await jury.getJury(claimId)).phase).to.equal(JuryPhase.Voting);
     });
 
     it("rejects an unknown request id", async function () {

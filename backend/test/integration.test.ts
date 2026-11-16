@@ -64,7 +64,15 @@ describe("integration: concurrent claims through keeper and API", () => {
 
     // One keeper pass seats both juries.
     const seated = await t.keeper.tick();
-    assert.deepEqual(seated.map((x) => [x.action, x.error]), [["fulfillRandomness", undefined], ["fulfillRandomness", undefined]]);
+    assert.deepEqual(
+      seated.map((x) => [x.action, x.error]),
+      [
+        ["fulfillRandomness", undefined],
+        ["seatJury", undefined],
+        ["fulfillRandomness", undefined],
+        ["seatJury", undefined],
+      ],
+    );
     for (const id of [idA, idB]) {
       for (const addr of await jurorsOf(t, id)) await commit(t.jury, signerFor(t.signers, addr), id, true);
       for (const addr of await jurorsOf(t, id)) await reveal(t.jury, signerFor(t.signers, addr), id, true);

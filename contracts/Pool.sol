@@ -36,6 +36,9 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     mapping(address => uint256) public override stakeOf;
     /// @notice How many juries a juror currently sits on; a stake cannot be withdrawn while above 0.
     mapping(address => uint256) public activeJuriesOf;
+    /// @notice When each juror last added to their stake. A jury only draws members who staked before
+    ///         its claim was filed, so staking after seeing a claim's seed cannot buy a seat.
+    mapping(address => uint256) public override stakedAt;
     uint256 public totalStaked;
     /// @notice Fees paid to jurors from the reserve, and penalties taken from stakes into it.
     uint256 public totalJurorFees;
@@ -154,6 +157,7 @@ contract Pool is IPool, Ownable, ReentrancyGuard {
     function stake(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         stakeOf[msg.sender] += amount;
+        stakedAt[msg.sender] = block.timestamp;
         totalStaked += amount;
         emit Staked(msg.sender, amount);
         token.safeTransferFrom(msg.sender, address(this), amount);

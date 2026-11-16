@@ -52,7 +52,7 @@ All other parameters (premiums, stakes, bonds, the 20% payout cap) are the defau
 | Deployer wallet (throwaway, about 0.15 Sepolia ETH) | Max, MetaMask | Local `.env` only (`DEPLOYER_PRIVATE_KEY`) |
 | Keeper wallet (throwaway, about 0.05 Sepolia ETH) | Max, MetaMask | Render secret `KEEPER_PRIVATE_KEY` |
 | Alchemy (or Infura) Sepolia RPC URL | Max | `.env` `SEPOLIA_RPC_URL` and Render secret `RPC_URL` |
-| VRF subscription (funded with about 20 LINK) | Deployer wallet at vrf.chain.link | `.env` `VRF_SUBSCRIPTION_ID` |
+| VRF subscription (at least 20 LINK, added with **Add funds**; each pending request holds back about 17) | Deployer wallet at vrf.chain.link | `.env` `VRF_SUBSCRIPTION_ID` |
 | Evidence encryption key (`openssl rand -hex 32`) | Render secret, plus a copy in a password manager (with a disk, losing it makes stored evidence unreadable) | Render secret `EVIDENCE_ENCRYPTION_KEY` |
 | Render account | Max | — |
 
@@ -136,7 +136,7 @@ To run a jury draw from the command line, use `npx hardhat run scripts/sepolia-v
 1. Fix the bug and run `npx hardhat test`.
 2. Run `scripts/deploy.js --network sepolia` again. It deploys a fresh set and adds the new `VRFRandomness` as a consumer of the same subscription.
 3. Commit the new `deployments/sepolia.json` and merge it. The service redeploys against it.
-4. On vrf.chain.link, remove the old `VRFRandomness` consumer so it can't spend LINK.
+4. On vrf.chain.link, remove the old `VRFRandomness` consumer so it can't spend LINK. Chainlink refuses while that consumer has a request pending; it drops such a request after 24 hours, so remove it then.
 
 To go back to a previous contract set, revert the commit that changed `deployments/sepolia.json`. Policies, stakes and claims live in the contract set they were made in. Members of the old set don't carry over, and with a disk, their evidence stays readable by its uploaders.
 
@@ -149,7 +149,7 @@ To go back to a previous contract set, revert the commit that changed `deploymen
 | Service up | Render health check on `/api/health` (it restarts the service after repeated failures), plus an uptime pinger on the same URL | Any alert |
 | Keeper healthy | `/api/health` → `keeper.running`, `keeper.lastTickAt`, `keeper.lastError`. Logs lines start `[keeper]` | `lastTickAt` older than 5 min, or a repeated `lastError` |
 | Keeper gas | Etherscan page of the keeper address | Below 0.01 ETH: top up from a faucet |
-| VRF subscription balance | vrf.chain.link subscription page | Below 5 LINK, or requests stuck pending |
+| VRF subscription balance | vrf.chain.link subscription page | Below 20 LINK (a request needs about 17 held back), or requests stuck pending |
 | Claims stuck | Claims page (`JuryPending` over 10 min), Etherscan `ClaimManager` events | Check the VRF subscription and the consumer list |
 | RPC quota | Alchemy dashboard, compute units | Above 70% of the monthly limit: raise `KEEPER_INTERVAL_MS` |
 | Errors | Render logs (the API logs unexpected errors with `console.error`) | Any 502 burst |

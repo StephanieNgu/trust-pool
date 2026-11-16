@@ -10,6 +10,7 @@ interface IPool {
     function maxPayout() external view returns (uint256);
     function balance() external view returns (uint256);
     function stakeOf(address juror) external view returns (uint256);
+    function stakedAt(address juror) external view returns (uint256);
     function lockStake(address juror) external;
     function unlockStake(address juror) external;
     function penalize(address juror, uint256 amount) external returns (uint256);

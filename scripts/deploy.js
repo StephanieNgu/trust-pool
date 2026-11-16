@@ -69,7 +69,7 @@ const GAS = {
   Pool: 1_400_000n,
   PolicyRegistry: 1_400_000n,
   VRFRandomness: 650_000n,
-  JuryModule: 2_850_000n,
+  JuryModule: 3_150_000n,
   ClaimManager: 1_950_000n,
   // Five one-time links, adding the VRF consumer, and seeding the pool.
   finishing: 600_000n,

@@ -57,6 +57,9 @@ async function main() {
   const requestId = await randomness.requestIdOf(claimId);
   await (await vrfCoordinator.fulfillRandomWords(requestId, await randomness.getAddress())).wait();
   console.log(`    VRF request ${requestId}: the word comes from the coordinator, not from this script`);
+  console.log(`    Seed stored: ${await jury.seedOf(claimId)}`);
+  // Second step: anyone seats the jury from the stored seed (the keeper does this in the app).
+  await (await jury.seatJury(claimId)).wait();
   const jurorAddrs = await jury.getJurors(claimId);
   console.log(`    Jurors: ${jurorAddrs.map(short).join(", ")}`);
   console.log(`    State: ${STATES[(await claimManager.getClaim(claimId)).state]}`);

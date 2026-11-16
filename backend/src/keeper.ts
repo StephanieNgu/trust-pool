@@ -1,10 +1,11 @@
 // The keeper moves claims along without anyone having to push them by hand:
 //
 //   JuryPending  -> on a local chain, asks Chainlink's VRF coordinator mock to answer the pending
-//                   VRF request, which selects the jury. The mock derives the word from the request
-//                   id; the keeper never picks a seed. On Sepolia or mainnet Chainlink's oracles
-//                   answer by themselves and the keeper does nothing here. If randomness is still
-//                   missing after the timeout (or too few jurors were left), cancels the claim.
+//                   VRF request. The mock derives the word from the request id; the keeper never
+//                   picks a seed. On Sepolia or mainnet Chainlink's oracles answer by themselves.
+//                   Once the seed is stored, calls JuryModule.seatJury, which picks the jury from
+//                   it (anyone may call it, and the result depends only on the seed). If randomness
+//                   is still missing after the timeout (or too few jurors were left), cancels the claim.
 //   Voting       -> calls finalize once the voting window has closed or every juror has voted
 //   Offered      -> calls acceptOffer once the claimant's response window has passed without an answer
 //   Approved     -> calls executePayout once the claimant has submitted the receipt, so the claim is
@@ -13,7 +14,7 @@
 // It also closes policies whose premium grace period ended unpaid (PolicyRegistry.lapseOverdue),
 // freeing their devices. A policy with an open claim stays open until the claim is decided.
 //
-// finalize, acceptOffer (after the deadline), executePayout, expireClaim, cancelStalledClaim and lapseOverdue are permissionless on-chain, so the keeper only saves users a
+// seatJury, finalize, acceptOffer (after the deadline), executePayout, expireClaim, cancelStalledClaim and lapseOverdue are permissionless on-chain, so the keeper only saves users a
 // transaction; it cannot change an outcome.
 import type { Signer } from "ethers";
 import { CLAIM_STATES } from "./abis";
@@ -35,7 +36,7 @@ export interface KeeperOptions {
 export type KeeperAction =
   | {
       claimId: number;
-      action: "fulfillRandomness" | "cancelStalledClaim" | "finalize" | "acceptOffer" | "executePayout" | "expireClaim";
+      action: "fulfillRandomness" | "seatJury" | "cancelStalledClaim" | "finalize" | "acceptOffer" | "executePayout" | "expireClaim";
       txHash?: string;
       error?: string;
     }
@@ -157,7 +158,15 @@ export class Keeper {
             vrfCoordinatorMock.fulfillRandomWords(requestId, consumer),
           );
         }
-        if (!fulfilled && this.options.autoResolve && (await this.contracts.jury.canCancel(id))) {
+        // The VRF answer only stores the seed; seating the jury is a separate, permissionless call.
+        // It runs on every network (Chainlink delivers on Sepolia, the mock locally) and its result
+        // depends only on the seed, so the keeper cannot steer it.
+        let seated = false;
+        if (await this.contracts.jury.canSeat(id)) {
+          seated = await this.attempt(actions, id, "seatJury", () => this.contracts.jury.seatJury(id));
+          if (seated) state = CLAIM_STATES[Number((await claimManager.getClaim(id)).state)];
+        }
+        if (!fulfilled && !seated && this.options.autoResolve && (await this.contracts.jury.canCancel(id))) {
           if (await this.attempt(actions, id, "cancelStalledClaim", () => claimManager.cancelStalledClaim(id))) {
             state = "Cancelled";
           }

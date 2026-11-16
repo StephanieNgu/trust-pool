@@ -136,6 +136,8 @@ classDiagram
         +uint256 revealPeriod
         +requestJury(claimId)
         +fulfillRandomness(claimId, seed)
+        +seatJury(claimId)
+        +seedOf(claimId) uint256
         +commitVote(claimId, commitment)
         +revealVote(claimId, amount, noteHash, salt)
         +tally(claimId) (Outcome, award)
@@ -150,7 +152,6 @@ classDiagram
     class VRFRandomness {
         +requestRandomness(claimId)
         +rawFulfillRandomWords(requestId, words)
-        +seedOf(claimId) uint256
     }
     class VRFCoordinatorV2_5 {
         <<Chainlink>>
@@ -226,8 +227,9 @@ sequenceDiagram
     CM->>CM: validate policy, state = Submitted
     CM->>JM: requestJury(claimId)
     JM->>RNG: requestRandomness(claimId)
-    RNG-->>JM: fulfillRandomness(claimId, seed)
-    JM->>JM: select 5 jurors excluding claimant
+    RNG-->>JM: fulfillRandomness(claimId, seed) (stores the seed)
+    Note over JM: keeper (or anyone) calls seatJury(claimId)
+    JM->>JM: select 5 jurors eligible at filing, excluding claimant
     JM-->>CM: state = Voting
     J->>UI: Fetch evidence by hash, verify integrity
     J->>UI: Note on why (stored privately, hash returned)
@@ -254,6 +256,7 @@ Which contract may call which privileged function. All wiring is one-time: each 
 | `Pool.payout` | ClaimManager | `Pool.setClaimManager` (owner, once) |
 | `JuryModule.requestJury`, `tally`, `cancel` | ClaimManager | `JuryModule.setClaimManager` (owner, once) |
 | `JuryModule.fulfillRandomness` | The randomness provider | Constructor (immutable) |
+| `JuryModule.seatJury` | Anyone, once the seed has arrived (the result depends only on the seed) | — |
 | `ClaimManager.startVoting` | JuryModule | Constructor (immutable) |
 | `VRFRandomness.requestRandomness` | JuryModule | `VRFRandomness.setConsumer` (deployer, once) |
 | `VRFRandomness.rawFulfillRandomWords` | The Chainlink VRF coordinator | Constructor (immutable) |
@@ -345,7 +348,7 @@ This section answers the Milestone 3 question of how evidence is kept, who can r
 | Fund custody | Pool only | Smallest attack surface | Escrow per claim: more gas and complexity |
 | Claim decisions | Member jury only; the original proposal's claim oracle feed is deferred | No tamper-resistant feed exists for private device damage, and a mocked feed would look like verification without verifying anything. See [oracle-and-anti-fraud.md](oracle-and-anti-fraud.md) | Oracle-triggered (parametric) payouts; a hybrid where feeds answer narrow facts such as signed shop invoices or IMEI blacklists |
 | Randomness | Chainlink VRF v2.5 behind an interface; official coordinator mock locally | Verifiable, unbiasable seeds on a testnet; tests stay deterministic by overriding the mock's word | Blockhash: manipulable by validators. Keeper-chosen seed (the M2/M3 mock): the operator could bias juries |
-| Jury selection | Seeded by the randomness output. Up to 25 policyholders: Fisher-Yates shuffle of the eligible list. Above 25: draw holders by index and redraw ineligible or repeated ones (at most 6 draws per seat) | Chainlink runs the draw inside a fixed callback gas limit (1,000,000). Scanning every holder ran out of gas at about 35 members; index sampling costs about the same at any pool size and is still uniform over eligible members | Off-chain selection: cheaper but requires trusting the selector. Scanning only: simplest, but caps the pool at about 35 members |
+| Jury selection | Two steps. The VRF callback only stores the seed; `seatJury` (permissionless) then picks members who were eligible when the claim was filed, in an order fixed by the seed. Up to 25 policyholders: the 5 lowest keccak256(seed, member). Above 25: draw holders by index and redraw ineligible or repeated ones (at most 6 draws per seat) | Chainlink holds back LINK in proportion to the callback gas limit: about 133 LINK at the 1,000,000 gas a full in-callback draw needed, about 17 LINK at the 100,000 the seed-only callback needs. Freezing candidates at filing means seeing the seed before seating only lets a member drop themselves out. Index sampling keeps seating gas flat at any pool size and is still uniform over eligible members | Draw inside the callback: no gap between seed and seating, but needs far more LINK per request. Off-chain selection: cheaper but requires trusting the selector |
 | Voting | Commit-reveal: sealed votes for 2 days, then 1 day to reveal | No juror can see or copy another's vote before committing, which removes herding | Plain on-chain vote: one transaction per juror, but later jurors see earlier votes |
 | Commit-reveal salt | Chosen by the juror's wallet; the frontend should derive it from a wallet signature over the claim id so it can be recovered | A lost salt means a vote cannot be revealed; deriving it avoids storing secrets | Backend stores salts: convenient, but the backend could then read every vote early |
 | What jurors decide | An amount from 0 up to the claim, plus a short note; the offer is the median | The professor's "negotiation" suggestion: jurors can say "you only need 150" against a 300 claim. The median ignores one extreme juror in either direction, so a lone colluder or troll cannot move the payout far. Three colluders out of five decide it outright (see `test/unit/limitations.test.js`). Sealing the note's hash with the amount stops jurors editing their reasoning after seeing others' | Yes/no votes: simpler but all-or-nothing. Mean of amounts: one juror can drag it. Live chat or counteroffers: slower, more steps for jurors, and it reopens herding |
