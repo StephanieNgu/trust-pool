@@ -30,9 +30,15 @@ sequenceDiagram
 
 Chainlink makes the subscription hold back LINK in proportion to the callback's gas limit for every
 pending request: about 133 LINK at the 1,000,000 gas a full jury draw needed, more than a faucet
-gives. So the callback now only stores the seed (about 50k gas, with a 100,000 gas limit, so roughly
-17 LINK held back), and `seatJury` picks the jury in an ordinary transaction that anyone can send.
+gives. So the callback now only stores the seed (about 35k gas, with a 150,000 gas limit, so roughly
+24 LINK held back), and `seatJury` picks the jury in an ordinary transaction that anyone can send.
 Locally the keeper sends it straight after the mock answers; on Sepolia the demo script does.
+
+**No new storage in the callback.** Sepolia runs EIP-8037 (Glamsterdam), which charges about 98k gas
+for every storage slot a transaction creates. Our first 100k-gas deployment stored the seed in a fresh
+slot and ran out of gas on Sepolia while passing locally (Hardhat uses the older gas schedule). Now
+`requestJury` writes a placeholder when the claim is filed, so the callback only overwrites slots, and
+`test/unit/JurySeating.test.js` traces the callback to check that it creates none.
 
 Because the seed is public for a moment before the jury is seated, `seatJury` only picks from members
 who were **already eligible when the claim was filed** (policy past its waiting period and stake
@@ -131,7 +137,7 @@ prints the jurors (three on Sepolia, see TESTNET_PARAMS). If Chainlink takes lon
 subscription and cannot be recovered.
 
 Defaults (override in `.env`): coordinator `0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B`, key hash
-`0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae`, 3 confirmations, 100,000
+`0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae`, 3 confirmations, 150,000
 callback gas. Check the current values on Chainlink's
 [supported networks](https://docs.chain.link/vrf/v2-5/supported-networks) page if a deploy fails the
 key hash check.
@@ -146,7 +152,7 @@ on fast-forwarding time past voting deadlines, which a public testnet cannot do.
   push a seed or bypass the provider, there is no owner or `setCoordinator`, the consumer link is
   one-time, a request cannot be answered twice, and 40 draws spread across all eligible members.
 * `test/unit/JurySeating.test.js`: the two-step draw. The callback only stores the seed and fits in
-  100,000 gas; anyone can seat and gets the jury anyone can compute from the seed; a member who drops
+  150,000 gas and creates no new storage slot; anyone can seat and gets the jury anyone can compute from the seed; a member who drops
   out after seeing the seed removes only themselves; late stakers, re-bought policies and new members
   cannot join; a seeded claim cannot be cancelled; too few candidates starves instead of seating short.
 * `test/unit/JuryModule.test.js` (jury starvation): filing with four eligible jurors reverts; jurors

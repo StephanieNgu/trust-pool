@@ -68,7 +68,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         Phase phase;
         address claimant;
         uint64 requestedAt;
-        /// @dev Set by the VRF callback; the seed itself is in `seedOf`.
+        /// @dev Set by the VRF callback; the seed itself is in `_seeds`.
         bool seeded;
         uint64 commitDeadline;
         uint64 revealDeadline;
@@ -121,9 +121,11 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
     /// @notice Set when randomness arrived but too few eligible jurors were left to seat a full jury.
     ///         The claim waits in AwaitingRandomness and may be cancelled straight away.
     mapping(uint256 => bool) public starved;
-    /// @notice The VRF word delivered for each claim (0 until it arrives). With the registry and pool
-    ///         history it lets anyone recompute who `seatJury` picks.
-    mapping(uint256 => uint256) public seedOf;
+    /// @dev The VRF word for each claim. `requestJury` writes a placeholder so that the VRF callback
+    ///      overwrites an existing slot instead of creating one: creating storage is by far the most
+    ///      expensive thing a transaction can do (about 98k gas per slot on Sepolia since EIP-8037),
+    ///      and the callback must fit in Chainlink's small gas limit. Read it through `seedOf`.
+    mapping(uint256 => uint256) private _seeds;
 
     event ClaimManagerSet(address indexed claimManager);
     event JuryRequested(uint256 indexed claimId, address indexed claimant);
@@ -237,6 +239,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         jury.maxAmount = maxAmount;
         jury.requestedAt = uint64(block.timestamp);
         jury.holdersAtFiling = registry.holderCount();
+        _seeds[claimId] = 1; // placeholder, see `_seeds`
         emit JuryRequested(claimId, claimant);
         randomness.requestRandomness(claimId);
     }
@@ -261,7 +264,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (jury.phase != Phase.AwaitingRandomness) revert WrongPhase(Phase.AwaitingRandomness, jury.phase);
         if (jury.seeded) revert WrongPhase(Phase.AwaitingRandomness, jury.phase);
         jury.seeded = true;
-        seedOf[claimId] = seed;
+        _seeds[claimId] = seed;
         emit SeedReceived(claimId, seed);
     }
 
@@ -284,7 +287,7 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (!jury.seeded) revert NotSeeded();
         if (starved[claimId]) revert WrongPhase(Phase.AwaitingRandomness, jury.phase);
 
-        uint256 seed = seedOf[claimId];
+        uint256 seed = _seeds[claimId];
         (address[] memory picked, uint256 available) = jury.holdersAtFiling <= SCAN_LIMIT
             ? _rank(jury, seed)
             : _sample(jury, seed);
@@ -447,6 +450,12 @@ contract JuryModule is IJuryModule, IRandomnessConsumer, Ownable {
         if (starved[claimId]) return uint256(jury.requestedAt);
         if (jury.seeded) return 0;
         return uint256(jury.requestedAt) + randomnessTimeout;
+    }
+
+    /// @notice The VRF word delivered for a claim (0 until it arrives). With the registry and pool
+    ///         history it lets anyone recompute who `seatJury` picks.
+    function seedOf(uint256 claimId) public view returns (uint256) {
+        return _juries[claimId].seeded ? _seeds[claimId] : 0;
     }
 
     /// @notice True when the seed has arrived and `seatJury` will seat a jury or mark the claim starved.

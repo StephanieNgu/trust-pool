@@ -117,15 +117,30 @@ async function main() {
   if (!claimant) throw new Error("Every demo member already has an open claim; delete the wallets file to start over.");
   const evidence = ethers.keccak256(ethers.toUtf8Bytes(`sepolia-demo-evidence:${Date.now()}`));
   const submitTx = await send(`${claimant.address} files a claim`, claimManager.connect(claimant).submitClaim(CLAIM, evidence));
-  const fromBlock = (await submitTx.wait()).blockNumber;
-  const claimId = await claimManager.claimCount();
-  const requestId = await randomness.requestIdOf(claimId);
+  // Read the claim and request ids from the receipt rather than from follow-up calls: a load-balanced
+  // RPC can answer those from a node a block behind, which made an earlier run give up straight away.
+  const receipt = await submitTx.wait();
+  const fromBlock = receipt.blockNumber;
+  const events = receipt.logs.map((l) => {
+    for (const c of [claimManager, randomness]) {
+      try {
+        const e = c.interface.parseLog(l);
+        if (e) return e;
+      } catch {
+        // another contract's event
+      }
+    }
+    return null;
+  });
+  const claimId = events.find((e) => e?.name === "ClaimSubmitted").args.claimId;
+  const requestId = events.find((e) => e?.name === "RandomnessRequested").args.requestId;
   console.log(`    Claim #${claimId}; VRF request ${requestId}`);
+  console.log(`    (If this run stops early, CLAIM_ID=${claimId} picks the claim up later.)`);
 
   console.log(`\n[5] Waiting for Chainlink's oracle (usually 1 to 3 minutes, up to ${WAIT_MINUTES})`);
   const deadline = Date.now() + WAIT_MINUTES * 60_000;
   while (Date.now() < deadline) {
-    if ((await jury.seedOf(claimId)) !== 0n || !(await randomness.isPending(claimId))) break;
+    if ((await jury.seedOf(claimId)) !== 0n) break;
     process.stdout.write(".");
     await sleep(10_000);
   }
@@ -133,23 +148,33 @@ async function main() {
   await seatAndReport({ jury, randomness, claimId, fromBlock, address: a.randomness });
 }
 
+/** Events matching `filter` from `fromBlock` on, searched in 10-block steps (free RPC tiers cap the range). */
+async function findEvents(contract, filter, fromBlock) {
+  const found = [];
+  const latest = await ethers.provider.getBlockNumber();
+  for (let from = fromBlock; from <= latest && found.length === 0; from += 10) {
+    found.push(...(await contract.queryFilter(filter, from, Math.min(from + 9, latest))));
+  }
+  return found;
+}
+
 /** Finds Chainlink's delivery, seats the jury from that seed and prints both, with Etherscan links. */
 async function seatAndReport({ jury, randomness, claimId, fromBlock, address }) {
   const seed = await jury.seedOf(claimId);
   if (seed === 0n) {
+    const failed = await findEvents(randomness, randomness.filters.RandomnessDeliveryFailed(claimId), fromBlock);
+    if (failed.length > 0) {
+      console.log(`Chainlink answered in ${txLink(failed[0].transactionHash)}, but the JuryModule rejected the seed`);
+      console.log(`(revert data ${failed[0].args.reason}). The claim can be cancelled once its timeout passes.`);
+      return;
+    }
     console.log("No answer yet. Check the subscription's balance and consumers at https://vrf.chain.link,");
     console.log(`then run this again with CLAIM_ID=${claimId} to pick up this claim, or watch`);
     console.log(`${explorer ? `${explorer}/address/${address}` : address}.`);
     return;
   }
 
-  // Free RPC tiers cap log queries at small block ranges, so search in 10-block steps.
-  const fulfilled = [];
-  const latest = await ethers.provider.getBlockNumber();
-  for (let from = fromBlock; from <= latest && fulfilled.length === 0; from += 10) {
-    const filter = randomness.filters.RandomnessFulfilled(claimId);
-    fulfilled.push(...(await randomness.queryFilter(filter, from, Math.min(from + 9, latest))));
-  }
+  const fulfilled = await findEvents(randomness, randomness.filters.RandomnessFulfilled(claimId), fromBlock);
   console.log(`    Chainlink delivered seed ${seed}`);
   if (fulfilled.length > 0) {
     console.log(`    In transaction ${txLink(fulfilled[fulfilled.length - 1].transactionHash)} (sent by the VRF coordinator)`);
