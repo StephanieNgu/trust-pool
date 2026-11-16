@@ -51,16 +51,49 @@ async function activePoolFixture() {
 }
 
 /**
- * Answers `claimId`'s pending VRF request through the local coordinator mock. With `seed` the mock
- * delivers that word (fulfillRandomWordsWithOverride) so tests are reproducible; without one it
- * derives the word itself, as the keeper does on a local chain.
+ * Answers `claimId`'s pending VRF request through the local coordinator mock, without seating the
+ * jury. With `seed` the mock delivers that word (fulfillRandomWordsWithOverride) so tests are
+ * reproducible; without one it derives the word itself, as the keeper does on a local chain.
  */
-async function fulfillRandomness(ctx, claimId, seed) {
+async function deliverRandomness(ctx, claimId, seed) {
   const requestId = await ctx.randomness.requestIdOf(claimId);
   const consumer = await ctx.randomness.getAddress();
   return seed === undefined
     ? ctx.vrfCoordinator.fulfillRandomWords(requestId, consumer)
     : ctx.vrfCoordinator.fulfillRandomWordsWithOverride(requestId, consumer, [seed]);
+}
+
+/**
+ * Both steps of jury selection: delivers the VRF word, then calls `seatJury` as the keeper would.
+ * Returns the `seatJury` transaction, or the delivery transaction when there was nothing to seat
+ * (for example a late answer to a cancelled claim).
+ */
+async function fulfillRandomness(ctx, claimId, seed) {
+  const delivery = await deliverRandomness(ctx, claimId, seed);
+  await delivery.wait();
+  if (!(await ctx.jury.canSeat(claimId))) return delivery;
+  return ctx.jury.seatJury(claimId);
+}
+
+/**
+ * True when the coordinator's callback into VRFRandomness ran to completion inside the gas limit the
+ * request asked for (the mock forwards exactly that much gas, as Chainlink does) and the JuryModule
+ * accepted the seed.
+ */
+function callbackSucceeded(ctx, receipt) {
+  const parsed = receipt.logs.map((l) => {
+    for (const c of [ctx.vrfCoordinator, ctx.randomness, ctx.jury]) {
+      try {
+        const e = c.interface.parseLog(l);
+        if (e) return e;
+      } catch {
+        // not this contract's event
+      }
+    }
+    return null;
+  });
+  const fulfilled = parsed.find((e) => e?.name === "RandomWordsFulfilled");
+  return Boolean(fulfilled?.args.success) && parsed.some((e) => e?.name === "SeedReceived");
 }
 
 /** Fulfils randomness for `claimId` and returns the selected jurors as signers. */
@@ -162,6 +195,8 @@ module.exports = {
   activePoolFixture,
   stakeAsJuror,
   fulfillRandomness,
+  deliverRandomness,
+  callbackSucceeded,
   selectJury,
   submitClaim,
   saltFor,

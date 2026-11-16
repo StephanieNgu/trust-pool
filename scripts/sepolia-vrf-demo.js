@@ -6,8 +6,9 @@
 // The demo uses six members (a claimant plus five possible jurors; Sepolia seats a jury of three). It makes throwaway wallets for
 // them, saves their keys to deployments/sepolia-demo-wallets.json (git-ignored) so later runs reuse
 // them, and funds each with a little Sepolia ETH from the deployer for gas. Members join, stake, and
-// one files a claim; the script then waits for Chainlink's oracle to answer. Nothing here can choose
-// or see the seed before the jury is seated: it arrives in the coordinator's own transaction.
+// one files a claim; the script then waits for Chainlink's oracle to answer, and seats the jury from
+// the seed it delivered (JuryModule.seatJury, which anyone may call). Nothing here can choose the
+// seed: it arrives in the coordinator's own transaction, and seating only reads it.
 const fs = require("fs");
 const path = require("path");
 const { ethers, network } = require("hardhat");
@@ -63,6 +64,16 @@ async function main() {
   console.log(`Network ${network.name}; VRF coordinator ${await randomness.coordinator()}`);
   console.log(`Subscription ${await randomness.subscriptionId()}; deployer ${deployer.address}`);
 
+  // Pick up a claim filed by an earlier run (for example one whose answer took longer than the wait).
+  if (process.env.CLAIM_ID) {
+    const claimId = BigInt(process.env.CLAIM_ID);
+    // Look back about five hours of Sepolia blocks for Chainlink's delivery transaction.
+    const fromBlock = Math.max(0, (await ethers.provider.getBlockNumber()) - 1500);
+    console.log(`\nChecking claim #${claimId} from an earlier run`);
+    await seatAndReport({ jury, randomness, claimId, fromBlock, address: a.randomness });
+    return;
+  }
+
   console.log("\n[1] Preparing six member wallets");
   const members = loadWallets();
   for (const m of members) {
@@ -114,12 +125,23 @@ async function main() {
   console.log(`\n[5] Waiting for Chainlink's oracle (usually 1 to 3 minutes, up to ${WAIT_MINUTES})`);
   const deadline = Date.now() + WAIT_MINUTES * 60_000;
   while (Date.now() < deadline) {
-    const phase = Number((await jury.getJury(claimId)).phase);
-    if (phase !== 1 || !(await randomness.isPending(claimId))) break; // 1 = AwaitingRandomness
+    if ((await jury.seedOf(claimId)) !== 0n || !(await randomness.isPending(claimId))) break;
     process.stdout.write(".");
     await sleep(10_000);
   }
   console.log();
+  await seatAndReport({ jury, randomness, claimId, fromBlock, address: a.randomness });
+}
+
+/** Finds Chainlink's delivery, seats the jury from that seed and prints both, with Etherscan links. */
+async function seatAndReport({ jury, randomness, claimId, fromBlock, address }) {
+  const seed = await jury.seedOf(claimId);
+  if (seed === 0n) {
+    console.log("No answer yet. Check the subscription's balance and consumers at https://vrf.chain.link,");
+    console.log(`then run this again with CLAIM_ID=${claimId} to pick up this claim, or watch`);
+    console.log(`${explorer ? `${explorer}/address/${address}` : address}.`);
+    return;
+  }
 
   // Free RPC tiers cap log queries at small block ranges, so search in 10-block steps.
   const fulfilled = [];
@@ -128,14 +150,15 @@ async function main() {
     const filter = randomness.filters.RandomnessFulfilled(claimId);
     fulfilled.push(...(await randomness.queryFilter(filter, from, Math.min(from + 9, latest))));
   }
-  if (fulfilled.length === 0) {
-    console.log("No answer yet. Check the subscription's balance and consumers at https://vrf.chain.link,");
-    console.log(`then rerun or watch ${explorer ? `${explorer}/address/${a.randomness}` : a.randomness}.`);
-    return;
+  console.log(`    Chainlink delivered seed ${seed}`);
+  if (fulfilled.length > 0) {
+    console.log(`    In transaction ${txLink(fulfilled[fulfilled.length - 1].transactionHash)} (sent by the VRF coordinator)`);
   }
-  const event = fulfilled[fulfilled.length - 1];
-  console.log(`    Chainlink delivered seed ${event.args.seed}`);
-  console.log(`    In transaction ${txLink(event.transactionHash)} (sent by the VRF coordinator)`);
+
+  if (await jury.canSeat(claimId)) {
+    console.log("\n[6] Seating the jury from that seed (anyone may do this; the seed decides who sits)");
+    await send("seatJury", jury.seatJury(claimId));
+  }
   const jurors = await jury.getJurors(claimId);
   if (jurors.length === 0) {
     console.log(`    No jury seated (starved: ${await jury.starved(claimId)}); the claim can be cancelled.`);

@@ -29,6 +29,7 @@ interface IPolicyRegistry {
         bytes32 enrollmentHash;
     }
 
+    function waitingPeriod() external view returns (uint256);
     function getPolicy(address holder) external view returns (Policy memory);
     function isActive(address holder) external view returns (bool);
     function isPastWaitingPeriod(address holder) external view returns (bool);

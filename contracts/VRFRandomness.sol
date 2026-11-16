@@ -8,7 +8,8 @@ import {IRandomnessProvider, IRandomnessConsumer} from "./interfaces/IRandomness
 /// @title VRFRandomness
 /// @notice Randomness provider backed by Chainlink VRF v2.5. JuryModule asks for a seed per claim;
 ///         the VRF coordinator answers with a verifiably random word, which is forwarded to JuryModule
-///         in the same transaction so nobody sees the seed before the jury is seated.
+///         in the same transaction. JuryModule stores it and seats the jury in a separate step
+///         (`seatJury`), which keeps this callback cheap.
 /// @dev Nobody can choose or influence the seed through this contract:
 ///      - It has no owner and no admin functions. The coordinator, subscription and key hash are
 ///        immutable, so the coordinator cannot be swapped for one that returns chosen words (unlike
@@ -16,7 +17,7 @@ import {IRandomnessProvider, IRandomnessConsumer} from "./interfaces/IRandomness
 ///      - Only the coordinator may deliver randomness, and only once per request.
 ///      - The one setup step, `setConsumer`, can be called once, by the deployer, and only names who
 ///        may request randomness; it cannot touch a seed.
-///      A failed delivery (for example, too few eligible jurors) is caught and reported, never
+///      A failed delivery (for example, a claim that was already cancelled) is caught and reported, never
 ///      reverted, as Chainlink requires: a reverting callback would not be retried anyway, and the
 ///      claim can still be cancelled once JuryModule's randomness timeout passes.
 contract VRFRandomness is IRandomnessProvider {
@@ -38,13 +39,11 @@ contract VRFRandomness is IRandomnessProvider {
     mapping(uint256 => uint256) public claimOfRequest;
     /// @notice True while a request has been made and not yet answered.
     mapping(uint256 => bool) private _pending;
-    /// @notice The verified VRF word delivered for each claim, kept so anyone can audit the draw.
-    mapping(uint256 => uint256) public seedOf;
 
     event ConsumerSet(address indexed consumer);
     event RandomnessRequested(uint256 indexed claimId, uint256 indexed requestId);
     event RandomnessFulfilled(uint256 indexed claimId, uint256 indexed requestId, uint256 seed);
-    /// @notice The consumer rejected the seed (e.g. too few eligible jurors). `reason` is its revert data.
+    /// @notice The consumer rejected the seed (e.g. the claim was already cancelled). `reason` is its revert data.
     event RandomnessDeliveryFailed(uint256 indexed claimId, uint256 indexed requestId, bytes reason);
 
     error ZeroAddress();
@@ -114,8 +113,8 @@ contract VRFRandomness is IRandomnessProvider {
         delete _pending[requestId];
         delete requestIdOf[claimId];
 
+        // The consumer stores the word (JuryModule.seedOf); it is also in RandomnessFulfilled.
         uint256 seed = randomWords[0];
-        seedOf[claimId] = seed;
         emit RandomnessFulfilled(claimId, requestId, seed);
         try IRandomnessConsumer(consumer).fulfillRandomness(claimId, seed) {} catch (bytes memory reason) {
             emit RandomnessDeliveryFailed(claimId, requestId, reason);

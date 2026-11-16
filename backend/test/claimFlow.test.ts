@@ -52,11 +52,15 @@ describe("claim flow through the backend", () => {
       purchaseProof: true,
     });
 
-    // 3. Keeper fulfils the randomness request; five jurors are selected, claimant excluded.
+    // 3. Keeper fulfils the randomness request, then seats the jury from the stored seed; five
+    //    jurors are selected, claimant excluded.
     const actions = await keeper.tick();
     assert.deepEqual(
       actions.map((a) => [a.claimId, a.action, a.error]),
-      [[1, "fulfillRandomness", undefined]],
+      [
+        [1, "fulfillRandomness", undefined],
+        [1, "seatJury", undefined],
+      ],
     );
     claim = (await api("/api/claims/1")).body;
     assert.equal(claim.state, "Voting");

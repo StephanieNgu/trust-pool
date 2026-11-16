@@ -33,6 +33,7 @@ const PROTOCOL_ERRORS = new Interface([
   "error NotCommitted()",
   "error NotEnoughEligibleJurors(uint256 available, uint256 required)",
   "error RandomnessNotTimedOut()",
+  "error NotSeeded()",
   "error RevealClosed()",
   "error RevealNotOpen()",
   "error VotingStillOpen()",
@@ -87,7 +88,8 @@ const MESSAGES: Record<string, (args: readonly unknown[]) => string> = {
   NotCommitted: () => "You didn't seal a vote on this claim, so there is nothing to reveal.",
   NotEnoughEligibleJurors: ([available, required]) =>
     `A jury needs ${String(required)} other members with active coverage and a juror stake, and only ${String(available)} are available right now. Try again once more members have joined juries.`,
-  RandomnessNotTimedOut: () => "Jury selection is still within its time limit, so the claim can't be cancelled yet.",
+  RandomnessNotTimedOut: () => "Jury selection is still within its time limit (or the seed has already arrived), so the claim can't be cancelled.",
+  NotSeeded: () => "Chainlink hasn't delivered the random seed for this claim yet, so its jury can't be seated.",
   RevealClosed: () => "The reveal window has closed on this claim.",
   RevealNotOpen: () => "Reveals open once every juror has voted or the voting deadline passes.",
   VotingStillOpen: () => "Voting is still open on this claim.",

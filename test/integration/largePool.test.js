@@ -6,7 +6,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { loadFixture, time } = require("@nomicfoundation/hardhat-network-helpers");
-const { deployFixture, deviceHash, enrollmentHash, fulfillRandomness, COVERAGE, EVIDENCE, USDC, JuryPhase, ClaimState } = require("../helpers");
+const { deployFixture, deviceHash, enrollmentHash, deliverRandomness, callbackSucceeded, COVERAGE, EVIDENCE, USDC, JuryPhase, ClaimState } = require("../helpers");
 
 /** Deploys the protocol with `n` fresh wallets that bought policies, staked, and passed the waiting period. */
 async function poolOf(n) {
@@ -36,31 +36,35 @@ const pool60 = () => poolOf(60);
 async function fileAndFulfill(ctx, claimant, word) {
   await ctx.claimManager.connect(claimant).submitClaim(USDC(100), EVIDENCE);
   const claimId = await ctx.claimManager.claimCount();
-  const tx = await fulfillRandomness(ctx, claimId, word);
-  const receipt = await tx.wait();
-  return { claimId, receipt };
+  // Step 1: Chainlink's callback, which only stores the seed. Step 2: anyone seats the jury.
+  const callback = await (await deliverRandomness(ctx, claimId, word)).wait();
+  const receipt = await (await ctx.jury.seatJury(claimId)).wait();
+  return { claimId, callback, receipt };
 }
 
 describe("Integration: jury draw in a large pool", function () {
   this.timeout(300_000);
 
-  it("seats a jury of 5 from 40 members within Chainlink's callback gas limit", async function () {
+  it("seats a jury of 5 from 40 members, with a callback well inside Chainlink's gas limit", async function () {
     const ctx = await loadFixture(pool40);
-    const { claimId, receipt } = await fileAndFulfill(ctx, ctx.members[0]);
-    await expect(receipt).to.not.emit(ctx.randomness, "RandomnessDeliveryFailed");
+    const { claimId, callback, receipt } = await fileAndFulfill(ctx, ctx.members[0]);
+    await expect(callback).to.not.emit(ctx.randomness, "RandomnessDeliveryFailed");
     expect((await ctx.jury.getJury(claimId)).phase).to.equal(JuryPhase.Voting);
     expect((await ctx.claimManager.getClaim(claimId)).state).to.equal(ClaimState.Voting);
     const jurors = await ctx.jury.getJurors(claimId);
     expect(new Set(jurors).size).to.equal(5);
     expect(jurors).to.not.include(ctx.members[0].address);
-    // Comfortable headroom under the limit the VRF request asked for.
-    expect(receipt.gasUsed).to.be.lessThan((BigInt(await ctx.randomness.callbackGasLimit()) * 3n) / 4n);
+    // The callback only stores the seed, so it fits in the small gas limit the VRF request asks for
+    // (which keeps down the LINK the subscription has to hold in reserve).
+    expect(callbackSucceeded(ctx, callback)).to.equal(true);
+    // Seating is an ordinary transaction with no Chainlink limit, but it is still bounded.
+    expect(receipt.gasUsed).to.be.lessThan(750_000n);
   });
 
-  it("keeps the callback's gas flat as the pool grows", async function () {
+  it("keeps the seating gas flat as the pool grows", async function () {
     const ctx = await loadFixture(pool60);
-    const { receipt } = await fileAndFulfill(ctx, ctx.members[0]);
-    await expect(receipt).to.not.emit(ctx.randomness, "RandomnessDeliveryFailed");
+    const { callback, receipt } = await fileAndFulfill(ctx, ctx.members[0]);
+    await expect(callback).to.not.emit(ctx.randomness, "RandomnessDeliveryFailed");
     expect(receipt.gasUsed).to.be.lessThan(750_000n);
   });
 
@@ -74,8 +78,8 @@ describe("Integration: jury draw in a large pool", function () {
       // Each claim gets its own claimant, since a policy holds one open claim at a time.
       const word = BigInt(ethers.keccak256(ethers.toUtf8Bytes(`sparse-${i}`)));
       const claimant = ctx.members[i];
-      const { claimId, receipt } = await fileAndFulfill(ctx, claimant, word);
-      await expect(receipt).to.not.emit(ctx.randomness, "RandomnessDeliveryFailed");
+      const { claimId, callback, receipt } = await fileAndFulfill(ctx, claimant, word);
+      await expect(callback).to.not.emit(ctx.randomness, "RandomnessDeliveryFailed");
       expect(receipt.gasUsed).to.be.lessThan(900_000n);
       const jurors = await ctx.jury.getJurors(claimId);
       if (jurors.length === 0) {
