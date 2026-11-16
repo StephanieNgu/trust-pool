@@ -81,13 +81,39 @@ describe("Seating a jury after the VRF answer", function () {
       expect(await ctx.jury.getJurors(ctx.claimId)).to.deep.equal(expectedJury(seed, ctx.others, size));
     });
 
-    it("keeps the callback small enough for a 100k gas limit, which needs far less LINK", async function () {
+    it("keeps the callback small enough for its 150k gas limit, which needs far less LINK", async function () {
       const ctx = await loadFixture(pendingFixture);
-      expect(await ctx.randomness.callbackGasLimit()).to.equal(100_000n);
+      expect(await ctx.randomness.callbackGasLimit()).to.equal(150_000n);
       const receipt = await (await deliverRandomness(ctx, ctx.claimId, ethers.MaxUint256 - 1n)).wait();
       // The mock forwards exactly the requested gas to the callback, as Chainlink does.
       expect(callbackSucceeded(ctx, receipt)).to.equal(true);
       expect(await ctx.jury.seedOf(ctx.claimId)).to.equal(ethers.MaxUint256 - 1n);
+    });
+
+    it("creates no new storage in the callback (EIP-8037 prices each new slot at about 98k gas)", async function () {
+      // Hardhat runs an older gas schedule than Sepolia, where creating a storage slot now costs about
+      // 98k gas. A callback that created one ran out of gas on Sepolia while passing here, so check
+      // the shape directly: every storage write inside the callback overwrites a slot that was
+      // already set, or clears one.
+      const ctx = await loadFixture(pendingFixture);
+      const before = await ethers.provider.getBlockNumber();
+      const receipt = await (await deliverRandomness(ctx, ctx.claimId, 12345n)).wait();
+      const trace = await ethers.provider.send("debug_traceTransaction", [receipt.hash, { disableStack: false }]);
+      const contracts = [await ctx.randomness.getAddress(), await ctx.jury.getAddress()];
+      const writes = trace.structLogs
+        .filter((step) => step.op === "SSTORE" && step.depth >= 2) // depth 1 is the coordinator mock
+        .map((step) => ({ key: "0x" + step.stack[step.stack.length - 1].replace(/^0x/, "").padStart(64, "0"), value: BigInt("0x" + step.stack[step.stack.length - 2].replace(/^0x/, "")) }));
+      expect(writes.length).to.be.greaterThan(0);
+      for (const { key, value } of writes) {
+        if (value === 0n) continue; // clearing a slot creates nothing
+        let overwrote = false;
+        for (const address of contracts) {
+          const prior = BigInt(await ethers.provider.getStorage(address, key, before));
+          const now = BigInt(await ethers.provider.getStorage(address, key));
+          if (prior !== 0n && now === value) overwrote = true;
+        }
+        expect(overwrote, `callback created storage slot ${key}`).to.equal(true);
+      }
     });
   });
 

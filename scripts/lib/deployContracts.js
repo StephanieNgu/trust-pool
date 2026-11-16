@@ -47,11 +47,13 @@ const TESTNET_PARAMS = {
 
 /** Chainlink VRF v2.5 request settings shared by every network. */
 const VRF_DEFAULTS = {
-  // The callback only stores the seed (JuryModule.seatJury seats the jury in its own transaction),
-  // which takes about 50k gas at any pool size; 100k leaves twice that. Chainlink holds back LINK in
-  // proportion to this limit for each pending request: about 133 LINK at 1M gas on Sepolia, about 17
-  // LINK at 100k, so a subscription funded with the faucet's 20 to 25 LINK can serve requests.
-  callbackGasLimit: 100_000,
+  // The callback only stores the seed (JuryModule.seatJury seats the jury in its own transaction)
+  // and creates no new storage, so it takes about 35k gas at any pool size. Creating storage would
+  // not fit: since EIP-8037 (live on Sepolia) each new slot costs about 98k gas, which is why the
+  // first 100k-gas deployment's callback ran out of gas. 150k leaves room for further repricing.
+  // Chainlink holds back LINK in proportion to this limit for each pending request: about 133 LINK
+  // at 1M gas on Sepolia, about 24 LINK at 150k.
+  callbackGasLimit: 150_000,
   requestConfirmations: 3,
   nativePayment: false,
 };

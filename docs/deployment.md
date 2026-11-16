@@ -52,7 +52,7 @@ All other parameters (premiums, stakes, bonds, the 20% payout cap) are the defau
 | Deployer wallet (throwaway, about 0.15 Sepolia ETH) | Max, MetaMask | Local `.env` only (`DEPLOYER_PRIVATE_KEY`) |
 | Keeper wallet (throwaway, about 0.05 Sepolia ETH) | Max, MetaMask | Render secret `KEEPER_PRIVATE_KEY` |
 | Alchemy (or Infura) Sepolia RPC URL | Max | `.env` `SEPOLIA_RPC_URL` and Render secret `RPC_URL` |
-| VRF subscription (at least 20 LINK, added with **Add funds**; each pending request holds back about 17) | Deployer wallet at vrf.chain.link | `.env` `VRF_SUBSCRIPTION_ID` |
+| VRF subscription (at least 30 LINK, added with **Add funds**; each pending request holds back about 24) | Deployer wallet at vrf.chain.link | `.env` `VRF_SUBSCRIPTION_ID` |
 | Evidence encryption key (`openssl rand -hex 32`) | Render secret, plus a copy in a password manager (with a disk, losing it makes stored evidence unreadable) | Render secret `EVIDENCE_ENCRYPTION_KEY` |
 | Render account | Max | — |
 
@@ -149,7 +149,7 @@ To go back to a previous contract set, revert the commit that changed `deploymen
 | Service up | Render health check on `/api/health` (it restarts the service after repeated failures), plus an uptime pinger on the same URL | Any alert |
 | Keeper healthy | `/api/health` → `keeper.running`, `keeper.lastTickAt`, `keeper.lastError`. Logs lines start `[keeper]` | `lastTickAt` older than 5 min, or a repeated `lastError` |
 | Keeper gas | Etherscan page of the keeper address | Below 0.01 ETH: top up from a faucet |
-| VRF subscription balance | vrf.chain.link subscription page | Below 20 LINK (a request needs about 17 held back), or requests stuck pending |
+| VRF subscription balance | vrf.chain.link subscription page | Below 30 LINK (a request needs about 24 held back), or requests stuck pending |
 | Claims stuck | Claims page (`JuryPending` over 10 min), Etherscan `ClaimManager` events | Check the VRF subscription and the consumer list |
 | RPC quota | Alchemy dashboard, compute units | Above 70% of the monthly limit: raise `KEEPER_INTERVAL_MS` |
 | Errors | Render logs (the API logs unexpected errors with `console.error`) | Any 502 burst |
