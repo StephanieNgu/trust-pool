@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createApp, type AppDeps } from "../src/app";
+import { LogIndex, isRateLimited } from "../src/history";
 
 describe("warming the event history", () => {
   function fakeDeps(warmLogsEveryMs: number | null) {
@@ -21,7 +22,8 @@ describe("warming the event history", () => {
   it("reads from the deploy block in capped steps as soon as the app starts", async () => {
     const { deps, ranges } = fakeDeps(60_000);
     createApp(deps);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Two 250 ms pauses between the three capped steps.
+    await new Promise((resolve) => setTimeout(resolve, 700));
     assert.deepEqual(ranges, [[100, 109], [110, 119], [120, 125]]);
   });
 
@@ -30,5 +32,26 @@ describe("warming the event history", () => {
     createApp(deps);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(ranges, []);
+  });
+
+  it("backs off and retries when the RPC rate-limits eth_getLogs", async () => {
+    let calls = 0;
+    const provider = {
+      getBlockNumber: async () => 19,
+      getLogs: async () => {
+        calls++;
+        if (calls === 2) throw Object.assign(new Error("could not coalesce error"), { error: { code: 429, message: "Your app has exceeded its compute units per second capacity." } });
+        return [];
+      },
+    };
+    const index = new LogIndex(provider as never, { registry: "0x1", pool: "0x2", claimManager: "0x3" } as never, { fromBlock: 0, maxRange: 10, pauseMs: 1 });
+    await index.sync();
+    assert.equal(calls, 3, "two steps, one of them retried");
+  });
+
+  it("recognises rate-limit errors and nothing else", () => {
+    assert.ok(isRateLimited({ error: { code: 429 } }));
+    assert.ok(isRateLimited(new Error("Too Many Requests")));
+    assert.ok(!isRateLimited(new Error("execution reverted")));
   });
 });

@@ -62,6 +62,16 @@ export interface LogIndexOptions {
   fromBlock?: number;
   /** Most blocks per eth_getLogs call (free RPC tiers cap it), or null/undefined for no limit. */
   maxRange?: number | null;
+  /** Pause between capped steps, and the base of the backoff after a rate-limit error. Default 250 ms. */
+  pauseMs?: number;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** True for "too many requests" errors, e.g. Alchemy's 429 "exceeded its compute units per second capacity". */
+export function isRateLimited(err: unknown): boolean {
+  const text = JSON.stringify(err, (_k, v) => (typeof v === "bigint" ? v.toString() : v)) + String(err);
+  return /\b429\b|rate limit|compute units per second|too many requests/i.test(text);
 }
 
 /**
@@ -107,9 +117,23 @@ export class LogIndex {
     const address = [this.addresses.registry, this.addresses.pool, this.addresses.claimManager];
     while (this.next <= latest) {
       const toBlock = maxRange ? Math.min(latest, this.next + maxRange - 1) : latest;
-      const logs = await this.provider.getLogs({ address, topics: [INDEXED_TOPICS], fromBlock: this.next, toBlock });
+      const logs = await this.getLogsWithRetry({ address, topics: [INDEXED_TOPICS], fromBlock: this.next, toBlock });
       this.logs.push(...logs);
       this.next = toBlock + 1;
+      // Small steps mean many calls; pace them so a free RPC tier's per-second limit isn't hit.
+      if (maxRange && this.next <= latest) await sleep(this.options.pauseMs ?? 250);
+    }
+  }
+
+  /** eth_getLogs, retried with backoff when the RPC says it is rate limited (HTTP 429). */
+  private async getLogsWithRetry(filter: Parameters<Provider["getLogs"]>[0]): Promise<Log[]> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.provider.getLogs(filter);
+      } catch (err) {
+        if (!isRateLimited(err) || attempt >= 6) throw err;
+        await sleep((this.options.pauseMs ?? 250) * 4 * 2 ** attempt);
+      }
     }
   }
 }
