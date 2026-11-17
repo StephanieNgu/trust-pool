@@ -36,6 +36,12 @@ export interface AppDeps {
   accounts?: AccountStore;
   /** Most blocks one eth_getLogs call may cover (free RPC tiers cap it); unlimited by default. */
   logBlockRange?: number | null;
+  /**
+   * Read the event history in the background at startup and then every this many ms, so the first
+   * history request after a (re)start doesn't wait for it. With a small LOG_BLOCK_RANGE on a public
+   * RPC, catching up from the deploy block can take minutes. Omit to read on demand only.
+   */
+  warmLogsEveryMs?: number | null;
   /** The built web app (dist/frontend) to serve next to the API, so one host serves both. Omit in development. */
   staticDir?: string | null;
 }
@@ -72,6 +78,21 @@ export function createApp(deps: AppDeps) {
   const captures = deps.captures ?? new CaptureChallenges();
   const accounts = deps.accounts ?? new AccountStore();
   const logs = new LogIndex(provider, deployment.addresses, { fromBlock: deployment.startBlock, maxRange: deps.logBlockRange });
+  if (deps.warmLogsEveryMs) {
+    let first = true;
+    const warm = () => {
+      const started = Date.now();
+      logs.sync().then(
+        (all) => {
+          if (first) console.log(`[history] indexed ${all.length} events in ${Math.round((Date.now() - started) / 1000)} s`);
+          first = false;
+        },
+        (err: unknown) => console.warn(`[history] could not read events: ${err instanceof Error ? err.message : err}`),
+      );
+    };
+    warm();
+    setInterval(warm, deps.warmLogsEveryMs).unref();
+  }
   const app = express();
   app.disable("x-powered-by");
 
