@@ -68,7 +68,7 @@ async function main() {
   }
   const evidence = new LocalEvidenceStore(config.evidenceDir, evidenceKey, { aiDetectors });
   const accounts = new AccountStore(config.accountsDir);
-  const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin, logBlockRange: config.logBlockRange, staticDir: config.staticDir });
+  const app = createApp({ deployment, provider, contracts, evidence, keeper, accounts, corsOrigin: config.corsOrigin, logBlockRange: config.logBlockRange, warmLogsEveryMs: chainId === LOCAL_CHAIN_ID ? null : 5 * 60_000, staticDir: config.staticDir });
 
   const server = app.listen(config.port, () => {
     console.log(`TrustPool backend on http://localhost:${config.port} (chain ${chainId}, ${config.rpcUrl})`);
