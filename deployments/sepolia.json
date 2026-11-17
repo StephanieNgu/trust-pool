@@ -1,0 +1,42 @@
+{
+  "network": "sepolia",
+  "chainId": "11155111",
+  "deployer": "0xb7388BaaB7f15509106383841C324e57e2683FB8",
+  "startBlock": 12150574,
+  "addresses": {
+    "token": "0x02F72beC38D35E42B8804e1D30e994BB32B056fc",
+    "pool": "0x6Be563C3Ee526E7ce8162cb5E20bdB213AA93230",
+    "registry": "0x7576Bd11A510Dee28603f3B512d50cb05413cCdA",
+    "randomness": "0x20e9e0bD3A71bd0e7Caf4d51627c5BB3aE34316F",
+    "jury": "0x385c7d29777Da12CD44DE7E2BBa39cF5375ca21C",
+    "claimManager": "0x14C1f15AA183A6582D2b4bd1BFF8dD910DD22b16"
+  },
+  "vrf": {
+    "coordinator": "0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B",
+    "subscriptionId": "64168753615001593447397349450795613962867755456276025869920431772538714678288",
+    "keyHash": "0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae",
+    "mock": false
+  },
+  "params": {
+    "waitingPeriod": "0",
+    "premiumBps": "150",
+    "premiumPeriod": "2592000",
+    "gracePeriod": "604800",
+    "maxCoverageLimit": "2000000000",
+    "maxPayoutBps": "2000",
+    "jurySize": "3",
+    "quorum": "2",
+    "commitPeriod": "900",
+    "revealPeriod": "900",
+    "randomnessTimeout": "3600",
+    "minJurorStake": "20000000",
+    "jurorFeeBps": "200",
+    "minJurorFee": "2000000",
+    "agreementBandBps": "1000",
+    "noShowPenalty": "5000000",
+    "responsePeriod": "900",
+    "claimBondBps": "500",
+    "minClaimBond": "5000000",
+    "receiptPeriod": "86400"
+  }
+}
