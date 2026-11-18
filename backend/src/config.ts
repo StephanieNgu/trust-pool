@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 export interface Config {
   port: number;
   rpcUrl: string;
+  /** Most RPC requests in flight at once; keeps a free RPC tier under its per-second limit. */
+  rpcMaxConcurrency: number;
   deploymentFile: string;
   evidenceDir: string;
   /** 32-byte evidence encryption key, or null to use (and create if needed) `evidenceKeyFile`. */
@@ -54,6 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     port: int(env.PORT, 3000, "PORT"),
     rpcUrl: env.RPC_URL || "http://127.0.0.1:8545",
+    rpcMaxConcurrency: int(env.RPC_MAX_CONCURRENCY, 4, "RPC_MAX_CONCURRENCY"),
     deploymentFile: resolve(env.DEPLOYMENT_FILE || "deployments/localhost.json"),
     evidenceDir: resolve(env.EVIDENCE_DIR || "data/evidence"),
     evidenceKey: env.EVIDENCE_ENCRYPTION_KEY || null,
