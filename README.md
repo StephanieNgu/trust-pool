@@ -11,7 +11,8 @@ stake if they don't vote. Claimants post a bond and lose part of it in proportio
   idle spell takes about a minute, and uploads don't survive a restart; see
   [docs/deployment.md](docs/deployment.md#known-limits)). Contract addresses are in
   [`deployments/sepolia.json`](deployments/sepolia.json).
-* **Built by** CSE 416 Group JSMS, Stony Brook University.
+* **Built by** CSE 416 Group JSMS, Stony Brook University: Maximilian Vlock, Stephanie Ngu, Sheena Zhuang
+  and Jake Havel.
 * **Status:** a prototype on a public testnet with a mock stablecoin. It is not insurance and has
   not been audited. What the jury can and cannot establish is in
   [docs/oracle-and-anti-fraud.md](docs/oracle-and-anti-fraud.md).
