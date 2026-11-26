@@ -1,4 +1,41 @@
-# trust-pool
+# TrustPool
+
+TrustPool is peer-to-peer device insurance on Ethereum. Members cover a phone or laptop by paying a
+monthly premium into a shared pool. When a device is damaged, the owner files a claim with photos,
+and a jury of other members, drawn at random by Chainlink VRF, votes privately on how much to pay
+(commit-reveal). The middle vote becomes the offer, and the pool pays it out against a repair
+receipt. Jurors stake to serve, earn a fee when they agree with the outcome, and lose part of the
+stake if they don't vote. Claimants post a bond and lose part of it in proportion to how much the jury cuts.
+
+* **Live on Sepolia:** https://trust-pool.onrender.com (Render's free plan: the first load after an
+  idle spell takes about a minute, and uploads don't survive a restart; see
+  [docs/deployment.md](docs/deployment.md#known-limits)). Contract addresses are in
+  [`deployments/sepolia.json`](deployments/sepolia.json).
+* **Built by** CSE 416 Group JSMS, Stony Brook University: Maximilian Vlock, Stephanie Ngu, Sheena Zhuang
+  and Jake Havel.
+* **Status:** a prototype on a public testnet with a mock stablecoin. It is not insurance and has
+  not been audited. What the jury can and cannot establish is in
+  [docs/oracle-and-anti-fraud.md](docs/oracle-and-anti-fraud.md).
+
+![Architecture: React app and MetaMask, the Express API, evidence store and keeper, and the six contracts](docs/architecture.png)
+
+| Layer | Where | What it does |
+|---|---|---|
+| Contracts | `contracts/` | `PolicyRegistry` (policies, premiums), `Pool` (the only contract holding funds), `ClaimManager` (claim state machine, bond, receipt), `JuryModule` (VRF draw, commit-reveal, median, fees), `VRFRandomness` (Chainlink VRF v2.5 consumer), `MockStablecoin` (mUSDC) |
+| Backend | `backend/src/` | Express API reading chain state, wallet sign-in, encrypted evidence store, notifications, and a keeper that moves claims along with permissionless calls |
+| Frontend | `frontend/src/` | React + Vite app: dashboard, coverage, pool, claims, jury queue |
+| Docs | `docs/` | [Design doc](docs/design-doc.md), [deployment runbook](docs/deployment.md), [VRF](docs/vrf.md), [oracle and anti-fraud limits](docs/oracle-and-anti-fraud.md) |
+
+**Quick start (local chain, no MetaMask needed):**
+
+```powershell
+npm install
+npm run chain         # terminal 1
+npm run deploy:local  # terminal 2
+npm run dev:backend   # terminal 3
+npm run seed:demo     # terminal 2 again
+npm run dev           # terminal 4, then open http://127.0.0.1:5173/?demo=1
+```
 
 ## Prerequisites
 
@@ -370,9 +407,10 @@ npx hardhat run scripts/sepolia-vrf-demo.js --network sepolia
 
 ## Running Tests
 
-Run every test: the contract suite (unit tests in `test/unit`, the end-to-end happy path in
-`test/integration`) and the backend suite (`backend/test`, which runs the API and keeper against an
-in-process Hardhat chain):
+Run every test: the contract suite (unit tests in `test/unit`, integration tests in
+`test/integration`, a short run of the invariants in `test/invariant`), the backend suite
+(`backend/test`, which runs the API and keeper against an in-process Hardhat chain) and the frontend
+suite (`frontend/test`):
 
 ```powershell
 npm test
@@ -435,13 +473,13 @@ The CI pipeline runs automatically when:
 * Code is pushed to the repository
 * A pull request targets the `main` branch
 
-The pipeline:
+The pipeline has two jobs:
 
-1. Installs dependencies
-2. Compiles the contracts
-3. Runs the contract and backend test suites
-4. Runs ESLint and Solhint
-5. Builds the frontend and backend
+1. **Compile, test, lint, build:** installs dependencies, compiles the contracts, runs the
+   contract, backend and frontend test suites (`npm test`), runs ESLint and Solhint, and builds the
+   frontend and backend.
+2. **Playwright browser tests:** starts a local Hardhat chain, the backend and Vite, and runs the
+   browser specs in `e2e/` in Chromium. The report is uploaded when a run fails.
 
 ## Development Workflow
 
@@ -465,57 +503,54 @@ Then open a pull request from your feature branch into `main`.
 
 ```text
 trust-pool/
-├── .github/
-│   └── workflows/
-│       └── ci.yml
+├── .github/workflows/ci.yml   # tests, lint, build, Playwright
 ├── contracts/
-│   ├── MockStablecoin.sol
-│   ├── PolicyRegistry.sol
-│   ├── Pool.sol
-│   ├── ClaimManager.sol
-│   ├── JuryModule.sol
-│   ├── VRFRandomness.sol
+│   ├── PolicyRegistry.sol     # policies, monthly premiums, grace and lapse
+│   ├── Pool.sol               # reserve, juror stakes, claim bonds, reserved payouts
+│   ├── ClaimManager.sol       # claim state machine, bond, offer, receipt, payout
+│   ├── JuryModule.sol         # VRF draw, commit-reveal, median, fees and penalties
+│   ├── VRFRandomness.sol      # Chainlink VRF v2.5 consumer, no owner
+│   ├── MockStablecoin.sol     # mUSDC with a daily faucet
 │   ├── interfaces/
-│   └── test/
-│       └── VRFCoordinatorV2_5Mock.sol  # Chainlink's mock, local chains only
+│   └── test/VRFCoordinatorV2_5Mock.sol  # Chainlink's mock, local chains only
 ├── test/
-│   ├── helpers.js
-│   ├── unit/
-│   └── integration/
-│       └── happyPath.test.js
-├── scripts/
-│   ├── deploy.js
-│   ├── demo.js
-│   ├── sepolia-vrf-demo.js  # claim on Sepolia with a jury picked by real Chainlink VRF
-│   └── lib/
-│       └── deployContracts.js
-├── deployments/        # written by deploy.js
-├── docs/
-│   ├── design-doc.md
-│   ├── oracle-and-anti-fraud.md  # oracle decision, anti-fraud limits
-│   └── vrf.md
-├── frontend/
-│   ├── index.html
-│   ├── tsconfig.json
-│   └── src/
-│       ├── App.tsx
-│       ├── contracts/  # ABIs, addresses, contract calls
-│       └── wallet/     # MetaMask connection
+│   ├── unit/                  # per-contract tests, limitations, VRF and jury seating
+│   ├── integration/           # happy path, large pools, resuming a deploy
+│   └── invariant/             # randomised token-accounting invariants
 ├── backend/
 │   ├── src/
-│   │   ├── server.ts   # entry point
-│   │   ├── app.ts      # HTTP routes
-│   │   ├── evidence.ts # content-addressed evidence store
-│   │   ├── keeper.ts   # jury randomness, finalize, payout
-│   │   └── protocol.ts # on-chain reads for the API
+│   │   ├── server.ts          # entry point
+│   │   ├── app.ts             # HTTP routes
+│   │   ├── protocol.ts        # on-chain reads for the API
+│   │   ├── keeper.ts          # finalize, accept, pay, expire, lapse
+│   │   ├── evidence.ts        # encrypted, content-addressed evidence store
+│   │   ├── aiDetection.ts     # AI-generated image screening
+│   │   ├── capture.ts         # one-time photo capture codes
+│   │   ├── auth.ts, accounts.ts  # wallet sign-in, sessions, profiles
+│   │   ├── notifications.ts   # bell and "needs your attention" items
+│   │   ├── history.ts         # event log index for account history
+│   │   ├── rpc.ts             # rate-limited JSON-RPC provider
+│   │   └── chain.ts, config.ts, abis.ts
 │   └── test/
-├── hardhat.config.js
-├── .solhint.json
-├── package.json
-├── package-lock.json
-├── tsconfig.json
-├── vite.config.mts
-├── eslint.config.mjs
-├── .gitignore
-└── README.md
+├── frontend/
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── api/               # backend client
+│   │   ├── contracts/         # ABIs, addresses, contract calls
+│   │   ├── wallet/            # MetaMask and the local demo wallet
+│   │   ├── member/            # dashboard, coverage, pool, jury duty, notifications
+│   │   ├── claims/            # claims, jury queue, voting, offer, receipt
+│   │   ├── capture/, evidence/  # photo capture and file checks
+│   └── test/
+├── e2e/                       # Playwright browser specs
+├── scripts/
+│   ├── deploy.js, lib/        # deploy to localhost or Sepolia
+│   ├── seed-demo.js, demo.js  # local demo data and CLI flow
+│   ├── sepolia-vrf-demo.js    # a claim on Sepolia with a real Chainlink draw
+│   ├── sepolia-jury-vote.js, sepolia-receipt.js  # finish a Sepolia claim from the command line
+│   └── e2e-server.js, test-invariants.js, check-production-bundle.js
+├── deployments/               # addresses written by deploy.js (sepolia.json is committed)
+├── docs/                      # design doc, deployment, VRF, oracle and anti-fraud, architecture.png
+├── Dockerfile, render.yaml    # hosting
+└── hardhat.config.js, vite.config.mts, tsconfig.json, eslint.config.mjs, package.json
 ```

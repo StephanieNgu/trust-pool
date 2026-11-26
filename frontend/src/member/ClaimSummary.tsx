@@ -10,6 +10,8 @@ interface ClaimSummaryProps {
   canFile: boolean;
   tokenDecimals: number;
   tokenSymbol: string;
+  /** Jurors seated per claim, from the deployment (5 by default, 3 on Sepolia). */
+  jurySize: number;
   onOpenClaim(claimId: string): void;
   onFileClaim(): void;
 }
@@ -38,7 +40,7 @@ function statusLine(claim: ClaimView, tokenDecimals: number, tokenSymbol: string
 }
 
 /** The member's open claim (or latest one) on the dashboard, with what happens next. */
-export function ClaimSummary({ account, ready, refresh, openClaimId, canFile, tokenDecimals, tokenSymbol, onOpenClaim, onFileClaim }: ClaimSummaryProps) {
+export function ClaimSummary({ account, ready, refresh, openClaimId, canFile, tokenDecimals, tokenSymbol, jurySize, onOpenClaim, onFileClaim }: ClaimSummaryProps) {
   const [claims, setClaims] = useState<ClaimView[] | null>(null);
 
   useEffect(() => {
@@ -55,7 +57,7 @@ export function ClaimSummary({ account, ready, refresh, openClaimId, canFile, to
     <span className="eyebrow">{claim && claim.id === openClaimId ? "YOUR OPEN CLAIM" : "YOUR CLAIMS"}</span>
     {claims === null ? <p className="muted">Loading your claims…</p> : !claim ? <>
       <h3>No claims yet.</h3>
-      <p className="muted">If your device is damaged, lost or stolen, file a claim with photos. A jury of five members decides how much to pay.</p>
+      <p className="muted">If your device is damaged, lost or stolen, file a claim with photos. A jury of {jurySize} members decides how much to pay.</p>
       {canFile && <button className="primary" type="button" onClick={onFileClaim}>File a claim</button>}
     </> : <>
       <div className="claim-summary-heading"><h3>Claim #{claim.id}</h3><span className={`claim-status state-${claim.state.toLowerCase()}`}>{CLAIM_STATE_COPY[claim.state]}</span></div>

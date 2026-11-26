@@ -1,9 +1,8 @@
 {
   "name": "trust-pool",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "directories": {
+  "description": "Peer-to-peer device insurance on Ethereum: a shared pool, Chainlink VRF juries with commit-reveal voting, and payouts against a repair receipt.",
+    "directories": {
     "test": "test"
   },
   "scripts": {

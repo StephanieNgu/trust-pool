@@ -127,6 +127,22 @@ To run a jury draw from the command line, use `npx hardhat run scripts/sepolia-v
 | `CORS_ORIGIN` | unset (`*`) | The app and API share one origin; API auth is a bearer token, not a cookie |
 | `KEEPER_FULFILL_RANDOMNESS` | default | Ignored on Sepolia, where there is no mock coordinator to drive |
 
+## Final demo: run the service on a laptop
+
+This is how we present the final demo. The same app runs on a laptop against the same Sepolia contracts. Claims, policies, stakes and wallets are all on-chain, so nothing has to be migrated. Evidence uploaded to the hosted service stays there, though, so file demo claims on the one you will present from.
+
+1. Suspend the hosted service (Render: **Settings → Suspend Service**) so two keepers don't send transactions from the same wallet.
+2. Terminal 1, in the repo (PowerShell; use `export NAME=value` in bash):
+   ```powershell
+   $env:RPC_URL="<Sepolia HTTPS URL>"; $env:DEPLOYMENT_FILE="deployments/sepolia.json"
+   $env:KEEPER_PRIVATE_KEY="<keeper key>"; $env:EVIDENCE_ENCRYPTION_KEY="<64 hex characters>"
+   $env:LOG_BLOCK_RANGE="10"; npm run dev:backend
+   ```
+3. Terminal 2: `npm run dev`, then open http://localhost:5173 with MetaMask on Sepolia. Connect each demo account to `localhost:5173` in MetaMask and sign in once.
+4. Afterwards, stop both terminals and resume the hosted service.
+
+If the app can't be used at all, two scripts finish a claim from the command line. `scripts/sepolia-jury-vote.js` votes from the demo juror wallets (`CLAIM_ID`, optional `AMOUNT`). `scripts/sepolia-receipt.js` submits the receipt and pays out (`CLAIM_ID`, `CLAIMANT_PRIVATE_KEY`, `RECEIPT_TOTAL`). Both run with `npx hardhat run <script> --network sepolia`.
+
 ## Rollback
 
 **App (web, API, keeper).** In Render, open the service's **Events**, choose the last good deploy, and click **Rollback**. You can also revert the bad commit on `main`, which redeploys it. On the free plan any redeploy or rollback wipes stored evidence and sign-ins; on-chain state is untouched. Contract addresses only change when `deployments/sepolia.json` changes.
@@ -159,8 +175,8 @@ On demo day, open `/api/health`, the keeper address on Etherscan and the VRF sub
 ## Known limits
 
 - **Run one instance.** The keeper and the stores assume a single process. Don't scale the service horizontally.
-- **Free plan: no disk, and it sleeps.** Uploaded evidence and sign-in sessions are wiped on every restart or redeploy, and the service sleeps after 15 idle minutes. The first request after that takes about a minute, and the keeper pauses while it sleeps, though anyone can still advance a claim from the UI because every keeper call is permissionless. On-chain state (policies, claims, payouts) is never affected. Before a demo, open the app 5 minutes early, don't merge to `main` during it, and file claims after the last redeploy so jurors can still open the photos. To keep data, switch `render.yaml` to `plan: starter` and uncomment the disk (about $7.25 a month).
-- **Keep it awake.** A free uptime monitor (for example UptimeRobot) that requests `/api/health` every 5 minutes stops the free service sleeping. The keeper then keeps running and evidence survives until the next redeploy. One always-on service fits inside Render's 750 free hours a month.
+- **The free plan can't carry a live demo.** On 26 Nov it answered most requests with 429 or 503 (from Render's front end; the backend never sends either), it sleeps after 15 idle minutes, and every restart or redeploy wipes `/var/data`. A restart wiped an open claim's evidence, which locked its jurors out of voting in the app. Keep the hosted service as a public link people can try, and present from a laptop (see [Final demo](#final-demo-run-the-service-on-a-laptop)). Starter with a 1 GB disk at `/var/data` (about $7.25 a month) would fix the sleeping and the wipes. The container runs as `node`, though, and a mounted disk is owned by root, so check that the backend can write to it before relying on it. On-chain state (policies, claims, payouts) is never affected by any of this.
+- **Keep it awake.** A free uptime monitor (for example UptimeRobot) that requests `/api/health` every 5 minutes stops the free service sleeping, so the keeper keeps running. One always-on service fits inside Render's 750 free hours a month.
 - **History catch-up after a restart.** With Alchemy's free tier (10 blocks per `eth_getLogs`), the backend has to read the event history from the deploy block again after every restart, in about 7,200 blocks a day. It starts in the background at boot and logs `[history] indexed N events in S s` when it's done. Until then, only the Account history panel waits; everything else works straight away.
 - **Sepolia itself.** Faucets rate-limit, and Chainlink VRF can occasionally be slow. Claims can be cancelled after the 1-hour randomness timeout.
 - **MockStablecoin.** Anyone can mint 1,000 a day from the faucet, so pool numbers on the testnet mean nothing economically.
