@@ -430,7 +430,7 @@ These are known gaps, deliberately left out of the prototype.
 16. **Pricing by device type and value:** every device pays the same rate of its cover; a rate table by type (and age) would price laptops and phones differently
 17. **Off-app reminders:** premium due dates and jury deadlines show in the app only. Email or push would use the member profile (built) for contact details, plus a delivery provider
 18. **Fallback when jurors are short:** claims are paused while fewer than five members are covered and staked, and a claim whose jurors drop out before the seed arrives is cancelled rather than given a short jury; a queue would keep a young pool usable
-19. **Testnet deployment** with a real stablecoin: contracts deploy to Sepolia with real Chainlink VRF (see [vrf.md](vrf.md)), still with mock USDC; the web app runs against the local chain
+19. **Testnet deployment** with a real stablecoin: contracts deploy to Sepolia with real Chainlink VRF (see [vrf.md](vrf.md)), still with mock USDC. The web app, API and keeper run against Sepolia too (see [deployment.md](deployment.md)); the free hosting plan proved too unreliable for a live demo, which runs the same service from a laptop
 
 ## 10a. Plan for Closing Claim Loopholes
 
@@ -438,7 +438,7 @@ The goal for the feature-complete milestones was to close the ways the MVP could
 
 | Loophole | MVP | Now | Status |
 |---|---|---|---|
-| Biased jury selection | The keeper owned `MockRandomness` and chose the seed | `VRFRandomness`, an ownerless Chainlink VRF v2.5 consumer; local runs labelled "Demo only" | Built (PR #27, #33). Sepolia run still to do |
+| Biased jury selection | The keeper owned `MockRandomness` and chose the seed | `VRFRandomness`, an ownerless Chainlink VRF v2.5 consumer; local runs labelled "Demo only" | Built (PR #27, #33). Ran on Sepolia: a full claim on 26 Nov 2026, jury drawn by Chainlink, voted, accepted and paid |
 | Jurors with nothing at stake | No reward or penalty | 20 mUSDC stake to be picked, 2% fee for agreeing jurors, 5 mUSDC no-show penalty | Built (PR #15) |
 | Fake or padded claims | Free to file | 5% bond, kept in proportion to how much the jury cut | Built (PR #16) |
 | Payout not spent on the device | Paid on approval | Paid only against a receipt, at most its total, within 30 days | Built (PR #18) |
@@ -446,34 +446,12 @@ The goal for the feature-complete milestones was to close the ways the MVP could
 | Two claims promised the same money | Second payout reverted | Each offer reserved in the Pool when the jury decides | Built (PR #32) |
 | Repeat claims | `coverageLimit` capped each claim; a paid claim left it unchanged | `coverageLimit` is a lifetime total per device. `executePayout` adds the payout to `paidOnDevice[deviceIdHash]`; `submitClaim` refuses an ask above what is left (`CoverageUsedUp`); the offer is capped the same way. Counting by device, not policy, means cancelling and re-buying does not reset it. The dashboard and claim form show what is left | Built (PR #35) |
 | The same damage claimed twice | Jurors saw only the claim in front of them | The claim page lists the device's earlier claims (date, outcome, asked, paid, and whether a previous owner filed them). While the claim is in Voting, its jurors can open those claims' evidence: the backend allows it when the reader sits on a Voting claim for the same device and the earlier claim's claimant uploaded the bundle | Built (PR #35) |
+| AI-generated photos | Any image accepted | Every evidence upload (signup, claim, receipt) is screened, and an image that looks generated is refused with HTTP 422. `MetadataAiDetector` always runs offline: it reads C2PA / IPTC "digital source type" labels, Stable Diffusion settings in PNG text chunks, and generator names in EXIF/XMP. An optional pixel classifier runs when `AI_DETECTOR_URL` is set. Metadata is easy to strip (a screenshot or re-encode removes it), so a clean result means "no marks found", not "real photo" | Built (PR #36). Metadata check only on Sepolia |
 
 Considered but not planned (or not yet decided):
 - **Rejecting a reused evidence hash on-chain.** Cheap to add, but any re-saved photo produces a new hash, so it would only stop the laziest duplicate. The backend already refuses the same photo file twice, and jurors reviewing the claim history cover the rest.
 - **Automatic near-duplicate image detection** (perceptual hashing in the backend). It would catch re-saved or cropped copies of earlier photos, but it needs tuning to avoid false matches, and jurors comparing the evidence cover the same risk.
-- **AI-generated photo detection** (assessed, not decided). Google's SynthID only finds Google's own watermark and has no public API. A C2PA Content Credentials check could run in the backend and show jurors an advisory badge (about a day of work), and a paid classifier could add a probability at the cost of sending claim photos to a third party. Neither would reject a claim on its own. The capture code, single-use photos and device key already make a generated photo hard to pass off.
 
 ## 11. Repository Layout
 
-```
-/contracts
-  MockStablecoin.sol
-  PolicyRegistry.sol
-  Pool.sol
-  ClaimManager.sol
-  JuryModule.sol
-  VRFRandomness.sol
-  interfaces/IRandomnessProvider.sol
-  test/VRFCoordinatorV2_5Mock.sol   (Chainlink's mock, local chains only)
-/test
-  integration/happyPath.test.js
-  unit/*.test.js
-/scripts
-  deploy.js
-  demo.js
-/frontend
-/docs
-  design-doc.md
-  tech-stack-justification.md
-/.github/workflows
-  ci.yml
-```
+See [Project Structure in the README](../README.md#project-structure), which is kept current.

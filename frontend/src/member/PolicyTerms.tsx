@@ -72,7 +72,7 @@ export function PolicyTerms({ onFileClaim, onGetCoverage }: Props) {
 
     <section className="terms-card" aria-label="How a claim is paid">
       <span className="eyebrow">HOW A CLAIM IS PAID</span>
-      <h2>Five members decide, and you're paid against a receipt</h2>
+      <h2>{p.jurySize ? `${p.jurySize} members decide` : "A jury of members decides"}, and you're paid against a receipt</h2>
       <ol className="terms-steps">
         <li><strong>File.</strong> Pick what happened, take photos showing a one-time code, say how much you need and why, and post the claim bond.</li>
         <li><strong>The jury votes.</strong> {p.jurySize ?? "Five"} members with cover and a juror stake are picked at random. Each privately votes how much to pay, from nothing up to your ask, over {days(p.commitPeriod)}, then reveals the vote over {days(p.revealPeriod)}. At least {p.quorum ?? "three"} must reveal.</li>

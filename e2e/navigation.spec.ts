@@ -29,7 +29,7 @@ test("profile, navigation, policy terms, and mobile layout remain usable", async
   await expect(page.getByRole("region", { name: "At a glance" })).toContainText("Monthly premium");
   await expect(page.getByRole("region", { name: "What's covered" })).toContainText("Cracked or broken screen");
   await expect(page.getByRole("region", { name: "What's not covered" })).toContainText("Losing the device");
-  await expect(page.getByRole("region", { name: "How a claim is paid" })).toContainText("Five members decide");
+  await expect(page.getByRole("region", { name: "How a claim is paid" })).toContainText("5 members decide");
   await expect(page.getByRole("region", { name: "Premiums and ending cover" })).toContainText("cancel at any time");
 
   await page.setViewportSize({ width: 390, height: 844 });
