@@ -17,13 +17,13 @@ This is the runbook for the public testnet deployment. The contracts go on Ether
 Browser (MetaMask on Sepolia)
    │  signs its own transactions ─────────────────────────────┐
    ▼                                                           ▼
-Render web service (Docker, 1 instance, free plan)                 Sepolia contracts
+Render web service (Docker, 1 instance, Starter + disk)          Sepolia contracts
    ├─ /            built web app (dist/frontend)          MockStablecoin (faucet), Pool,
    ├─ /api/*       Express API: config, claims,           PolicyRegistry, VRFRandomness,
    │               evidence (AES-256-GCM), sign-in         JuryModule, ClaimManager
    ├─ keeper       finalize / acceptOffer / payout /            ▲
    │               expire / lapse, every 60 s ── RPC ─────────┤
-   └─ /var/data    evidence, accounts (ephemeral on free plan) │
+   └─ /var/data    evidence, accounts (1 GB disk)             │
                                                     Chainlink VRF coordinator answers
                                                     jury randomness by itself
 ```
@@ -122,10 +122,26 @@ To run a jury draw from the command line, use `npx hardhat run scripts/sepolia-v
 | `KEEPER_INTERVAL_MS` | `60000` | 60 s keeps the RPC use inside Alchemy's free tier. Windows are 15 min, so this is plenty |
 | `LOG_BLOCK_RANGE` | `10` | Alchemy's free tier allows 10 blocks per `eth_getLogs`; the backend reads history in chunks from the deploy block (needs PR #38) |
 | `STATIC_DIR` | `/app/dist/frontend` | Set in the image; serves the web app at `/` |
-| `EVIDENCE_DIR`, `ACCOUNTS_DIR` | `/var/data/evidence`, `/var/data/accounts` | Ephemeral on the free plan; on a paid plan mount a disk here |
+| `EVIDENCE_DIR`, `ACCOUNTS_DIR` | `/var/data/evidence`, `/var/data/accounts` | On the Starter disk. Ephemeral on the free plan |
 | `PORT` | set by Render | |
 | `CORS_ORIGIN` | unset (`*`) | The app and API share one origin; API auth is a bearer token, not a cookie |
 | `KEEPER_FULFILL_RANDOMNESS` | default | Ignored on Sepolia, where there is no mock coordinator to drive |
+
+## Demo backup: run the service on a laptop
+
+If the hosted service misbehaves, the same app runs on a laptop against the same Sepolia contracts. Claims, policies, stakes and wallets are all on-chain, so nothing has to be migrated. Evidence uploaded to the hosted service stays there, though, so file demo claims on the one you will present from.
+
+1. Suspend the hosted service (Render: **Settings → Suspend Service**) so two keepers don't send transactions from the same wallet.
+2. Terminal 1, in the repo (PowerShell; use `export NAME=value` in bash):
+   ```powershell
+   $env:RPC_URL="<Sepolia HTTPS URL>"; $env:DEPLOYMENT_FILE="deployments/sepolia.json"
+   $env:KEEPER_PRIVATE_KEY="<keeper key>"; $env:EVIDENCE_ENCRYPTION_KEY="<64 hex characters>"
+   $env:LOG_BLOCK_RANGE="10"; npm run dev:backend
+   ```
+3. Terminal 2: `npm run dev`, then open http://localhost:5173 with MetaMask on Sepolia. Connect each demo account to `localhost:5173` in MetaMask and sign in once.
+4. Afterwards, stop both terminals and resume the hosted service.
+
+If the app can't be used at all, two scripts finish a claim from the command line. `scripts/sepolia-jury-vote.js` votes from the demo juror wallets (`CLAIM_ID`, optional `AMOUNT`). `scripts/sepolia-receipt.js` submits the receipt and pays out (`CLAIM_ID`, `CLAIMANT_PRIVATE_KEY`, `RECEIPT_TOTAL`). Both run with `npx hardhat run <script> --network sepolia`.
 
 ## Rollback
 
@@ -159,12 +175,11 @@ On demo day, open `/api/health`, the keeper address on Etherscan and the VRF sub
 ## Known limits
 
 - **Run one instance.** The keeper and the stores assume a single process. Don't scale the service horizontally.
-- **Free plan: no disk, and it sleeps.** Uploaded evidence and sign-in sessions are wiped on every restart or redeploy, and the service sleeps after 15 idle minutes. The first request after that takes about a minute, and the keeper pauses while it sleeps, though anyone can still advance a claim from the UI because every keeper call is permissionless. On-chain state (policies, claims, payouts) is never affected. Before a demo, open the app 5 minutes early, don't merge to `main` during it, and file claims after the last redeploy so jurors can still open the photos. To keep data, switch `render.yaml` to `plan: starter` and uncomment the disk (about $7.25 a month).
-- **Keep it awake.** A free uptime monitor (for example UptimeRobot) that requests `/api/health` every 5 minutes stops the free service sleeping. The keeper then keeps running and evidence survives until the next redeploy. One always-on service fits inside Render's 750 free hours a month.
+- **Use Starter with a disk, not the free plan.** On 26 Nov the free plan answered most requests with 429 or 503, slept after 15 idle minutes, and a restart wiped the evidence of an open claim, so its jurors could not vote. `render.yaml` now asks for `plan: starter` with a 1 GB disk at `/var/data` (about $7.25 a month). A service created by hand, not from the Blueprint, needs the same change in the dashboard: **Settings → Instance Type → Starter**, then **Disks → Add Disk** with mount path `/var/data` and 1 GB. The container starts as root only to hand `/var/data` to the `node` user (a mounted disk is owned by root), then runs the backend as `node`. Even with the disk, don't merge to `main` during a demo, since a redeploy restarts the keeper.
 - **History catch-up after a restart.** With Alchemy's free tier (10 blocks per `eth_getLogs`), the backend has to read the event history from the deploy block again after every restart, in about 7,200 blocks a day. It starts in the background at boot and logs `[history] indexed N events in S s` when it's done. Until then, only the Account history panel waits; everything else works straight away.
 - **Sepolia itself.** Faucets rate-limit, and Chainlink VRF can occasionally be slow. Claims can be cancelled after the 1-hour randomness timeout.
 - **MockStablecoin.** Anyone can mint 1,000 a day from the faucet, so pool numbers on the testnet mean nothing economically.
 
 ## Cost
 
-The Render free plan costs nothing (Starter with a 1 GB disk is about $7.25 a month). Alchemy, Chainlink and the Sepolia faucets are free.
+Starter with a 1 GB disk is about $7.25 a month (the free plan costs nothing, but see Known limits). Alchemy, Chainlink and the Sepolia faucets are free.
