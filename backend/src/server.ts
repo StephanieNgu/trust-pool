@@ -3,12 +3,13 @@
 //   npm run chain         # terminal 1
 //   npm run deploy:local  # terminal 2
 //   npm run dev:backend   # terminal 3, http://localhost:3000/api/health
-import { JsonRpcProvider, Wallet, type Signer } from "ethers";
+import { Wallet, type Signer } from "ethers";
 import { AccountStore } from "./accounts";
 import { createApp } from "./app";
 import { connectContracts, loadDeployment } from "./chain";
 import { HttpAiDetector, MetadataAiDetector, type AiImageDetector } from "./aiDetection";
 import { loadConfig } from "./config";
+import { RateLimitedProvider } from "./rpc";
 import { LocalEvidenceStore, loadOrCreateKeyFile, parseEvidenceKey } from "./evidence";
 import { Keeper } from "./keeper";
 
@@ -17,7 +18,7 @@ const LOCAL_CHAIN_ID = 31337n;
 async function main() {
   const config = loadConfig();
   const deployment = await loadDeployment(config.deploymentFile);
-  const provider = new JsonRpcProvider(config.rpcUrl);
+  const provider = new RateLimitedProvider(config.rpcUrl, { maxConcurrency: config.rpcMaxConcurrency });
 
   const { chainId } = await provider.getNetwork();
   if (chainId.toString() !== deployment.chainId) {
