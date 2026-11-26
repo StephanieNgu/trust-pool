@@ -43,3 +43,4 @@ deployments/hardhat.json
 deployments/localhost.json
 # Throwaway member keys made by scripts/sepolia-vrf-demo.js
 deployments/*-demo-wallets.json
+deployments/*-votes-*.json
