@@ -26,10 +26,8 @@ ENV NODE_ENV=production \
 # The backend runs from TypeScript with tsx, so the full dependency tree comes along.
 COPY --from=build /app /app
 RUN mkdir -p /var/data && chown -R node:node /var/data
+USER node
 EXPOSE 3000
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
-# A hosting provider's persistent disk (Render's included) is mounted over /var/data owned by root,
-# which hides the chown above. So the container starts as root, hands /var/data to the node user,
-# and then runs the backend as node.
-CMD ["sh", "-c", "chown -R node:node /var/data 2>/dev/null || true; exec setpriv --reuid=node --regid=node --init-groups node_modules/.bin/tsx backend/src/server.ts"]
+CMD ["node_modules/.bin/tsx", "backend/src/server.ts"]
